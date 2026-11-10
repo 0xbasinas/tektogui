@@ -135,7 +135,7 @@ A script can create nodes with `tekto.create` / `tekto.setText` / `tekto.append`
   ```
 
   SDK root is `~/Android/Sdk` (or `$ANDROID_HOME`). This repo uses NDK `27.1.12297006`. `android_main` starts the windowed Notes app; the surface is created on resume and dropped on suspend. Details: [examples/notes-android/README.md](../examples/notes-android/README.md) and [the android-build-and-run skill](../.agents/skills/android-build-and-run/SKILL.md).
-- Web: the core builds to WASM. Canvas paint is not wired yet. Check and smoke:
+- Web: the core builds to WASM. The host blits the CPU PNG to a canvas (`packages/wasm/notes.html`). Check and smoke:
 
   ```bash
   rustup target add wasm32-unknown-unknown

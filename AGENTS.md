@@ -26,7 +26,7 @@ Short, command-accurate how-tos live in `.agents/skills/<slug>/SKILL.md`. The sa
 | [write-headless-test](.agents/skills/write-headless-test/SKILL.md) | Snapshot and tree asserts without a window |
 | [debug-render-or-layout](.agents/skills/debug-render-or-layout/SKILL.md) | Wrong bounds, missing text, blank PNG or window |
 | [android-build-and-run](.agents/skills/android-build-and-run/SKILL.md) | Package Notes with cargo-apk2, run on AVD beddcode30, `adb forward` + `tekto tree` |
-| [web-build](.agents/skills/web-build/SKILL.md) | WASM core (`tekto-wasm`) and the browser HostOp glue |
+| [web-build](.agents/skills/web-build/SKILL.md) | WASM core (`tekto-wasm`), HostOp glue, and CPU canvas blit |
 | [add-mcp-tool](.agents/skills/add-mcp-tool/SKILL.md) | New dev-server route, MCP tool, or CLI inspect command |
 | [release-and-ci](.agents/skills/release-and-ci/SKILL.md) | PRs into `nightly`, merge to `main`, light CI rules |
 | [pick-up-an-issue](.agents/skills/pick-up-an-issue/SKILL.md) | Start from a GitHub issue and open a small PR |
