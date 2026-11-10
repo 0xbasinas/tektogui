@@ -1,7 +1,12 @@
 //! winit + softbuffer window. The default paint path is the CPU renderer.
-//! With the `gpu` feature, wgpu / Vello paints the frame and the same
-//! softbuffer blit presents it. If no adapter is available, the window
-//! falls back to the CPU renderer.
+//! With the `gpu` feature, desktop wgpu / Vello paints the frame and the
+//! same softbuffer blit presents it. If no adapter is available, or a
+//! readback fails while the surface epoch is still live, the window falls
+//! back to the CPU renderer.
+//!
+//! Android does not try the GPU unless `TEKTO_ANDROID_GPU=1` (and the
+//! `gpu` feature). Drivers were not proven in this repo. A retired surface
+//! epoch never calls `buffer_mut` or `present`.
 //!
 //! After every layout the AccessKit tree is rebuilt (same stable ids as
 //! the scene tree). The optional `a11y-os` feature publishes that tree to
@@ -270,7 +275,8 @@ fn publish_accesskit(
     });
 }
 
-/// CPU by default. The `gpu` feature tries Vello first.
+/// CPU by default. Desktop `gpu` tries Vello first. Android stays on CPU
+/// unless [`crate::gpu_policy::wants_gpu_paint`] is true.
 enum Painter {
     Cpu(Box<CpuRenderer>),
     #[cfg(feature = "gpu")]
@@ -279,24 +285,41 @@ enum Painter {
 
 impl Painter {
     fn new(width: u32, height: u32) -> Self {
-        #[cfg(feature = "gpu")]
-        {
-            match tekto_render::GpuRenderer::new(width, height) {
-                Ok(renderer) => {
-                    eprintln!(
-                        "tekto: painting with wgpu / Vello ({})",
-                        renderer.adapter_name()
-                    );
-                    return Painter::Gpu(Box::new(renderer));
-                }
-                Err(err) => {
-                    eprintln!("tekto: GPU renderer unavailable ({err}); using CPU");
+        if crate::gpu_policy::wants_gpu_paint() {
+            #[cfg(feature = "gpu")]
+            {
+                match tekto_render::GpuRenderer::new(width, height) {
+                    Ok(renderer) => {
+                        eprintln!(
+                            "tekto: painting with wgpu / Vello ({})",
+                            renderer.adapter_name()
+                        );
+                        return Painter::Gpu(Box::new(renderer));
+                    }
+                    Err(err) => {
+                        eprintln!("tekto: GPU renderer unavailable ({err}); using CPU");
+                    }
                 }
             }
+        } else {
+            #[cfg(all(feature = "gpu", target_os = "android"))]
+            note_android_cpu_default();
         }
+        Self::cpu(width, height)
+    }
+
+    fn cpu(width: u32, height: u32) -> Self {
         Painter::Cpu(Box::new(
             CpuRenderer::new(width, height).expect("cpu renderer"),
         ))
+    }
+
+    fn scale(&self) -> f32 {
+        match self {
+            Painter::Cpu(renderer) => renderer.scale(),
+            #[cfg(feature = "gpu")]
+            Painter::Gpu(renderer) => renderer.scale(),
+        }
     }
 
     fn resize(&mut self, width: u32, height: u32) -> Result<(), tekto_render::RenderError> {
@@ -378,9 +401,38 @@ fn redraw(state: &mut State) {
             &mut state.adapter,
         );
     }
-    let Ok(rgba) = state.renderer.rgba8() else {
-        return;
+    let rgba = match state.renderer.rgba8() {
+        Ok(pixels) => pixels,
+        Err(err) => {
+            // A destroyed window must not be locked. Other GPU failures
+            // paint once more on the CPU path, then present only if the
+            // epoch is still the live surface.
+            if !crate::lifecycle::may_present(state.epoch)
+                || tekto_render::classify_present_failure(&err.to_string())
+                    == tekto_render::PresentFailure::SurfaceLost
+            {
+                eprintln!("tekto: surface lost ({err}); skipping present");
+                return;
+            }
+            eprintln!("tekto: GPU frame failed ({err}); using CPU");
+            let scale = state.renderer.scale();
+            state.renderer = Painter::cpu(pw, ph);
+            state.renderer.set_scale(scale);
+            if let Ok(tree) = state.tree.lock() {
+                state.renderer.paint(&tree, state.clear);
+            }
+            match state.renderer.rgba8() {
+                Ok(pixels) => pixels,
+                Err(err) => {
+                    eprintln!("tekto: CPU frame failed ({err}); skipping present");
+                    return;
+                }
+            }
+        }
     };
+    if !crate::lifecycle::may_present(state.epoch) {
+        return;
+    }
     let Some(width) = NonZeroU32::new(pw) else {
         return;
     };
@@ -388,14 +440,33 @@ fn redraw(state: &mut State) {
         return;
     };
     let _ = state.surface.resize(width, height);
-    if let Ok(mut buf) = state.surface.buffer_mut() {
-        let pixels = rgba_to_u32_softbuffer(&rgba);
-        for (dst, src) in buf.iter_mut().zip(pixels.iter()) {
-            *dst = *src;
+    match state.surface.buffer_mut() {
+        Ok(mut buf) => {
+            let pixels = rgba_to_u32_softbuffer(&rgba);
+            for (dst, src) in buf.iter_mut().zip(pixels.iter()) {
+                *dst = *src;
+            }
+            // present() fails if the Android window was destroyed after
+            // the epoch check. Ignore that error; do not panic.
+            let _ = buf.present();
         }
-        let _ = buf.present();
+        Err(err) => {
+            eprintln!("tekto: window surface unavailable ({err}); not presenting");
+        }
     }
     sync_ime(state);
+}
+
+#[cfg(all(feature = "gpu", target_os = "android"))]
+fn note_android_cpu_default() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static NOTED: AtomicBool = AtomicBool::new(false);
+    if NOTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    eprintln!(
+        "tekto: Android stays on the CPU renderer. Build with --features gpu and set TEKTO_ANDROID_GPU=1 to try wgpu / Vello. Drivers were not proven here (no device GPU, no emulator). A lost ANativeWindow skips present."
+    );
 }
 
 #[cfg(feature = "a11y-os")]

@@ -20,6 +20,34 @@ impl RenderError {
     }
 }
 
+/// What the window should do when a GPU readback or present fails.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresentFailure {
+    /// The native window or swapchain is gone. Do not lock or present it.
+    SurfaceLost,
+    /// Paint again with the CPU renderer. The window may still be valid.
+    UseCpu,
+}
+
+/// Classify a present or readback error.
+///
+/// `SurfaceLost` covers wgpu's "surface lost" / "surface outdated" and a
+/// destroyed Android `ANativeWindow`. Anything else (no adapter, device
+/// lost, map timeout) is [`PresentFailure::UseCpu`]. The caller must still
+/// skip present when the surface epoch is already retired.
+pub fn classify_present_failure(message: &str) -> PresentFailure {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("surface lost")
+        || lower.contains("surface outdated")
+        || lower.contains("anativewindow")
+        || lower.contains("surface is no longer valid")
+    {
+        PresentFailure::SurfaceLost
+    } else {
+        PresentFailure::UseCpu
+    }
+}
+
 /// Backend-agnostic draw API.
 pub trait Renderer {
     fn resize(&mut self, width: u32, height: u32) -> Result<(), RenderError>;
@@ -143,6 +171,39 @@ fn paint_node_opacity<R: Renderer>(
     }
     if clip {
         renderer.pop_clip();
+    }
+}
+
+#[cfg(test)]
+mod present_failure_tests {
+    use super::{classify_present_failure, PresentFailure};
+
+    #[test]
+    fn lost_surface_is_not_presented() {
+        assert_eq!(
+            classify_present_failure("surface lost"),
+            PresentFailure::SurfaceLost
+        );
+        assert_eq!(
+            classify_present_failure("wgpu: surface outdated"),
+            PresentFailure::SurfaceLost
+        );
+        assert_eq!(
+            classify_present_failure("ANativeWindow was destroyed"),
+            PresentFailure::SurfaceLost
+        );
+    }
+
+    #[test]
+    fn other_gpu_errors_fall_back_to_cpu() {
+        assert_eq!(
+            classify_present_failure("no GPU adapter: not found"),
+            PresentFailure::UseCpu
+        );
+        assert_eq!(
+            classify_present_failure("GPU device: lost"),
+            PresentFailure::UseCpu
+        );
     }
 }
 
