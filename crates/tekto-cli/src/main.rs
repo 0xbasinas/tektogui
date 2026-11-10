@@ -58,6 +58,8 @@ enum Command {
         fill: Option<String>,
         #[arg(long)]
         color: Option<String>,
+        #[arg(long, alias = "fontSize")]
+        font_size: Option<f32>,
     },
     /// Speak the Model Context Protocol on stdio (proxies to the dev server).
     Mcp,
@@ -166,6 +168,7 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             text,
             fill,
             color,
+            font_size,
         } => {
             let ep = read_endpoint()?;
             let mut v = serde_json::json!({"id": id});
@@ -177,6 +180,9 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(c) = color {
                 v["color"] = serde_json::Value::String(c);
+            }
+            if let Some(size) = font_size {
+                v["font_size"] = serde_json::json!(size);
             }
             let (_, body) = http_post(&format!("{}/patch", ep.base_url()), &v)?;
             println!("{}", String::from_utf8_lossy(&body));

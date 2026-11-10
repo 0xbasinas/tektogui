@@ -231,6 +231,8 @@ pub struct NodePatch {
     pub name: Option<String>,
     pub fill: Option<String>,
     pub color: Option<String>,
+    /// Also accepted as `fontSize` in JSON / MCP.
+    #[serde(default, alias = "fontSize")]
     pub font_size: Option<f32>,
 }
 
@@ -486,6 +488,22 @@ impl Tree {
         for child in &node.children {
             self.write_pretty(out, *child, depth + 1);
         }
+    }
+
+    /// One node as the JSON shape `ui.patch` returns.
+    pub fn node_dump(&self, id: NodeId) -> Option<NodeDump> {
+        let node = self.nodes.get(&id)?;
+        Some(NodeDump {
+            id: node.id.raw(),
+            kind: node.kind,
+            name: node.name.clone(),
+            text: node.text.clone(),
+            fill: node.fill.map(|c| c.to_hex()),
+            color: node.color.map(|c| c.to_hex()),
+            font_size: node.font_size,
+            bounds: node.bounds,
+            children: node.children.iter().map(|c| c.raw()).collect(),
+        })
     }
 
     pub fn to_dump(&self) -> TreeDump {

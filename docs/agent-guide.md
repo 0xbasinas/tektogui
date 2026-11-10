@@ -16,11 +16,12 @@ Or run the windowed Notes example. The process writes a small file (default: `$X
 ```bash
 cargo run -p tekto-cli -- tree
 cargo run -p tekto-cli -- screenshot /tmp/shot.png
-cargo run -p tekto-cli -- patch --id 4 --text "New title"
+cargo run -p tekto-cli -- patch 4 --text "New title"
+cargo run -p tekto-cli -- patch 4 --color "#2c333a" --font-size 20
 cargo run -p tekto-cli -- click 4
 ```
 
-`tree` prints the scene / AccessKit tree with stable ids, roles, names, and bounds.
+`tree` prints the scene / AccessKit tree with stable ids, roles, names, and bounds. The id is positional (`tekto patch 4`, not `--id`).
 
 ## MCP
 
@@ -37,15 +38,15 @@ Tools in the first slice:
 | `ui.tree` | Dump the tree (pretty text + JSON) |
 | `ui.accesskit` | Dump AccessKit roles, labels, bounds, and focus (same ids) |
 | `ui.screenshot` | CPU-rendered PNG |
-| `ui.click` | Click a node id (stub until input is wired) |
-| `ui.type` | Type into a node id (stub until IME / fields land) |
-| `ui.patch` | Live-edit text, name, fill, or color on a running node |
+| `ui.click` | Click a node id (focus + last_click; a real window click uses the same hit test) |
+| `ui.type` | Type into a node id (stubs a field until IME lands) |
+| `ui.patch` | Live-edit text, name, fill, color, or fontSize on a running node. Returns `{ ok, node }`. |
 | `app.state` | Opt-in JSON state (empty for now) |
 | `app.logs` | Recent log lines |
 
-Live patches change the running tree immediately. Writing those edits back into `.rs` or `.tsx` source is planned; do not pretend it already works.
+Live patches change the running tree immediately and do not require a reload. `POST /patch` and `ui.patch` accept JSON `{ "id", "text?", "name?", "fill?", "color?", "fontSize?" }` (`#rrggbb` or `#rrggbbaa`) and return the updated node, or a clear error (unknown id, bad color). Padding and other layout styles are not in this slice.
 
-Hot reload (reload app code) and live patches (change a live node) should both be available in dev mode as they land.
+Writing those edits back into `.rs` or `.tsx` source is a separate step (issue #19). Hot reload of TypeScript (issue #18) is also separate: a patch should still be visible without it.
 
 ## Headless tests
 
