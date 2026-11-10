@@ -74,6 +74,19 @@ enum Command {
     Mcp,
 }
 
+fn export_notes_writeback_env() {
+    if std::env::var_os("TEKTO_APP_ROOT").is_some() {
+        return;
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let notes = cwd.join("examples/notes");
+        if notes.join("src").is_dir() {
+            std::env::set_var("TEKTO_APP_ROOT", notes);
+            std::env::set_var("TEKTO_WRITEBACK_PREFER", "rs");
+        }
+    }
+}
+
 fn main() {
     if let Err(err) = run_cli() {
         eprintln!("tekto: {err}");
@@ -110,6 +123,7 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(entry) = js {
                 return js_dev::run_js_dev(entry, headless, out, !no_watch);
             }
+            export_notes_writeback_env();
             let tree = notes_tree(640.0, 400.0)?;
             if headless {
                 let (handle, ep, _viewport) =

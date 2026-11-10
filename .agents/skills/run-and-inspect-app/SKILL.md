@@ -50,7 +50,7 @@ cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0" --font-size
 
 Stdio MCP (`cargo run -p tekto-cli -- mcp`) proxies those to the dev server. Tools: `ui.tree`, `ui.accesskit`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`.
 
-Live patches change the running tree immediately (no reload). Writing the change back to source is issue #19. Hot reload of TS is not a substitute for `ui.patch`.
+Live patches change the running tree immediately (no reload). If the old text or a simple style literal is unique in the app project, the same edit is written back to source; the response includes a `writeback` field (`status`, `files`, `skipped`). If the match is ambiguous, or the source uses a named constant, the runtime change stays and `writeback` explains why. Never writes outside the app project (`TEKTO_APP_ROOT`, or the folder of `tekto dev --js`). Hot reload of TS is not a substitute for `ui.patch`.
 
 ## Hot reload TypeScript (no Rust rebuild)
 

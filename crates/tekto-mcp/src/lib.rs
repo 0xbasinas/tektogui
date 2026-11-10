@@ -4,8 +4,9 @@
 //! small JSON file. `tekto tree`, `tekto screenshot`, and the stdio MCP
 //! adapter all talk to that same server.
 //!
-//! Live edits (`POST /patch`) change node props in the running tree. Writing
-//! those edits back to source files is a separate path (`ui.patch` write-back).
+//! Live edits (`POST /patch`) change node props in the running tree and, when
+//! the old literal is unique in the app project, write that change back to
+//! source. Ambiguous edits stay in the runtime tree and are reported.
 //! `POST /reload` accepts a JS bundle and queues it for the JS runtime.
 
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tekto_tree::{NodeId, NodePatch, Tree};
+
+mod writeback;
+pub use writeback::{
+    app_root, apply, apply_in, find_app_root, prefer_from_env, Prefer, Snapshot, WritebackReport,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpError {
@@ -64,6 +70,10 @@ pub trait AppHandle: Send + Sync {
             "no JS runtime attached — start with `tekto dev --js <entry.tsx>`",
         ))
     }
+    /// Source write-back from the last `patch`, if any.
+    fn last_writeback(&self) -> Option<Value> {
+        None
+    }
 }
 
 /// PNG renderer used by [`SharedTreeHandle`].
@@ -87,6 +97,8 @@ pub struct SharedTreeHandle {
     pub pending_js: Mutex<Option<String>>,
     /// Hook that actually evaluates the bundle (set only when `--js` is on).
     pub apply_js: Mutex<Option<ApplyJsFn>>,
+    /// Result of the last source write-back attempted after a patch.
+    pub last_writeback: Mutex<Option<writeback::WritebackReport>>,
 }
 
 impl SharedTreeHandle {
@@ -168,9 +180,18 @@ impl AppHandle for SharedTreeHandle {
 
     fn patch(&self, id: NodeId, patch: NodePatch) -> Result<(), McpError> {
         let mut tree = self.tree.lock().expect("tree lock");
-        tree.patch(id, patch)
+        let snapshot = tree
+            .get(id)
+            .map(writeback::Snapshot::from_node)
+            .ok_or_else(|| McpError::msg(format!("unknown node {id}")))?;
+        tree.patch(id, patch.clone())
             .map_err(|e| McpError::msg(e.to_string()))?;
         drop(tree);
+        let report = writeback::apply(&snapshot, &patch);
+        self.log(report.log_line());
+        if let Ok(mut slot) = self.last_writeback.lock() {
+            *slot = Some(report);
+        }
         self.notify_change();
         Ok(())
     }
@@ -200,6 +221,13 @@ impl AppHandle for SharedTreeHandle {
 
     fn queue_js(&self, source: String) -> Result<(), McpError> {
         self.enqueue_js(source)
+    }
+
+    fn last_writeback(&self) -> Option<Value> {
+        self.last_writeback
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|r| r.to_json()))
     }
 }
 
@@ -412,7 +440,11 @@ fn dispatch(
             let node = tree
                 .node_dump(NodeId::from_raw(id))
                 .ok_or_else(|| McpError::msg(format!("node {id} missing after patch")))?;
-            ok_json(json!({"ok": true, "node": node}))
+            let mut body = json!({"ok": true, "node": node});
+            if let Some(wb) = handle.last_writeback() {
+                body["writeback"] = wb;
+            }
+            ok_json(body)
         }
         ("POST", "/click") => {
             let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
@@ -581,7 +613,7 @@ fn tool_list() -> Value {
         {"name": "ui.screenshot", "description": "Take a PNG screenshot using the CPU renderer.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.click", "description": "Click a node by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}}, "required": ["id"]}},
         {"name": "ui.type", "description": "Type text into a node by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
-        {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, or fontSize. Returns the updated node. Does not reload the app.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}}, "required": ["id"]}},
+        {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, or fontSize. Returns the updated node and a writeback report. Applies immediately (no reload). Unique literals in the app project are written back to source; ambiguous edits stay in the runtime tree.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}}, "required": ["id"]}},
         {"name": "app.state", "description": "Read opted-in app state as JSON.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "app.logs", "description": "Read structured logs.", "inputSchema": {"type": "object", "properties": {}}}
     ])
@@ -714,6 +746,7 @@ mod tests {
             on_change: Mutex::new(None),
             pending_js: Mutex::new(None),
             apply_js: Mutex::new(None),
+            last_writeback: Mutex::new(None),
         };
         handle.click(t).unwrap();
         let dump = handle.tree();
@@ -754,6 +787,7 @@ mod tests {
             on_change: Mutex::new(None),
             pending_js: Mutex::new(None),
             apply_js: Mutex::new(None),
+            last_writeback: Mutex::new(None),
         };
         let err = handle
             .enqueue_js("tekto.create('window')".into())
