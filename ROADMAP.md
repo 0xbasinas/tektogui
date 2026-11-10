@@ -51,7 +51,7 @@ Still in Month 1:
 
 - WASM build of the core (landed: `tekto-wasm` + `@tektogui/wasm` HostOp bridge)
 - Web paint: CPU renderer to canvas (landed: `@tektogui/wasm/canvas`), then WebGPU if the GPU backend is ready
-- TypeScript apps on the browser engine, same JSX API
+- TypeScript apps on the browser engine, same JSX API (landed: `node packages/wasm/dev.js` runs the Notes TSX sketch on the wasm core)
 - File open/save dialogs on Windows (Linux uses zenity; see `docs/architecture.md`)
 - Global shortcuts on desktop (Linux tray is the optional `tray` feature; Windows tray is still open)
 - Better list virtualization and scroll feel

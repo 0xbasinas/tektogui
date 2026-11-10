@@ -3,6 +3,7 @@
 /node_modules
 /packages/*/node_modules
 /packages/*/dist
+/packages/wasm/.dev
 /examples/*/node_modules
 /.tekto
 /tekto-dev.json
