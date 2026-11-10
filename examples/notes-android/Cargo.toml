@@ -23,6 +23,10 @@ default = []
 # bundle over adb forward. Off by default: compiling rquickjs for two
 # Android ABIs is slow, and nightly PR-less Android CI stays lean.
 quickjs = ["tekto/quickjs"]
+# Optional wgpu / Vello paint. Off by default. Even with this feature,
+# the window stays on the CPU renderer unless TEKTO_ANDROID_GPU=1.
+# Drivers were not proven in this repo (no device GPU, no emulator).
+gpu = ["tekto/gpu"]
 
 [target.'cfg(target_os = "android")'.dependencies]
 tekto = { path = "../../crates/tekto", default-features = false, features = ["cpu", "desktop"] }

@@ -185,6 +185,9 @@ pub fn rgba_to_u32_softbuffer(rgba: &[u8]) -> Vec<u32> {
         .collect()
 }
 
+mod gpu_policy;
+pub use gpu_policy::{gpu_paint_allowed, wants_gpu_paint};
+
 #[cfg(all(
     feature = "desktop",
     not(target_arch = "wasm32"),

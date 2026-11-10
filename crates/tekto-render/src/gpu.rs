@@ -44,6 +44,12 @@ pub struct GpuRenderer {
 impl GpuRenderer {
     /// Desktop (and any host with a blocking executor). The browser path is
     /// [`paint_tree_webgpu`]: `pollster` cannot wait on a WebGPU adapter.
+    ///
+    /// On Android the window calls this only when `TEKTO_ANDROID_GPU=1`.
+    /// There is no on-screen wgpu surface here: pixels are read back and
+    /// the caller blits them. A lost `ANativeWindow` is the presenter's
+    /// problem; this function returns an error instead of panicking when
+    /// no adapter or device exists.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(width: u32, height: u32) -> Result<Self, RenderError> {
         let width = width.max(1);

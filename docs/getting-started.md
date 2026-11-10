@@ -129,6 +129,8 @@ A script can create nodes with `tekto.create` / `tekto.setText` / `tekto.append`
   rustup target add aarch64-linux-android x86_64-linux-android
   cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu
   cargo check -p notes-android --target aarch64-linux-android
+  # Optional GPU compile (still CPU at runtime unless TEKTO_ANDROID_GPU=1):
+  cargo check -p notes-android --target aarch64-linux-android --features gpu
   cargo apk2 build -p notes-android
   # or: cargo run -p tekto-cli -- build --target android
   # run on a device/AVD: cargo run -p tekto-cli -- dev --android
