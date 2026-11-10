@@ -125,3 +125,15 @@ if agents should see it. `GET /states` and `app.states` list `{ enabled, cursor,
 jumps there and returns the JSON value. With no store attached, `enabled` is false
 and restore returns an error. `examples/time-travel` records a counter, steps back,
 and jumps forward. It does not open a window.
+
+The dev HTTP server binds to `127.0.0.1` by default. Keep it on a trusted
+local interface: `TEKTO_DEV_HOST` can change the binding, but the server has
+no authentication and local processes can send requests without an Origin.
+Every HTTP route requires exactly one loopback Host (`localhost`, an IPv4
+loopback address, or `[::1]`, optionally with a port). If Origin is present,
+it must be the same HTTP host and port as Host. Foreign and malformed values
+are rejected; the server does not grant cross-origin access. CLI and MCP
+requests omit Origin. Android `adb forward` works using a loopback Host on
+the host machine, including when the forwarded port differs from the device
+port. These checks do not authenticate local clients or protect an exposed
+listener from clients that can forge headers.
