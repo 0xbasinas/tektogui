@@ -25,6 +25,9 @@ fn recorded_session_replays_to_the_same_tree() {
         .replay(&mut replayed, |tree| layout_tree(tree, 320.0, 200.0))
         .unwrap();
     assert_eq!(original.to_pretty_text(), replayed.to_pretty_text());
+    assert!(replayed
+        .to_pretty_text()
+        .contains("text_field#2 name=\"Title\" value=\"Hello?\""));
     assert_eq!(original.focus, replayed.focus);
     assert_eq!(original.last_click, replayed.last_click);
     assert_eq!(
