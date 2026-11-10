@@ -71,7 +71,7 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
         Command::Dev { headless, out } => {
             let tree = notes_tree(640.0, 400.0)?;
             if headless {
-                let (handle, ep) =
+                let (handle, ep, _viewport) =
                     tekto::start_handle(&tekto::AppRuntime::new(tree.clone(), "Notes"), 640, 400)?;
                 let _ = handle;
                 println!("dev server {}", ep.base_url());

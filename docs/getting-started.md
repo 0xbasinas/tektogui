@@ -26,6 +26,10 @@ Windowed, on Linux or Windows:
 cargo run -p notes
 ```
 
+
+The window layouts in logical pixels and paints at the current scale factor (HiDPI text stays sharp). Resize relayouts the tree. Closing the window shuts down the dev server (the `tekto-dev.json` endpoint file is removed).
+
+
 While it runs, in another terminal:
 
 ```bash

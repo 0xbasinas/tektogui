@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 use tekto_layout::layout_tree;
 use tekto_mcp::{McpError, SharedTreeHandle};
-use tekto_render::{render_tree_png, RenderError};
+use tekto_render::{render_tree_png, render_tree_png_scaled, RenderError};
 use tekto_tree::{Color, Tree};
 
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +45,43 @@ impl Default for WindowOptions {
         }
     }
 }
+
+/// Logical size and scale used to paint a live window (and its screenshots).
+#[derive(Clone, Copy, Debug)]
+pub struct Viewport {
+    pub width: u32,
+    pub height: u32,
+    pub scale: f32,
+}
+
+impl Viewport {
+    pub fn new(width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            scale: 1.0,
+        }
+    }
+
+    pub fn physical_width(self) -> u32 {
+        ((self.width as f32) * self.scale.max(0.01))
+            .round()
+            .max(1.0) as u32
+    }
+
+    pub fn physical_height(self) -> u32 {
+        ((self.height as f32) * self.scale.max(0.01))
+            .round()
+            .max(1.0) as u32
+    }
+}
+
+/// Handle, HTTP endpoint, and live viewport returned by [`start_handle`].
+pub type DevSession = (
+    Arc<SharedTreeHandle>,
+    tekto_mcp::DevEndpoint,
+    Arc<Mutex<Viewport>>,
+);
 
 /// A running app's scene, ready to layout and paint.
 #[derive(Clone)]
@@ -96,15 +133,28 @@ pub fn start_handle(
     runtime: &AppRuntime,
     width: u32,
     height: u32,
-) -> Result<(Arc<SharedTreeHandle>, tekto_mcp::DevEndpoint), PlatformError> {
+) -> Result<DevSession, PlatformError> {
     let mut tree = runtime.tree.clone();
     layout_tree(&mut tree, width as f32, height as f32);
     let tree = Arc::new(Mutex::new(tree));
     let clear = runtime.clear;
+    let viewport = Arc::new(Mutex::new(Viewport::new(width, height)));
     let render = {
-        let _tree = Arc::clone(&tree);
+        let viewport = Arc::clone(&viewport);
         Arc::new(move |t: &Tree| {
-            render_tree_png(t, width, height, clear).map_err(|e| McpError::msg(e.to_string()))
+            let vp = viewport
+                .lock()
+                .map(|g| *g)
+                .unwrap_or(Viewport::new(width, height));
+            let (lw, lh) = match t.root().and_then(|id| t.get(id)) {
+                Some(n) if n.bounds.width > 0.0 && n.bounds.height > 0.0 => (
+                    n.bounds.width.round().max(1.0) as u32,
+                    n.bounds.height.round().max(1.0) as u32,
+                ),
+                _ => (vp.width, vp.height),
+            };
+            render_tree_png_scaled(t, lw, lh, vp.scale, clear)
+                .map_err(|e| McpError::msg(e.to_string()))
         }) as Arc<dyn Fn(&Tree) -> Result<Vec<u8>, McpError> + Send + Sync>
     };
     let handle = Arc::new(SharedTreeHandle {
@@ -114,7 +164,7 @@ pub fn start_handle(
         on_change: Mutex::new(None),
     });
     let ep = tekto_mcp::start_dev_server(handle.clone())?;
-    Ok((handle, ep))
+    Ok((handle, ep, viewport))
 }
 
 pub fn rgba_to_u32_softbuffer(rgba: &[u8]) -> Vec<u32> {

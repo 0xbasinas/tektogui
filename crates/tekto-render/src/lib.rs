@@ -100,7 +100,54 @@ pub fn render_tree_png(
     height: u32,
     clear: Color,
 ) -> Result<Vec<u8>, RenderError> {
-    let mut renderer = CpuRenderer::new(width, height)?;
+    render_tree_png_scaled(tree, width, height, 1.0, clear)
+}
+
+/// Like [`render_tree_png`], but the pixmap is `width * scale` by
+/// `height * scale` physical pixels. Glyphs are rasterized at the
+/// physical size so HiDPI text stays sharp.
+pub fn render_tree_png_scaled(
+    tree: &Tree,
+    width: u32,
+    height: u32,
+    scale: f32,
+    clear: Color,
+) -> Result<Vec<u8>, RenderError> {
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let pw = ((width as f32) * scale).round().max(1.0) as u32;
+    let ph = ((height as f32) * scale).round().max(1.0) as u32;
+    let mut renderer = CpuRenderer::new(pw, ph)?;
+    renderer.set_scale(scale);
     paint_tree(&mut renderer, tree, clear);
     renderer.to_png()
+}
+
+#[cfg(all(test, feature = "cpu"))]
+mod tests {
+    use super::*;
+    use tekto_tree::{Color, Rect};
+
+    #[test]
+    fn paints_logical_rect_at_physical_scale() {
+        let mut renderer = CpuRenderer::new(200, 100).unwrap();
+        renderer.set_scale(2.0);
+        renderer.begin_frame(Color::PAGE);
+        // 80x40 logical at scale 2 -> 160x80 physical, inside a 200x100 pixmap.
+        renderer.fill_rect(Rect::new(0.0, 0.0, 80.0, 40.0), Color::BANNER);
+        let rgba = renderer.rgba8().unwrap();
+        // Logical (10, 10) is physical (20, 20).
+        let i = ((20 * 200 + 20) * 4) as usize;
+        assert_eq!(
+            &rgba[i..i + 3],
+            &[Color::BANNER.r, Color::BANNER.g, Color::BANNER.b]
+        );
+        // To the right of the scaled rect (physical x=180).
+        let j = ((20 * 200 + 180) * 4) as usize;
+        assert_eq!(
+            &rgba[j..j + 3],
+            &[Color::PAGE.r, Color::PAGE.g, Color::PAGE.b]
+        );
+        assert_eq!(renderer.width(), 200);
+        assert_eq!(renderer.height(), 100);
+    }
 }
