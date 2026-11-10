@@ -5,7 +5,8 @@
 //! adapter all talk to that same server.
 //!
 //! Live edits (`POST /patch`) change node props in the running tree. Writing
-//! those edits back to source files comes later; the runtime patch works now.
+//! those edits back to source files is a separate path (`ui.patch` write-back).
+//! `POST /reload` accepts a JS bundle and queues it for the JS runtime.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -52,6 +53,17 @@ pub trait AppHandle: Send + Sync {
     fn logs(&self) -> Vec<String> {
         Vec::new()
     }
+    /// Queue a JS bundle to be evaluated on the app thread.
+    ///
+    /// Used by `POST /reload` so a host can push a new bundle over
+    /// `adb forward` without rebuilding the Rust core. Default: error
+    /// (no JS runtime attached).
+    fn queue_js(&self, source: String) -> Result<(), McpError> {
+        let _ = source;
+        Err(McpError::msg(
+            "no JS runtime attached — start with `tekto dev --js <entry.tsx>`",
+        ))
+    }
 }
 
 /// PNG renderer used by [`SharedTreeHandle`].
@@ -60,13 +72,21 @@ pub type RenderFn = Arc<dyn Fn(&Tree) -> Result<Vec<u8>, McpError> + Send + Sync
 /// A simple handle over a mutex-protected tree plus a render callback.
 pub type OnChangeFn = Arc<dyn Fn() + Send + Sync>;
 
+/// Evaluates a JS bundle and swaps the tree. Installed by `tekto dev --js`.
+pub type ApplyJsFn = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
 pub struct SharedTreeHandle {
     pub tree: Arc<Mutex<Tree>>,
     pub render: RenderFn,
     pub logs: Arc<Mutex<Vec<String>>>,
     /// Called after a live patch (and later, clicks) so a window can redraw
-    /// and refresh AccessKit.
+    /// and refresh AccessKit. Also used to wake the loop for a JS reload.
     pub on_change: Mutex<Option<OnChangeFn>>,
+    /// A bundled JS IIFE waiting to be evaluated on the app thread
+    /// (QuickJS is not run from the HTTP or watcher threads).
+    pub pending_js: Mutex<Option<String>>,
+    /// Hook that actually evaluates the bundle (set only when `--js` is on).
+    pub apply_js: Mutex<Option<ApplyJsFn>>,
 }
 
 impl SharedTreeHandle {
@@ -74,6 +94,63 @@ impl SharedTreeHandle {
         if let Ok(cb) = self.on_change.lock() {
             if let Some(f) = cb.as_ref() {
                 f();
+            }
+        }
+    }
+
+    pub fn log(&self, line: impl Into<String>) {
+        if let Ok(mut logs) = self.logs.lock() {
+            logs.push(line.into());
+        }
+    }
+
+    /// Queue a JS bundle to be applied on the app thread, then wake the loop.
+    pub fn enqueue_js(&self, source: String) -> Result<(), McpError> {
+        {
+            let hook = self
+                .apply_js
+                .lock()
+                .map_err(|e| McpError::msg(e.to_string()))?;
+            if hook.is_none() {
+                return Err(McpError::msg(
+                    "no JS runtime attached — start with `tekto dev --js <entry.tsx>`",
+                ));
+            }
+        }
+        if let Ok(mut slot) = self.pending_js.lock() {
+            *slot = Some(source);
+        }
+        self.notify_change();
+        Ok(())
+    }
+
+    pub fn take_pending_js(&self) -> Option<String> {
+        self.pending_js.lock().ok().and_then(|mut slot| slot.take())
+    }
+
+    /// Run on the app / event-loop thread (QuickJS runtimes stay off HTTP threads).
+    /// Returns true when a bundle was evaluated successfully.
+    pub fn apply_pending_js(&self) -> bool {
+        let Some(js) = self.take_pending_js() else {
+            return false;
+        };
+        let hook = self.apply_js.lock().ok().and_then(|slot| slot.clone());
+        match hook {
+            Some(apply) => {
+                if let Err(e) = apply(&js) {
+                    let msg = format!("js reload failed: {e}");
+                    self.log(msg.clone());
+                    eprintln!("{msg}");
+                    false
+                } else {
+                    true
+                }
+            }
+            None => {
+                let msg = "js reload ignored: no JS runtime attached".to_string();
+                self.log(msg.clone());
+                eprintln!("{msg}");
+                false
             }
         }
     }
@@ -119,6 +196,10 @@ impl AppHandle for SharedTreeHandle {
 
     fn logs(&self) -> Vec<String> {
         self.logs.lock().expect("logs lock").clone()
+    }
+
+    fn queue_js(&self, source: String) -> Result<(), McpError> {
+        self.enqueue_js(source)
     }
 }
 
@@ -352,12 +433,34 @@ fn dispatch(
             handle.type_text(NodeId::from_raw(id), text)?;
             ok_json(json!({"ok": true}))
         }
+        ("POST", "/reload") => {
+            let source = parse_reload_body(body)?;
+            handle.queue_js(source)?;
+            ok_json(json!({"ok": true}))
+        }
         _ => Ok((
             "404 Not Found",
             "application/json",
             serde_json::to_vec(&json!({"error": "not found"}))?,
         )),
     }
+}
+
+pub fn parse_reload_body(body: &str) -> Result<String, McpError> {
+    let body = body.trim();
+    if body.is_empty() {
+        return Err(McpError::msg(
+            "POST /reload needs a JS bundle body (or JSON {\"js\": \"...\"})",
+        ));
+    }
+    if body.starts_with('{') {
+        if let Ok(v) = serde_json::from_str::<Value>(body) {
+            if let Some(js) = v.get("js").and_then(|x| x.as_str()) {
+                return Ok(js.to_string());
+            }
+        }
+    }
+    Ok(body.to_string())
 }
 
 fn ok_json(v: Value) -> Result<(&'static str, &'static str, Vec<u8>), McpError> {
@@ -609,6 +712,8 @@ mod tests {
             render: Arc::new(|_| Ok(Vec::new())),
             logs: Arc::new(Mutex::new(Vec::new())),
             on_change: Mutex::new(None),
+            pending_js: Mutex::new(None),
+            apply_js: Mutex::new(None),
         };
         handle.click(t).unwrap();
         let dump = handle.tree();
@@ -623,5 +728,36 @@ mod tests {
         assert_eq!(state["last_click"], t.raw());
         assert_eq!(state["focus"], t.raw());
         let _ = NodePatch::default();
+    }
+
+    #[test]
+    fn parse_reload_body_accepts_raw_js_and_json() {
+        assert_eq!(
+            parse_reload_body("tekto.create('window')").unwrap(),
+            "tekto.create('window')"
+        );
+        assert_eq!(
+            parse_reload_body(r#"{ "js": "tekto.create('window')" }"#).unwrap(),
+            "tekto.create('window')"
+        );
+        assert!(parse_reload_body("").is_err());
+    }
+
+    #[test]
+    fn queue_js_errors_without_a_runtime_hook() {
+        let mut tree = Tree::new();
+        let _ = tree.add(NodeKind::Window, None).unwrap();
+        let handle = SharedTreeHandle {
+            tree: Arc::new(Mutex::new(tree)),
+            render: Arc::new(|_| Ok(Vec::new())),
+            logs: Arc::new(Mutex::new(Vec::new())),
+            on_change: Mutex::new(None),
+            pending_js: Mutex::new(None),
+            apply_js: Mutex::new(None),
+        };
+        let err = handle
+            .enqueue_js("tekto.create('window')".into())
+            .unwrap_err();
+        assert!(err.to_string().contains("no JS runtime"), "{err}");
     }
 }

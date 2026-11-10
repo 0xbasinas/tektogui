@@ -15,6 +15,12 @@ use thiserror::Error;
 #[cfg(feature = "quickjs")]
 mod engine;
 
+mod bundle;
+mod watch;
+
+pub use bundle::{bundle, find_packages_root, make_wrapper, which_esbuild};
+pub use watch::{collect_watch_files, spawn_watcher};
+
 #[derive(Debug, Error)]
 pub enum JsError {
     #[error("{0}")]
@@ -139,6 +145,13 @@ fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), J
 /// call the same [`HostOp`] protocol the web target will use.
 ///
 /// Without the feature this returns [`JsError::EngineDisabled`].
+pub fn eval_to_tree(source: &str) -> Result<Tree, JsError> {
+    let mut host = TreeHost::new();
+    eval_module(source, &mut host)?;
+    let tree = host.tree.borrow().clone();
+    Ok(tree)
+}
+
 pub fn eval_module(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
     #[cfg(feature = "quickjs")]
     {
@@ -217,5 +230,33 @@ mod tests {
         let pretty = tree.to_pretty_text();
         assert!(pretty.contains("window#1"), "{pretty}");
         assert!(pretty.contains("Hello from Tekto"), "{pretty}");
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn eval_to_tree_can_swap_a_second_bundle() {
+        fn script(label: &str) -> String {
+            format!(
+                r#"
+                const window = tekto.create("window");
+                const text = tekto.create("text");
+                tekto.setText(text, "{label}");
+                tekto.append(window, text);
+                "#
+            )
+        }
+        let first = eval_to_tree(&script("before")).expect("first");
+        assert!(
+            first.to_pretty_text().contains("before"),
+            "{}",
+            first.to_pretty_text()
+        );
+        let second = eval_to_tree(&script("after")).expect("second");
+        let pretty = second.to_pretty_text();
+        assert!(pretty.contains("after"), "{pretty}");
+        assert!(!pretty.contains("before"), "{pretty}");
+        // New tree, same starting ids (ids are never reused inside one Tree,
+        // but a remount starts a fresh Tree at 1).
+        assert_eq!(second.root().map(|id| id.raw()), Some(1));
     }
 }
