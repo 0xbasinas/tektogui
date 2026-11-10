@@ -97,7 +97,7 @@ Commit the updated reference PNG. Do not bless a change you did not mean to make
 
 - `cargo test` / `cargo run` uses `dev` (incremental, `debug = 1`).
 - `cargo run --profile dev-fast -p notes` turns on `opt-level = 1` for a slightly snappier local window.
-- `cargo build --release -p notes` is for a small binary (`thin` LTO).
+- `cargo build --release -p notes` is for a small binary (`thin` LTO). Pack that binary into a local Linux tarball with `./scripts/package-notes-linux.sh`. See [packaging.md](packaging.md). Windows is a documented folder/zip only; nothing is signed.
 
 See [dev-builds.md](dev-builds.md) for default features, what is *not* in the default crate graph, and recorded CI compile times.
 

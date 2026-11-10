@@ -45,7 +45,7 @@ Still in Month 1:
 - Simple inspector UI talking to the same dev server
 - Notifications on desktop
 - First pass at animation (transitions, no flashy effects)
-- Linux / Windows packaging experiments
+- Linux / Windows packaging experiments (Linux tarball script and a Windows zip layout are documented in `docs/packaging.md`; no signing)
 
 ## Month 4 — web and more native
 
