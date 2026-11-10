@@ -70,13 +70,13 @@ You can also build a tree yourself with `tekto::window`, `tekto::banner`, and `t
 
 ## TypeScript
 
-The JSX API is sketched in `examples/notes/src/app.tsx`. The signals package already works:
+The Notes TSX entry is `examples/notes/src/app.tsx`. The signals package already works (`npm test`). To run that file in the desktop/headless app (needs `esbuild` on `PATH` and `--features quickjs`; do not enable that feature on PR CI):
 
 ```bash
-npm test
+cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx --headless --out /tmp/notes-js.png
 ```
 
-Wiring JSX into the live Rust tree is a Month 2 job.
+Saving the `.tsx` rebuilds the JS bundle and swaps it into the running QuickJS runtime. The Rust core stays up. JS remounts from source, so signal state resets.
 
 ## Tests
 
@@ -107,7 +107,7 @@ To try the optional JS engine (not in default builds or PR CI):
 cargo test -p tekto-js --features quickjs
 ```
 
-A script can create nodes with `tekto.create` / `tekto.setText` / `tekto.append`. TypeScript JSX on top of this is the next step.
+A script can create nodes with `tekto.create` / `tekto.setText` / `tekto.append`. JSX is lowered to those ops by `@tektogui/jsx-runtime`; `tekto dev --js` bundles and remounts it, as above.
 
 ## Targets
 

@@ -46,10 +46,36 @@ cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0" --font-size
 - `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb","fontSize":20}` — response is `{ "ok": true, "node": { ... } }` or an error
 - `POST /click` `{"id":1}`
 - `POST /type` `{"id":4,"text":"typed"}`
+- `POST /reload` raw JS bundle, or `{"js":"…"}`
 
 Stdio MCP (`cargo run -p tekto-cli -- mcp`) proxies those to the dev server. Tools: `ui.tree`, `ui.accesskit`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`.
 
-Live patches change the running tree immediately (no reload). Writing the change back to source is issue #19. Hot reload of TS is issue #18 and is not a substitute for `ui.patch`.
+Live patches change the running tree immediately (no reload). Writing the change back to source is issue #19. Hot reload of TS is not a substitute for `ui.patch`.
+
+## Hot reload TypeScript (no Rust rebuild)
+
+Needs the MIT `esbuild` binary on `PATH` (`npm install -g esbuild`, or set `ESBUILD`) and a CLI built with `--features quickjs`. Do not enable `quickjs` on PR CI.
+
+```bash
+# Headless (PNG + dev server, stays up until Enter). Saving the .tsx reloads JS:
+cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx --headless --out /tmp/notes-js.png
+
+# Desktop window (use a safe display on the shared box, e.g. Xvfb :99):
+cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx
+```
+
+The process prints `js bundle Nms` on the first load and `js reload Nms` after a save (bundle + eval + swap). The Rust window and dev server stay up; the JS side remounts from source, so in-memory signal state resets. A failed rebuild prints a short error to stderr and `GET /logs` / `app.logs`. `--no-watch` loads once.
+
+`POST /reload` queues a JS bundle (raw IIFE, or JSON `{"js":"..."}`) for the app thread. If `--js` was not used, the server returns a clear error (`no JS runtime attached`).
+
+The Android APK does not embed QuickJS yet, so `dev --js --android` is rejected. When a later APK has a JS runtime, the cheap hook is:
+
+```bash
+adb forward tcp:8474 tcp:8474
+curl -X POST --data-binary @bundle.js http://127.0.0.1:8474/reload
+```
+
+HTTP endpoints also include `POST /reload`.
 
 ## Verify
 

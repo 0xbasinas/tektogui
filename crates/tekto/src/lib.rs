@@ -21,7 +21,8 @@ pub use tekto_platform::lifecycle::{
 #[cfg(all(feature = "desktop", target_os = "android"))]
 pub use tekto_platform::{run_android, AndroidApp};
 pub use tekto_platform::{
-    run_headless, run_windowed, start_handle, AppRuntime, PlatformError, Viewport, WindowOptions,
+    run_headless, run_windowed, run_windowed_with_session, start_handle, AppRuntime, DevSession,
+    PlatformError, Viewport, WindowOptions,
 };
 pub use tekto_render::{paint_tree, render_tree_png, CpuRenderer, RenderError, Renderer};
 pub use tekto_tree::{Color, LayoutStyle, Node, NodeId, NodeKind, NodePatch, Rect, Tree, TreeDump};

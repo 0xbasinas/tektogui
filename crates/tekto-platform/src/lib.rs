@@ -162,6 +162,8 @@ pub fn start_handle(
         render,
         logs: Arc::new(Mutex::new(vec!["tekto dev server started".into()])),
         on_change: Mutex::new(None),
+        pending_js: Mutex::new(None),
+        apply_js: Mutex::new(None),
     });
     let ep = tekto_mcp::start_dev_server(handle.clone())?;
     Ok((handle, ep, viewport))
@@ -199,7 +201,7 @@ pub use desktop::run_android;
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
-pub use desktop::run_windowed;
+pub use desktop::{run_windowed, run_windowed_with_session};
 
 #[cfg(not(all(
     feature = "desktop",
@@ -210,6 +212,19 @@ pub fn run_windowed(_runtime: AppRuntime, _opts: WindowOptions) -> Result<(), Pl
     Err(PlatformError::msg(
         "windowed mode is not available on this target yet; use headless, or build with the desktop feature",
     ))
+}
+
+#[cfg(not(all(
+    feature = "desktop",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+)))]
+pub fn run_windowed_with_session(
+    _runtime: AppRuntime,
+    _opts: WindowOptions,
+    _session: Option<DevSession>,
+) -> Result<(), PlatformError> {
+    run_windowed(_runtime, _opts)
 }
 
 /// The NativeActivity app handle passed to `android_main`.

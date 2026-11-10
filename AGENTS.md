@@ -22,7 +22,7 @@ Short, command-accurate how-tos live in `.agents/skills/<slug>/SKILL.md`. The sa
 | [add-widget](.agents/skills/add-widget/SKILL.md) | New built-in widget (Rust, TSX sketch, AccessKit, headless test) |
 | [add-crate](.agents/skills/add-crate/SKILL.md) | New workspace crate or a heavy dependency; keep builds fast |
 | [add-native-feature](.agents/skills/add-native-feature/SKILL.md) | `tekto-native` plugin for one platform (files, clipboard, …) |
-| [run-and-inspect-app](.agents/skills/run-and-inspect-app/SKILL.md) | `tekto dev`, tree / click / type / screenshot / live patch |
+| [run-and-inspect-app](.agents/skills/run-and-inspect-app/SKILL.md) | `tekto dev`, `--js` hot reload, tree / click / type / screenshot / live patch |
 | [write-headless-test](.agents/skills/write-headless-test/SKILL.md) | Snapshot and tree asserts without a window |
 | [debug-render-or-layout](.agents/skills/debug-render-or-layout/SKILL.md) | Wrong bounds, missing text, blank PNG or window |
 | [android-build-and-run](.agents/skills/android-build-and-run/SKILL.md) | Package Notes with cargo-apk2, run on AVD beddcode30, `adb forward` + `tekto tree` |

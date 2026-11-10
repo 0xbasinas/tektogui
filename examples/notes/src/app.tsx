@@ -1,8 +1,9 @@
 /** Notes example (TypeScript + JSX).
  *
- * This file is the TS view of the same app as `main.rs`. The JSX runtime
- * is not yet wired to the Rust tree (that is a Month 2 issue). The source
- * is here so the API can be designed in the open.
+ * The TS view of the same app as `main.rs`. Run it with:
+ *   cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx
+ * Saving this file rebuilds the JS bundle and swaps it into the running
+ * QuickJS runtime. The Rust window and dev server stay up.
  */
 
 import { createSignal } from "@tektogui/core";

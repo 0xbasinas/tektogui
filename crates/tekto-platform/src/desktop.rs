@@ -110,6 +110,9 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: AppEvent) {
+        if let Some(handle) = self.handle.as_ref() {
+            handle.apply_pending_js();
+        }
         if let Some(state) = self.state.as_mut() {
             state.window.request_redraw();
         }
@@ -279,19 +282,29 @@ pub fn run_android(
     opts: WindowOptions,
     android_app: winit::platform::android::activity::AndroidApp,
 ) -> Result<(), PlatformError> {
-    run_event_loop(runtime, opts, Some(android_app))
+    run_event_loop(runtime, opts, Some(android_app), None)
 }
 
 pub fn run_windowed(runtime: AppRuntime, opts: WindowOptions) -> Result<(), PlatformError> {
+    run_windowed_with_session(runtime, opts, None)
+}
+
+/// Start a window using an already-running dev session (so `tekto dev --js`
+/// can attach a JS reload hook before the event loop starts).
+pub fn run_windowed_with_session(
+    runtime: AppRuntime,
+    opts: WindowOptions,
+    session: Option<crate::DevSession>,
+) -> Result<(), PlatformError> {
     #[cfg(target_os = "android")]
     {
-        let _ = (runtime, opts);
+        let _ = (runtime, opts, session);
         return Err(PlatformError::msg(
             "on Android, call tekto::run_android(...) from android_main",
         ));
     }
     #[cfg(not(target_os = "android"))]
-    run_event_loop(runtime, opts, None)
+    run_event_loop(runtime, opts, None, session)
 }
 
 #[cfg(target_os = "android")]
@@ -303,6 +316,7 @@ fn run_event_loop(
     runtime: AppRuntime,
     opts: WindowOptions,
     android_app: Option<AndroidAppArg>,
+    existing_session: Option<crate::DevSession>,
 ) -> Result<(), PlatformError> {
     let mut prepared = runtime.clone();
     prepared.layout(opts.width as f32, opts.height as f32);
@@ -319,7 +333,17 @@ fn run_event_loop(
     let event_loop = builder
         .build()
         .map_err(|e| PlatformError::msg(e.to_string()))?;
-    let (tree, handle, viewport) = if opts.dev_server {
+    let (tree, handle, viewport) = if let Some((handle, ep, viewport)) = existing_session {
+        let proxy = event_loop.create_proxy();
+        if let Ok(mut slot) = handle.on_change.lock() {
+            *slot = Some(std::sync::Arc::new(move || {
+                let _ = proxy.send_event(AppEvent::TreeChanged);
+            }));
+        }
+        eprintln!("Tekto dev server at {}", ep.base_url());
+        eprintln!("Try: tekto tree    or    tekto screenshot    or    tekto click <id>");
+        (std::sync::Arc::clone(&handle.tree), Some(handle), viewport)
+    } else if opts.dev_server {
         let proxy = event_loop.create_proxy();
         match crate::start_handle(&prepared, opts.width, opts.height) {
             Ok((handle, ep, viewport)) => {

@@ -25,7 +25,7 @@ Off by default (opt in only when you need them):
 
 - `gpu` — reserved; do not add wgpu or Vello to the default graph
 - `js` — the `HostOp` protocol only (no engine)
-- `quickjs` — embeds QuickJS-ng via `rquickjs` (both MIT). Slow to compile. Do not enable on PR CI. Local check: `cargo test -p tekto-js --features quickjs`
+- `quickjs` — embeds QuickJS-ng via `rquickjs` (both MIT). Slow to compile. Do not enable on PR CI. Local check: `cargo test -p tekto-js --features quickjs`. The CLI flag is the same: `cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx`. Hot reload also needs the MIT `esbuild` binary on `PATH` (not a Rust dependency, not on PR CI).
 - `a11y-os` — `accesskit_winit`, which pulls zbus / AT-SPI on Linux
 
 The `tekto` crate still Android-checks with `--no-default-features --features cpu` so the desktop/winit shell is not in that graph. The Notes APK (`examples/notes-android`) enables `cpu` + `desktop` only for `target_os = "android"` and is packaged with `cargo apk2` / `tekto build --target android`. Do not add APK packaging or an emulator to PR CI.
