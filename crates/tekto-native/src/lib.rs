@@ -12,6 +12,8 @@ use thiserror::Error;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
+mod linux_dialog;
+#[cfg(target_os = "linux")]
 mod linux_notify;
 #[cfg(target_os = "windows")]
 mod windows;
@@ -46,6 +48,8 @@ pub enum NativeError {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum NativeOp {
+    FilesOpenDialog,
+    FilesSaveDialog,
     ClipboardGetText,
     ClipboardSetText {
         text: String,
@@ -79,6 +83,8 @@ pub enum NativeOp {
 pub fn apply_native_op(op: &NativeOp) -> Result<Option<String>, NativeError> {
     let host = native();
     match op {
+        NativeOp::FilesOpenDialog => host.open_dialog(),
+        NativeOp::FilesSaveDialog => host.save_dialog(),
         NativeOp::ClipboardGetText => host.get_text().map(Some),
         NativeOp::ClipboardSetText { text } => host.set_text(text).map(|()| None),
         NativeOp::FilesReadText { path } => host.read_to_string(path).map(Some),
@@ -215,11 +221,25 @@ impl Files for StubNative {
     }
 
     fn open_dialog(&self) -> Result<Option<String>, NativeError> {
-        Err(unsupported("files.open_dialog"))
+        #[cfg(target_os = "linux")]
+        {
+            linux_dialog::show(false)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(unsupported("files.open_dialog"))
+        }
     }
 
     fn save_dialog(&self) -> Result<Option<String>, NativeError> {
-        Err(unsupported("files.save_dialog"))
+        #[cfg(target_os = "linux")]
+        {
+            linux_dialog::show(true)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(unsupported("files.save_dialog"))
+        }
     }
 }
 
