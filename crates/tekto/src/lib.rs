@@ -14,7 +14,10 @@ pub use tekto_mcp::{
     endpoint_path, read_endpoint, run_stdio_mcp, start_dev_server, AppHandle, DevEndpoint,
     SharedTreeHandle, ANDROID_DEV_PORT,
 };
-pub use tekto_native::{current_platform, native, Clipboard, Files, NativeError, Notifications};
+pub use tekto_native::{
+    apply_native_op, current_platform, native, Clipboard, Files, NativeError, NativeOp,
+    Notifications,
+};
 pub use tekto_platform::lifecycle::{
     handle_lifecycle, on_resumed, on_suspended, surface_is_live, AppLifecycle,
 };

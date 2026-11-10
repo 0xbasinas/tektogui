@@ -2,10 +2,15 @@
 //!
 //! Each capability is a small trait so platforms can be filled in one
 //! at a time (Windows, Linux, Android, later macOS, iOS, and web).
-//! Implementations in this first slice are stubs that return a clear
-//! "not yet" error, but the API is stable for apps and for agents.
+//! Linux text clipboard is implemented (X11 and Wayland). Other platforms
+//! still return a clear "not yet" error for clipboard. The API is stable
+//! for apps and for the JS [`NativeOp`] hook.
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+#[cfg(target_os = "linux")]
+mod linux;
 
 #[derive(Debug, Error)]
 pub enum NativeError {
@@ -16,6 +21,38 @@ pub enum NativeError {
     },
     #[error("{0}")]
     Message(String),
+    /// The platform implements this capability, but the session cannot use it
+    /// (for example Linux clipboard with no X11 or Wayland display).
+    #[error("{capability} is not available on {platform}: {reason}")]
+    Unavailable {
+        capability: &'static str,
+        platform: &'static str,
+        reason: &'static str,
+    },
+}
+
+/// JSON ops for native plugins. Separate from the scene-tree `HostOp` list
+/// because clipboard get returns text rather than node ids.
+///
+/// TypeScript can send the same shape later:
+/// `{"op":"clipboardGetText"}` and `{"op":"clipboardSetText","text":"..."}`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase")]
+pub enum NativeOp {
+    ClipboardGetText,
+    ClipboardSetText { text: String },
+}
+
+/// Run one [`NativeOp`] against [`native`].
+///
+/// `ClipboardGetText` returns `Some(text)` (empty string if the clipboard has
+/// no text). `ClipboardSetText` returns `None` on success.
+pub fn apply_native_op(op: &NativeOp) -> Result<Option<String>, NativeError> {
+    let host = native();
+    match op {
+        NativeOp::ClipboardGetText => host.get_text().map(Some),
+        NativeOp::ClipboardSetText { text } => host.set_text(text).map(|()| None),
+    }
 }
 
 pub fn current_platform() -> &'static str {
@@ -127,10 +164,25 @@ impl Files for StubNative {
 
 impl Clipboard for StubNative {
     fn get_text(&self) -> Result<String, NativeError> {
-        Err(unsupported("clipboard.get"))
+        #[cfg(target_os = "linux")]
+        {
+            linux::get_text()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(unsupported("clipboard.get"))
+        }
     }
-    fn set_text(&self, _text: &str) -> Result<(), NativeError> {
-        Err(unsupported("clipboard.set"))
+    fn set_text(&self, text: &str) -> Result<(), NativeError> {
+        #[cfg(target_os = "linux")]
+        {
+            linux::set_text(text)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = text;
+            Err(unsupported("clipboard.set"))
+        }
     }
 }
 
@@ -163,5 +215,147 @@ mod tests {
     #[test]
     fn reports_a_platform_name() {
         assert!(!current_platform().is_empty());
+    }
+
+    #[test]
+    fn clipboard_op_json_roundtrip() {
+        let get: NativeOp = serde_json::from_str(r#"{"op":"clipboardGetText"}"#).unwrap();
+        assert_eq!(get, NativeOp::ClipboardGetText);
+        let set = NativeOp::ClipboardSetText {
+            text: "hello".into(),
+        };
+        let json = serde_json::to_string(&set).unwrap();
+        assert_eq!(json, r#"{"op":"clipboardSetText","text":"hello"}"#);
+        let back: NativeOp = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, set);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn missing_x11_session_maps_to_unavailable() {
+        let err = linux::map_arboard(
+            "clipboard.get",
+            arboard::Error::Unknown {
+                description: "X11 server connection timed out because it was unreachable".into(),
+            },
+        );
+        assert!(matches!(
+            err,
+            NativeError::Unavailable {
+                capability: "clipboard.get",
+                platform: "linux",
+                ..
+            }
+        ));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not available") && msg.contains("clipboard"),
+            "{msg}"
+        );
+    }
+
+    /// Headless child (spawned below): no `DISPLAY` / `WAYLAND_DISPLAY`.
+    /// Must fail with [`NativeError::Unavailable`] and must not hang.
+    #[cfg(target_os = "linux")]
+    fn assert_headless_clipboard_error() {
+        let err = native().get_text().expect_err("headless clipboard");
+        assert!(
+            matches!(
+                err,
+                NativeError::Unavailable {
+                    capability: "clipboard.get",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        let set_err = apply_native_op(&NativeOp::ClipboardSetText {
+            text: "should-not-land".into(),
+        })
+        .expect_err("headless set");
+        assert!(
+            matches!(
+                set_err,
+                NativeError::Unavailable {
+                    capability: "clipboard.set",
+                    ..
+                }
+            ),
+            "{set_err}"
+        );
+    }
+
+    /// Default test never opens displays `:1` or `:2`. On Linux it re-executes
+    /// itself with the session variables cleared so a developer machine that
+    /// has `DISPLAY` still covers the missing-clipboard error.
+    /// Set `TEKTO_CLIPBOARD_LIVE=1` to round-trip text on the current session.
+    #[test]
+    fn clipboard_missing_session_or_opt_in_roundtrip() {
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let reserved = matches!(display.as_str(), ":1" | ":2" | ":1.0" | ":2.0");
+        assert!(
+            !reserved || std::env::var_os("TEKTO_CLIPBOARD_LIVE").is_none(),
+            "refusing clipboard on reserved display {display}"
+        );
+
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("TEKTO_CLIPBOARD_HEADLESS_CHILD").is_some() {
+            assert_headless_clipboard_error();
+            return;
+        }
+
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("TEKTO_CLIPBOARD_LIVE").is_some() && !linux::skip_live_clipboard() {
+            let probe = "tektogui-clipboard-probe";
+            native().set_text(probe).expect("set clipboard text");
+            // A second arboard handle must still see the text after `set_text`
+            // returns. Dropping the owner on X11 clears the selection when no
+            // clipboard manager is running.
+            let got_fresh = arboard::Clipboard::new()
+                .expect("second clipboard")
+                .get_text()
+                .expect("text still owned after set");
+            assert_eq!(got_fresh, probe);
+            let got = native().get_text().expect("get clipboard text");
+            assert_eq!(got, probe);
+            let via = apply_native_op(&NativeOp::ClipboardGetText)
+                .expect("native op")
+                .expect("text");
+            assert_eq!(via, probe);
+            return;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let exe = std::env::current_exe().expect("test exe");
+            let output = std::process::Command::new(exe)
+                .args([
+                    "tests::clipboard_missing_session_or_opt_in_roundtrip",
+                    "--exact",
+                ])
+                .env_remove("DISPLAY")
+                .env_remove("WAYLAND_DISPLAY")
+                .env("TEKTO_CLIPBOARD_HEADLESS_CHILD", "1")
+                .output()
+                .expect("spawn headless clipboard test");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "headless clipboard child failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let err = native().get_text().expect_err("stub");
+            assert!(matches!(
+                err,
+                NativeError::Unsupported {
+                    capability: "clipboard.get",
+                    ..
+                }
+            ));
+        }
     }
 }
