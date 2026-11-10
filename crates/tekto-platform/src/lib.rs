@@ -157,3 +157,26 @@ pub fn run_windowed(_runtime: AppRuntime, _opts: WindowOptions) -> Result<(), Pl
         "windowed mode is not available on this target yet; use headless, or build with the desktop feature on Windows/Linux/macOS",
     ))
 }
+
+/// Convert a physical cursor position to logical pixels using the window
+/// scale factor. Used so hit-testing matches layout (which is in logical px).
+pub fn logical_from_physical(x: f64, y: f64, scale_factor: f64) -> (f32, f32) {
+    let scale = if scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    ((x / scale) as f32, (y / scale) as f32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::logical_from_physical;
+
+    #[test]
+    fn logical_from_physical_divides_by_scale() {
+        let (x, y) = logical_from_physical(200.0, 100.0, 2.0);
+        assert!((x - 100.0).abs() < f32::EPSILON);
+        assert!((y - 50.0).abs() < f32::EPSILON);
+    }
+}

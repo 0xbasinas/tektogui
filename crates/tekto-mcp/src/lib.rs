@@ -98,6 +98,25 @@ impl AppHandle for SharedTreeHandle {
         Ok(())
     }
 
+    fn click(&self, id: NodeId) -> Result<(), McpError> {
+        let mut tree = self.tree.lock().expect("tree lock");
+        tree.click(id).map_err(|e| McpError::msg(e.to_string()))?;
+        drop(tree);
+        if let Ok(mut logs) = self.logs.lock() {
+            logs.push(format!("clicked #{id}"));
+        }
+        self.notify_change();
+        Ok(())
+    }
+
+    fn state_json(&self) -> serde_json::Value {
+        let tree = self.tree.lock().expect("tree lock");
+        serde_json::json!({
+            "focus": tree.focus.map(|id| id.raw()),
+            "last_click": tree.last_click.map(|id| id.raw()),
+        })
+    }
+
     fn logs(&self) -> Vec<String> {
         self.logs.lock().expect("logs lock").clone()
     }
@@ -503,4 +522,36 @@ fn write_lsp_message(w: &mut impl Write, v: &Value) -> Result<(), McpError> {
     w.write_all(&body)?;
     w.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tekto_tree::{NodeKind, NodePatch};
+
+    #[test]
+    fn click_sets_focus_and_is_logged() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let t = tree.add(NodeKind::Text, Some(root)).unwrap();
+        let handle = SharedTreeHandle {
+            tree: Arc::new(Mutex::new(tree)),
+            render: Arc::new(|_| Ok(Vec::new())),
+            logs: Arc::new(Mutex::new(Vec::new())),
+            on_change: Mutex::new(None),
+        };
+        handle.click(t).unwrap();
+        let dump = handle.tree();
+        assert_eq!(dump.focus, Some(t));
+        assert_eq!(dump.last_click, Some(t));
+        let logs = handle.logs();
+        assert!(
+            logs.iter().any(|l| l.contains(&format!("clicked #{t}"))),
+            "{logs:?}"
+        );
+        let state = handle.state_json();
+        assert_eq!(state["last_click"], t.raw());
+        assert_eq!(state["focus"], t.raw());
+        let _ = NodePatch::default();
+    }
 }
