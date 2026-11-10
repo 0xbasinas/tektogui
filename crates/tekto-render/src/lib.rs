@@ -55,11 +55,32 @@ pub fn paint_tree<R: Renderer>(renderer: &mut R, tree: &Tree, clear: Color) {
 }
 
 fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId) {
+    paint_node_opacity(renderer, tree, id, 1.0);
+}
+
+fn with_opacity(color: Color, opacity: f32) -> Color {
+    let opacity = opacity.clamp(0.0, 1.0);
+    Color {
+        a: (color.a as f32 * opacity).round() as u8,
+        ..color
+    }
+}
+
+fn paint_node_opacity<R: Renderer>(
+    renderer: &mut R,
+    tree: &Tree,
+    id: tekto_tree::NodeId,
+    parent_opacity: f32,
+) {
     let Some(node) = tree.get(id) else {
         return;
     };
+    let opacity = (node.opacity * parent_opacity).clamp(0.0, 1.0);
+    if opacity <= 0.001 {
+        return;
+    }
     if let Some(fill) = node.fill {
-        renderer.fill_rect(node.bounds, fill);
+        renderer.fill_rect(node.bounds, with_opacity(fill, opacity));
     }
     let composed;
     let text_to_draw = if node.kind == tekto_tree::NodeKind::TextField {
@@ -73,7 +94,7 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
         node.text.as_deref()
     };
     if let Some(text) = text_to_draw {
-        let color = node.color.unwrap_or(Color::INK);
+        let color = with_opacity(node.color.unwrap_or(Color::INK), opacity);
         let inset = if matches!(
             node.kind,
             tekto_tree::NodeKind::Button
@@ -111,7 +132,7 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
                 1.0,
                 h,
             ),
-            node.color.unwrap_or(Color::INK),
+            with_opacity(node.color.unwrap_or(Color::INK), opacity),
         );
     }
     let clip = node.kind == tekto_tree::NodeKind::Scroll;
@@ -119,7 +140,7 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
         renderer.push_clip(node.bounds);
     }
     for child in &node.children {
-        paint_node(renderer, tree, *child);
+        paint_node_opacity(renderer, tree, *child, opacity);
     }
     if clip {
         renderer.pop_clip();
@@ -173,6 +194,63 @@ pub fn render_tree_png_scaled(
 mod tests {
     use super::*;
     use tekto_tree::{Color, Rect};
+
+    #[test]
+    fn animation_frames_differ_and_stay_cheap() {
+        use std::time::Instant;
+        use tekto_tree::{NodeKind, StyleTransition, Tree};
+
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        tree.get_mut(root).unwrap().bounds = Rect::new(0.0, 0.0, 200.0, 120.0);
+        tree.get_mut(root).unwrap().fill = Some(Color::PAGE);
+        let mut ids = Vec::new();
+        for i in 0..3 {
+            let id = tree.add(NodeKind::Rect, Some(root)).unwrap();
+            let node = tree.get_mut(id).unwrap();
+            node.bounds = Rect::new(10.0 + i as f32 * 24.0, 20.0, 20.0, 20.0);
+            node.fill = Some(Color::INK);
+            ids.push(id);
+        }
+        for id in &ids {
+            tree.transition(
+                *id,
+                StyleTransition {
+                    opacity: Some(0.15),
+                    x: Some(tree.get(*id).unwrap().bounds.x + 30.0),
+                    duration_ms: Some(180.0),
+                    ..StyleTransition::default()
+                },
+            )
+            .unwrap();
+        }
+
+        let mut frames = Vec::new();
+        let started = Instant::now();
+        for step in 0..12 {
+            tree.advance(step as f64 * (180.0 / 11.0));
+            let png = render_tree_png(&tree, 200, 120, Color::PAGE).unwrap();
+            assert!(png.starts_with(b"\x89PNG"));
+            frames.push(png);
+        }
+        let elapsed = started.elapsed();
+        eprintln!("cpu animation: 12 frames, 3 rects, 200x120, {:?}", elapsed);
+        // Full tiny-skia paints, no dirty rects. Debug builds still finish
+        // a short scene well under a second on CI. See docs/architecture.md.
+        assert!(
+            elapsed.as_millis() < 2000,
+            "cpu animation cost too high: {elapsed:?}"
+        );
+        assert_ne!(frames[0], frames[6], "mid frame should move");
+        assert_ne!(frames[0], frames[11]);
+
+        let shot_dir = std::path::PathBuf::from("/workspace/tektogui-shots");
+        if shot_dir.is_dir() || std::fs::create_dir_all(&shot_dir).is_ok() {
+            let _ = std::fs::write(shot_dir.join("i38-anim-start.png"), &frames[0]);
+            let _ = std::fs::write(shot_dir.join("i38-anim-mid.png"), &frames[6]);
+            let _ = std::fs::write(shot_dir.join("i38-anim-end.png"), &frames[11]);
+        }
+    }
 
     #[test]
     fn paints_logical_rect_at_physical_scale() {

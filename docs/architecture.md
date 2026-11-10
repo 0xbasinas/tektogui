@@ -95,6 +95,22 @@ Linux file reads and writes are confined to `$XDG_DATA_HOME/tekto` (or `$HOME/.l
 
 ## Look and feel
 
-Default widgets use a warm off-white page, charcoal ink, 24px page padding, 16px stack gap, and 20–22px text. No bright chrome. A `list` is a column of variable-height `list_item` rows (stable ids, AccessKit `List` / `ListItem`). It uses a `scroll` parent only when the rows are taller than the viewport. Rows are not virtualized. A `scroll` container clips overflowing children and shifts them by `scroll_y`. A mouse wheel notch moves 48px and a pointer drag pans by the pointer delta. The offset clamps to the content, with no rubber-band. Touch scrolling, animation, and themes come later.
+Default widgets use a warm off-white page, charcoal ink, 24px page padding, 16px stack gap, and 20–22px text. No bright chrome. A `list` is a column of variable-height `list_item` rows (stable ids, AccessKit `List` / `ListItem`). It uses a `scroll` parent only when the rows are taller than the viewport. Rows are not virtualized. A `scroll` container clips overflowing children and shifts them by `scroll_y`. A mouse wheel notch moves 48px and a pointer drag pans by the pointer delta. The offset clamps to the content, with no rubber-band. Touch scrolling and themes come later.
+
+## Motion
+
+A node can tween opacity, x, y, width, and height. Call `Tree::transition` with a `StyleTransition`. The default is 180 ms and a smoothstep curve (no bounce, no overshoot). `Tree::advance(time_ms)` writes the in-between values. The desktop loop does that after layout, about every 16 ms, while a tween is running. Headless tests pass their own clock.
+
+A new channel starts on the first `advance` after `transition`, not on the last clock sample. The desktop loop stops ticking while nothing is moving, then advances with elapsed wall time. Anchoring at request time would skip a tween that starts after a long idle.
+
+Several channels can run on one node. A later `transition` replaces only the props it names. Opacity stays on the node. When a position or size channel finishes, including a zero-duration snap or reduced motion, the target is stored on `LayoutStyle` (`x`, `y`, `width`, `height`). The next layout keeps those values. `x` and `y` are `NaN` until a transition sets them.
+
+Opacity multiplies the node and its children. `0` skips that subtree.
+
+Each tick is a full CPU paint. There are no dirty rectangles. `animation_frames_differ_and_stay_cheap` in `tekto-render` paints 12 frames of three rects at 200×120 and expects that batch to finish in under two seconds in a debug build.
+
+`TEKTO_REDUCE_MOTION=1` (or `true` / `yes` / `on`) snaps tweens to the end. The desktop loop reads that when the window starts. AccessKit does not expose a reduced-motion flag, and this crate does not read GTK, GNOME, or Windows animation settings. That OS check is a follow-up.
+
+From JavaScript, `transitionOp(id, { opacity, x, y, width, height, durationMs })` in `@tektogui/core` builds a `HostOp`. QuickJS `tekto.transition` takes that same props object, or `(id, key, value, durationMs)` for one prop. Each call merges. The host starts the tween; it does not advance time.
 
 On Linux, `Files` and `NativeOp` provide text and byte reads and writes under `$XDG_DATA_HOME/tekto` (or `$HOME/.local/share/tekto`). Paths must be relative, contain no traversal or symlinks, and intermediate directories must already exist. File dialogs and access outside this directory are not yet supported. `filesReadBytes` returns a JSON array encoded in the existing string result; `filesWriteBytes` accepts a `bytes` array.
