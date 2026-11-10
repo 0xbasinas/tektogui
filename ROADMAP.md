@@ -68,7 +68,7 @@ Still in Month 1:
 ## Month 6 — a real side app
 
 - Time-travel for opted-in stores
-- `app.components` schemas for agents
+- `app.components` schemas for agents (shipped: `components.json` + MCP tool)
 - iOS hello (needs a Mac)
 - One real example app people can use
 - CI: headless replay + screenshots; documented store signing (replay and PNG compare run in the Linux test step; signing requirements are in `docs/signing.md`; we still do not sign)

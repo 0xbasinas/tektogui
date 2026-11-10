@@ -1,6 +1,6 @@
 ---
 name: add-mcp-tool
-description: Add or change a Tekto dev-server HTTP endpoint and the matching MCP tool (and CLI if useful). Use when agents need a new inspect or live-edit action, or when fixing ui.tree, ui.patch, ui.click, ui.type, ui.screenshot, app.state, or app.logs.
+description: Add or change a Tekto dev-server HTTP endpoint and the matching MCP tool (and CLI if useful). Use when agents need a new inspect or live-edit action, or when fixing ui.tree, ui.patch, ui.click, ui.type, ui.screenshot, app.state, app.logs, or app.components.
 ---
 
 # Add an MCP tool
@@ -29,6 +29,7 @@ The stdio MCP server (`tekto mcp`) is a proxy. Real work happens on the localhos
 | `ui.patch` | `POST /patch` | `tekto patch ID [--text] [--fill] [--color] [--font-size] [--padding] [--gap]` (positional id; HTTP/MCP also accept `name` and `fontSize`). Response is `{ ok, node, writeback }`. |
 | `app.state` | `GET /state` | none |
 | `app.logs` | `GET /logs` | none |
+| `app.components` | `GET /components` | none. Returns `packages/jsx-runtime/src/components.json`. Works with no running app (the stdio tool does not call the dev server). |
 
 Protocol version in `initialize` is `2024-11-05`. Tool results use `{ "content": [{ "type": "text", "text": "…" }] }` (screenshots use `type: "image"` + base64 + `mimeType: "image/png"`).
 
