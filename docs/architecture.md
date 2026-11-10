@@ -103,7 +103,7 @@ Linux file reads and writes are confined to `$XDG_DATA_HOME/tekto` (or `$HOME/.l
 
 ## Look and feel
 
-Default widgets use a warm off-white page, charcoal ink, 24px page padding, 16px stack gap, and 20–22px text. No bright chrome. A `list` is a column of variable-height `list_item` rows (stable ids, AccessKit `List` / `ListItem`). It uses a `scroll` parent only when the rows are taller than the viewport. Layout then keeps the visible rows plus a 64px overscan, and spacers hold the rest of the scroll height. A `scroll` container clips overflowing children and shifts them by `scroll_y`. A mouse wheel notch moves 48px and a pointer drag pans by the pointer delta. The offset clamps to the content, with no rubber-band. Touch scrolling and themes come later.
+Default widgets use a warm off-white page, charcoal ink, 24px page padding, 16px stack gap, and 20–22px text. No bright chrome. A `list` is a column of variable-height `list_item` rows (stable ids, AccessKit `List` / `ListItem`). It uses a `scroll` parent only when the rows are taller than the viewport. Layout then keeps the visible rows plus a 64px overscan, and spacers hold the rest of the scroll height. A `scroll` container clips overflowing children and shifts them by `scroll_y`. A mouse wheel notch moves 48px and a pointer drag pans by the pointer delta. Touch uses the same 1:1 tracking. A fast lift coasts (fling) with exponential decay and stops at the content edge. A new press cancels that coast immediately. The offset clamps to the content, with no rubber-band and no decorative bounce. Themes come later.
 
 ## Motion
 
@@ -116,6 +116,8 @@ Several channels can run on one node. A later `transition` replaces only the pro
 Opacity multiplies the node and its children. `0` skips that subtree.
 
 Each tick is a full CPU paint. There are no dirty rectangles. `animation_frames_differ_and_stay_cheap` in `tekto-render` paints 12 frames of three rects at 200×120 and expects that batch to finish in under two seconds in a debug build.
+
+A scroll fling uses that same clock. `Tree::scroll_touch_begin`, `scroll_touch_move`, and `scroll_touch_end` are the touch gesture. Begin stops any fling on that scroll. Move follows the finger. End starts a fling only when the last ~80 ms were fast; a finger that rested does not coast. `Tree::advance` decays the speed (about 220 ms time constant) and drops it at the clamp. `TEKTO_REDUCE_MOTION` skips the fling and keeps tracking. The desktop loop feeds mouse drag and `Touch` events through this gesture. See `.agents/skills/write-headless-test/SKILL.md`.
 
 `TEKTO_REDUCE_MOTION=1` (or `true` / `yes` / `on`) snaps tweens to the end. The desktop loop reads that when the window starts. AccessKit does not expose a reduced-motion flag, and this crate does not read GTK, GNOME, or Windows animation settings. That OS check is a follow-up.
 

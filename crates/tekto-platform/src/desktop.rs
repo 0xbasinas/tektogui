@@ -29,7 +29,7 @@ use tekto_tree::{FieldKey, ImeEvent, NodeId, Tree, SCROLL_WHEEL_LINE};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{
-    ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent,
+    ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
@@ -55,8 +55,11 @@ struct State {
     pointer_down: bool,
     press_origin: Option<(f32, f32)>,
     drag_scroll: Option<NodeId>,
-    drag_last_y: f32,
     dragged: bool,
+    /// Finger id while a touch owns the pointer. Mouse events in that gesture
+    /// are the platform's copy of the same finger and must not scroll twice.
+    active_touch: Option<u64>,
+    swallow_mouse: bool,
     modifiers: Modifiers,
     /// `Window::set_ime_allowed` follows text-field focus (desktop).
     ime_allowed: bool,
@@ -129,8 +132,9 @@ impl ApplicationHandler<AppEvent> for App {
             pointer_down: false,
             press_origin: None,
             drag_scroll: None,
-            drag_last_y: 0.0,
             dragged: false,
+            active_touch: None,
+            swallow_mouse: false,
             modifiers: Modifiers::default(),
             ime_allowed: false,
             #[cfg(target_os = "android")]
@@ -232,11 +236,13 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(state) = self.state.as_mut() {
-                    let scale = state.window.scale_factor();
-                    let (x, y) = logical_from_physical(position.x, position.y, scale);
-                    state.cursor = Some((x, y));
-                    if state.pointer_down {
-                        apply_pointer_drag(state, x, y);
+                    if !state.swallow_mouse {
+                        let scale = state.window.scale_factor();
+                        let (x, y) = logical_from_physical(position.x, position.y, scale);
+                        state.cursor = Some((x, y));
+                        if state.pointer_down {
+                            apply_pointer_drag(state, x, y);
+                        }
                     }
                 }
             }
@@ -246,13 +252,52 @@ impl ApplicationHandler<AppEvent> for App {
                 ..
             } => {
                 if let Some(state) = self.state.as_mut() {
-                    match button_state {
-                        ElementState::Pressed => {
-                            if let Some((x, y)) = state.cursor {
+                    if state.swallow_mouse {
+                        if button_state == ElementState::Released {
+                            state.swallow_mouse = false;
+                        }
+                    } else {
+                        match button_state {
+                            ElementState::Pressed => {
+                                if let Some((x, y)) = state.cursor {
+                                    begin_pointer(state, x, y);
+                                }
+                            }
+                            ElementState::Released => end_pointer(state, true),
+                        }
+                    }
+                }
+            }
+            WindowEvent::Touch(touch) => {
+                if let Some(state) = self.state.as_mut() {
+                    let scale = state.window.scale_factor();
+                    let (x, y) = logical_from_physical(touch.location.x, touch.location.y, scale);
+                    state.cursor = Some((x, y));
+                    match touch.phase {
+                        TouchPhase::Started => {
+                            if state.active_touch.is_none() {
+                                state.active_touch = Some(touch.id);
+                                state.swallow_mouse = true;
                                 begin_pointer(state, x, y);
                             }
                         }
-                        ElementState::Released => end_pointer(state),
+                        TouchPhase::Moved => {
+                            if state.active_touch == Some(touch.id) {
+                                apply_pointer_drag(state, x, y);
+                            }
+                        }
+                        TouchPhase::Ended => {
+                            if state.active_touch == Some(touch.id) {
+                                state.active_touch = None;
+                                end_pointer(state, true);
+                            }
+                        }
+                        TouchPhase::Cancelled => {
+                            if state.active_touch == Some(touch.id) {
+                                state.active_touch = None;
+                                end_pointer(state, false);
+                            }
+                        }
                     }
                 }
             }
@@ -591,23 +636,27 @@ fn wheel_delta_logical(delta: MouseScrollDelta, scale: f64) -> f32 {
     }
 }
 
+fn pointer_ms(state: &State) -> f64 {
+    state.anim_origin.elapsed().as_secs_f64() * 1000.0
+}
+
 fn begin_pointer(state: &mut State, x: f32, y: f32) {
     state.pointer_down = true;
     state.press_origin = Some((x, y));
-    state.drag_last_y = y;
     state.dragged = false;
+    let now = pointer_ms(state);
     state.drag_scroll = state
         .tree
         .lock()
         .ok()
-        .and_then(|tree| tree.scroll_target_at(x, y));
+        .and_then(|mut tree| tree.scroll_touch_begin(x, y, now));
     if state.drag_scroll.is_none() {
         apply_pointer_click(state, x, y);
     }
 }
 
 fn apply_pointer_drag(state: &mut State, x: f32, y: f32) {
-    let Some(id) = state.drag_scroll else {
+    let Some(_id) = state.drag_scroll else {
         return;
     };
     if let Some((ox, oy)) = state.press_origin {
@@ -618,29 +667,39 @@ fn apply_pointer_drag(state: &mut State, x: f32, y: f32) {
     if !state.dragged {
         return;
     }
-    // Dragging down pulls content down, which decreases the offset.
-    let delta = state.drag_last_y - y;
-    state.drag_last_y = y;
-    if delta == 0.0 {
-        return;
-    }
+    // Dragging down pulls content down. The tree tracks that 1:1.
+    let now = pointer_ms(state);
     if let Ok(mut tree) = state.tree.lock() {
-        let _ = tree.scroll_by(id, delta);
+        let _ = tree.scroll_touch_move(y, now);
     }
     state.window.request_redraw();
 }
 
-fn end_pointer(state: &mut State) {
+fn end_pointer(state: &mut State, fling: bool) {
     let was_down = state.pointer_down;
     state.pointer_down = false;
     let scroll = state.drag_scroll.take();
     state.press_origin = None;
+    let now = pointer_ms(state);
+    let flung = if let Ok(mut tree) = state.tree.lock() {
+        if fling {
+            tree.scroll_touch_end(now)
+        } else {
+            tree.scroll_touch_cancel();
+            false
+        }
+    } else {
+        false
+    };
     if was_down && scroll.is_some() && !state.dragged {
         if let Some((x, y)) = state.cursor {
             apply_pointer_click(state, x, y);
         }
     }
     state.dragged = false;
+    if flung {
+        state.window.request_redraw();
+    }
 }
 
 fn apply_wheel(state: &mut State, x: f32, y: f32, delta_y: f32) {

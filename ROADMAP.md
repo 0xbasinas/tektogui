@@ -62,7 +62,7 @@ Still in Month 1:
 - Safe areas and keyboard insets
 - Android GPU paint compiles behind `notes-android` feature `gpu`, but the default stays CPU (`TEKTO_ANDROID_GPU=1` to try it). Drivers were not proven here. A lost surface skips present.
 - Notifications, clipboard, and files on Android
-- Animation and scroll feel on touch
+- Animation and scroll feel on touch (1:1 tracking, fling, finger cancels the coast; no bounce)
 - macOS catch-up if we have a Mac
 
 ## Month 6 — a real side app
