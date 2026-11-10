@@ -229,6 +229,20 @@ pub struct Node {
     /// `scroll_y` is applied. Layout writes this. Zero until the first layout.
     #[serde(default)]
     pub scroll_extent: f32,
+    /// Viewport height, in logical pixels, for a [`NodeKind::List`] that should
+    /// scroll once its rows are taller than this. `NaN` means there is no
+    /// viewport (the list stays a direct child). The list widget sets this and
+    /// reads it when deciding whether to insert a scroll parent.
+    #[serde(default = "nan_f32", skip_serializing_if = "is_nan_f32")]
+    pub list_viewport: f32,
+}
+
+fn nan_f32() -> f32 {
+    f32::NAN
+}
+
+fn is_nan_f32(value: &f32) -> bool {
+    value.is_nan()
 }
 
 impl Node {
@@ -249,6 +263,7 @@ impl Node {
             caret_x: 0.0,
             scroll_y: 0.0,
             scroll_extent: 0.0,
+            list_viewport: f32::NAN,
         }
     }
 
