@@ -9,4 +9,14 @@ description = "Plugin-style native APIs (files, clipboard, notifications, tray, 
 publish = false
 
 [dependencies]
+serde = { workspace = true }
 thiserror = { workspace = true }
+
+# arboard 3.7.0 is MIT OR Apache-2.0. Text only (no image-data). Wayland uses
+# `wayland-data-control` (wl-clipboard-rs, MIT OR Apache-2.0). X11 uses x11rb
+# (MIT OR Apache-2.0). Linux only; other platforms stay stubs.
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
