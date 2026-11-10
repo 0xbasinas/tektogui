@@ -29,3 +29,6 @@ tekto-mcp = { workspace = true }
 tekto-native = { workspace = true }
 tekto-widgets = { workspace = true }
 tekto-js = { workspace = true, optional = true }
+
+[dev-dependencies]
+tekto-js = { workspace = true }
