@@ -112,6 +112,7 @@ fn role_for(kind: NodeKind) -> Role {
         NodeKind::Text => Role::Label,
         NodeKind::Button => Role::Button,
         NodeKind::TextField => Role::TextInput,
+        NodeKind::Scroll => Role::ScrollView,
     }
 }
 

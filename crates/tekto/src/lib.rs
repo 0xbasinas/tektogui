@@ -30,10 +30,11 @@ pub use tekto_platform::{
 pub use tekto_render::{paint_tree, render_tree_png, CpuRenderer, RenderError, Renderer};
 pub use tekto_tree::{
     Color, FieldKey, LayoutStyle, Node, NodeId, NodeKind, NodePatch, Rect, Tree, TreeDump,
+    SCROLL_WHEEL_LINE,
 };
 
 pub use tekto_widgets::{
-    banner, button, notes_tree, text, text_field, title_on_banner, window, BANNER_HEIGHT,
+    banner, button, notes_tree, scroll, text, text_field, title_on_banner, window, BANNER_HEIGHT,
     BANNER_PADDING, BODY_SIZE, PAGE_PADDING, STACK_GAP, TITLE_SIZE,
 };
 
