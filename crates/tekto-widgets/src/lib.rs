@@ -108,6 +108,20 @@ pub fn text(
     Ok(id)
 }
 
+/// A quiet, labeled button. The returned id is the interactive scene node.
+pub fn button(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId, WidgetError> {
+    let id = tree.add(NodeKind::Button, Some(parent))?;
+    if let Some(n) = tree.get_mut(id) {
+        n.name = Some(label.into());
+        n.text = Some(label.into());
+        n.fill = Some(Color::BANNER);
+        n.color = Some(Color::ON_BANNER);
+        n.font_size = BODY_SIZE;
+        n.layout.padding = 12.0;
+    }
+    Ok(id)
+}
+
 /// Title text drawn on the dark banner.
 pub fn title_on_banner(
     tree: &mut Tree,

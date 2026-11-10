@@ -81,7 +81,7 @@ fn measure_text(
     let Some(node) = tree.get(id) else {
         return Size::ZERO;
     };
-    if !matches!(node.kind, NodeKind::Text) {
+    if !matches!(node.kind, NodeKind::Text | NodeKind::Button) {
         return Size::ZERO;
     }
     let content = node.text.as_deref().unwrap_or("");
@@ -162,7 +162,7 @@ fn build(
     let tid = if child_ids.is_empty() {
         let is_text = tree
             .get(id)
-            .is_some_and(|n| matches!(n.kind, NodeKind::Text));
+            .is_some_and(|n| matches!(n.kind, NodeKind::Text | NodeKind::Button));
         if is_text {
             taffy.new_leaf_with_context(style, id).expect("taffy")
         } else {

@@ -65,3 +65,11 @@ test("mount talks to a host by id, not through Notes-only APIs", () => {
     ],
   );
 });
+
+ test("button lowers to a labeled host node", () => {
+  const ops = renderToOps(jsx("button", { children: "Save" }));
+  assert.deepEqual(ops, [
+    { op: "create", kind: "button" },
+    { op: "setText", id: 1, text: "Save" },
+  ]);
+});
