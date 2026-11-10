@@ -213,7 +213,10 @@ fn handle_client(mut stream: TcpStream, handle: Arc<dyn AppHandle>) -> Result<()
         .unwrap_or("")
         .trim_end_matches('\0');
 
-    let (status, content_type, body_bytes) = dispatch(handle.as_ref(), method, path, body)?;
+    let (status, content_type, body_bytes) = match dispatch(handle.as_ref(), method, path, body) {
+        Ok(v) => v,
+        Err(e) => error_response(e),
+    };
     let header = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
         body_bytes.len()
@@ -221,6 +224,18 @@ fn handle_client(mut stream: TcpStream, handle: Arc<dyn AppHandle>) -> Result<()
     stream.write_all(header.as_bytes())?;
     stream.write_all(&body_bytes)?;
     Ok(())
+}
+
+fn error_response(e: McpError) -> (&'static str, &'static str, Vec<u8>) {
+    let msg = e.to_string();
+    let status = if msg.contains("unknown node") {
+        "404 Not Found"
+    } else {
+        "400 Bad Request"
+    };
+    let body = serde_json::to_vec(&serde_json::json!({ "error": msg }))
+        .unwrap_or_else(|_| br#"{"error":"internal"}"#.to_vec());
+    (status, "application/json", body)
 }
 
 fn dispatch(
