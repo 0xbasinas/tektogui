@@ -122,6 +122,30 @@ pub fn button(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId, Wi
     Ok(id)
 }
 
+/// A single-line text field. `label` is the accessible name; `value` is `text`.
+///
+/// The caret starts at the end of `value`. Full IME (composition, candidates,
+/// marked text) is not implemented. Desktop keys that produce a character,
+/// and Backspace, edit `value` when the field is focused.
+pub fn text_field(
+    tree: &mut Tree,
+    parent: NodeId,
+    label: &str,
+    value: &str,
+) -> Result<NodeId, WidgetError> {
+    let id = tree.add(NodeKind::TextField, Some(parent))?;
+    if let Some(n) = tree.get_mut(id) {
+        n.name = Some(label.into());
+        n.text = Some(value.into());
+        n.fill = Some(Color::FIELD);
+        n.color = Some(Color::INK);
+        n.font_size = BODY_SIZE;
+        n.caret = value.chars().count();
+        n.layout.padding = 10.0;
+    }
+    Ok(id)
+}
+
 /// Title text drawn on the dark banner.
 pub fn title_on_banner(
     tree: &mut Tree,
@@ -165,5 +189,18 @@ mod tests {
         let pretty = tree.to_pretty_text();
         assert!(pretty.contains("Hello from Tekto"));
         assert!(pretty.contains("window#1"));
+    }
+
+    #[test]
+    fn text_field_stores_label_and_value() {
+        let mut tree = Tree::new();
+        let root = window(&mut tree, "Notes", 320.0, 200.0).unwrap();
+        let field = text_field(&mut tree, root, "Title", "Milk").unwrap();
+        let node = tree.get(field).unwrap();
+        assert_eq!(node.kind, NodeKind::TextField);
+        assert_eq!(node.name.as_deref(), Some("Title"));
+        assert_eq!(node.text.as_deref(), Some("Milk"));
+        assert_eq!(node.caret, 4);
+        assert_eq!(node.fill, Some(Color::FIELD));
     }
 }

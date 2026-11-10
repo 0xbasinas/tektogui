@@ -60,7 +60,10 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
     }
     if let Some(text) = &node.text {
         let color = node.color.unwrap_or(Color::INK);
-        let inset = if matches!(node.kind, tekto_tree::NodeKind::Button) {
+        let inset = if matches!(
+            node.kind,
+            tekto_tree::NodeKind::Button | tekto_tree::NodeKind::TextField
+        ) {
             node.layout.padding
         } else {
             0.0
@@ -77,6 +80,19 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
             node.font_size,
             color,
             max_w,
+        );
+    }
+    if node.kind == tekto_tree::NodeKind::TextField && tree.focus == Some(id) {
+        let inset = node.layout.padding;
+        let h = (node.bounds.height - 2.0 * inset).max(1.0);
+        renderer.fill_rect(
+            tekto_tree::Rect::new(
+                node.bounds.x + inset + node.caret_x,
+                node.bounds.y + inset,
+                1.0,
+                h,
+            ),
+            node.color.unwrap_or(Color::INK),
         );
     }
     for child in &node.children {

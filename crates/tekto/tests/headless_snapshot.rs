@@ -228,3 +228,59 @@ fn button_is_visible_and_clickable() {
     let png = render_headless_to_file(&tree, 320, 160, None).unwrap();
     assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
 }
+
+#[test]
+fn text_field_value_patch_keys_and_accesskit() {
+    let mut tree = tekto::Tree::new();
+    let root = tekto::window(&mut tree, "Notes", 320.0, 200.0).unwrap();
+    let field = tekto::text_field(&mut tree, root, "Title", "Hi").unwrap();
+    layout_tree(&mut tree, 320.0, 200.0);
+    let node = tree.get(field).unwrap();
+    assert!(node.bounds.width > 40.0 && node.bounds.height > 16.0);
+    assert!(node.caret_x > 0.0, "caret should sit after Hi");
+    assert!(tree
+        .to_pretty_text()
+        .contains(&format!("text_field#{}", field.raw())));
+    assert_eq!(tree.node_dump(field).unwrap().text.as_deref(), Some("Hi"));
+    assert_eq!(
+        tree.node_dump(field).unwrap().name.as_deref(),
+        Some("Title")
+    );
+
+    tree.patch(
+        field,
+        tekto::NodePatch {
+            text: Some("Hello".into()),
+            ..tekto::NodePatch::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hello"));
+    assert_eq!(tree.get(field).unwrap().name.as_deref(), Some("Title"));
+
+    let bounds = tree.get(field).unwrap().bounds;
+    assert_eq!(
+        tree.click_at(
+            bounds.x + bounds.width / 2.0,
+            bounds.y + bounds.height / 2.0
+        ),
+        Some(field)
+    );
+    assert_eq!(tree.focus, Some(field));
+    assert!(tree.apply_field_key(tekto::FieldKey::Backspace).unwrap());
+    assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hell"));
+    assert!(tree.apply_field_key(tekto::FieldKey::Insert('o')).unwrap());
+    layout_tree(&mut tree, 320.0, 200.0);
+    assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hello"));
+    assert!(tree.get(field).unwrap().caret_x > 0.0);
+
+    let dump = accesskit_dump(&tree).unwrap();
+    let ak = dump.nodes.iter().find(|n| n.id == field.raw()).unwrap();
+    assert_eq!(ak.role, "TextInput");
+    assert_eq!(ak.label.as_deref(), Some("Title"));
+    assert_eq!(ak.value.as_deref(), Some("Hello"));
+    assert_eq!(dump.focus, field.raw());
+
+    let png = render_headless_to_file(&tree, 320, 200, None).unwrap();
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+}

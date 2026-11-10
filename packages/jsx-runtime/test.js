@@ -73,3 +73,12 @@ test("mount talks to a host by id, not through Notes-only APIs", () => {
     { op: "setText", id: 1, text: "Save" },
   ]);
 });
+
+test("text_field lowers to a labeled value", () => {
+  const ops = renderToOps(jsx("text_field", { name: "Title", children: "Hello" }));
+  assert.deepEqual(ops, [
+    { op: "create", kind: "text_field" },
+    { op: "setProp", id: 1, key: "name", value: "Title" },
+    { op: "setText", id: 1, text: "Hello" },
+  ]);
+});

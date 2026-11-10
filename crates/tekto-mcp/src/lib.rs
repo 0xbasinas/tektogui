@@ -51,7 +51,9 @@ pub trait AppHandle: Send + Sync {
     }
     fn type_text(&self, id: NodeId, text: &str) -> Result<(), McpError> {
         let _ = (id, text);
-        Err(McpError::msg("type is not wired up yet"))
+        Err(McpError::msg(
+            "type is not wired up yet — text fields accept plain characters on the desktop",
+        ))
     }
     fn state_json(&self) -> Value {
         json!({})
@@ -202,6 +204,18 @@ impl AppHandle for SharedTreeHandle {
         drop(tree);
         if let Ok(mut logs) = self.logs.lock() {
             logs.push(format!("clicked #{id}"));
+        }
+        self.notify_change();
+        Ok(())
+    }
+
+    fn type_text(&self, id: NodeId, text: &str) -> Result<(), McpError> {
+        let mut tree = self.tree.lock().expect("tree lock");
+        tree.insert_text(id, text)
+            .map_err(|e| McpError::msg(e.to_string()))?;
+        drop(tree);
+        if let Ok(mut logs) = self.logs.lock() {
+            logs.push(format!("typed into #{id}"));
         }
         self.notify_change();
         Ok(())
@@ -633,7 +647,7 @@ fn tool_list() -> Value {
         {"name": "ui.accesskit", "description": "Dump the AccessKit tree (roles, labels, bounds, focus) with the same stable ids.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.screenshot", "description": "Take a PNG screenshot using the CPU renderer.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.click", "description": "Click a node by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}}, "required": ["id"]}},
-        {"name": "ui.type", "description": "Type text into a node by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
+        {"name": "ui.type", "description": "Insert plain characters at the caret of a text field (by stable id) and focus it. Not an IME: no composition or candidate window. Backspace is a desktop key, not this tool.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
         {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, fontSize, padding, or gap. Returns the updated node and a writeback report. Applies immediately (no reload). Unique literals in the app project are written back to source; ambiguous edits stay in the runtime tree.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}, "padding": {"type": "number"}, "gap": {"type": "number"}}, "required": ["id"]}},
         {"name": "app.state", "description": "Read opted-in app state as JSON.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "app.logs", "description": "Read structured logs.", "inputSchema": {"type": "object", "properties": {}}}

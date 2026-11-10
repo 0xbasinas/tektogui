@@ -69,6 +69,36 @@ pub fn layout_tree_with_text(
         },
     );
     write_bounds(&taffy, tree, root, 0.0, 0.0, &map);
+    place_carets(tree, text);
+}
+
+fn place_carets(tree: &mut Tree, text: &mut TextEngine) {
+    let ids: Vec<NodeId> = tree
+        .ids()
+        .filter(|id| tree.get(*id).is_some_and(|n| n.kind == NodeKind::TextField))
+        .collect();
+    for id in ids {
+        let Some(node) = tree.get(id) else {
+            continue;
+        };
+        let value = node.text.clone().unwrap_or_default();
+        let caret = node.caret.min(value.chars().count());
+        let prefix: String = value.chars().take(caret).collect();
+        let max_w = {
+            let inner = node.bounds.width - 2.0 * node.layout.padding;
+            if inner > 0.0 {
+                Some(inner)
+            } else {
+                None
+            }
+        };
+        let size = node.font_size;
+        let (w, _) = text.measure(&prefix, size, max_w);
+        if let Some(node) = tree.get_mut(id) {
+            node.caret = caret;
+            node.caret_x = w;
+        }
+    }
 }
 
 fn measure_text(
@@ -81,16 +111,22 @@ fn measure_text(
     let Some(node) = tree.get(id) else {
         return Size::ZERO;
     };
-    if !matches!(node.kind, NodeKind::Text | NodeKind::Button) {
+    if !matches!(
+        node.kind,
+        NodeKind::Text | NodeKind::Button | NodeKind::TextField
+    ) {
         return Size::ZERO;
     }
     let content = node.text.as_deref().unwrap_or("");
+    // An empty field still needs a line box so the caret has somewhere to sit.
+    let sample = if content.is_empty() { " " } else { content };
     let max_width = known.width.or_else(|| match avail.width {
         AvailableSpace::Definite(w) => Some(w.max(0.0)),
         AvailableSpace::MinContent => Some(0.0),
         AvailableSpace::MaxContent => None,
     });
-    let (w, h) = text.measure(content, node.font_size, max_width);
+    let (w, h) = text.measure(sample, node.font_size, max_width);
+    let w = if content.is_empty() { 0.0 } else { w };
     Size {
         width: known.width.unwrap_or(w),
         height: known.height.unwrap_or(h.max(1.0)),
@@ -160,9 +196,12 @@ fn build(
     let style = style_for(tree, id, is_root);
     let child_ids: Vec<NodeId> = tree.get(id).map(|n| n.children.clone()).unwrap_or_default();
     let tid = if child_ids.is_empty() {
-        let is_text = tree
-            .get(id)
-            .is_some_and(|n| matches!(n.kind, NodeKind::Text | NodeKind::Button));
+        let is_text = tree.get(id).is_some_and(|n| {
+            matches!(
+                n.kind,
+                NodeKind::Text | NodeKind::Button | NodeKind::TextField
+            )
+        });
         if is_text {
             taffy.new_leaf_with_context(style, id).expect("taffy")
         } else {
