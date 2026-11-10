@@ -241,6 +241,28 @@ mod tests {
     use super::*;
     use tekto_tree::{LayoutStyle, NodeKind, Tree};
 
+    /// API 24–29 bottom pair from `getSystemWindowInsetBottom` and
+    /// `getStableInsetBottom`. `FieldOverlay.insets` uses this same split.
+    ///
+    /// `system_bottom` is the full overlap from the window bottom. While the
+    /// keyboard is open that overlap is taller than `stable_bottom` and
+    /// includes the keyboard plus any system bar already inside it. The
+    /// returned IME bottom is that full overlap, or 0 when the system inset
+    /// is only the stable bar. Safe bottom stays the smaller of the two.
+    /// [`WindowInsets::content_padding`] takes the max, so a full-from-bottom
+    /// IME is not added to the nav bar. API 30+ passes `getInsets` through.
+    fn pre30_bottom_insets(system_bottom: i32, stable_bottom: i32) -> (i32, i32) {
+        let system_bottom = system_bottom.max(0);
+        let stable_bottom = stable_bottom.max(0);
+        let safe_bottom = system_bottom.min(stable_bottom);
+        let ime_bottom = if system_bottom > stable_bottom {
+            system_bottom
+        } else {
+            0
+        };
+        (safe_bottom, ime_bottom)
+    }
+
     fn sized(width: f32, height: f32) -> LayoutStyle {
         LayoutStyle {
             width,
@@ -356,6 +378,35 @@ mod tests {
             "field should stay under the status inset, y={}",
             bounds.y
         );
+    }
+
+    #[test]
+    fn pre30_keyboard_overlap_pads_the_full_system_bottom() {
+        // system 300, stable 24 used to become ime 276 and pad 276.
+        let (safe_bottom, ime_bottom) = pre30_bottom_insets(300, 24);
+        assert_eq!(safe_bottom, 24);
+        assert_eq!(ime_bottom, 300);
+        let insets = insets_from_physical([0, 0, 0, safe_bottom, 0, 0, 0, ime_bottom], 1.0);
+        assert_eq!(insets.content_padding().bottom, 300.0);
+
+        let (safe_bottom, ime_bottom) = pre30_bottom_insets(24, 24);
+        assert_eq!((safe_bottom, ime_bottom), (24, 0));
+        let closed = insets_from_physical([0, 48, 0, safe_bottom, 0, 0, 0, ime_bottom], 1.0);
+        assert_eq!(closed.content_padding().bottom, 24.0);
+        assert_eq!(closed.content_padding().top, 48.0);
+
+        // Both already measured from the window bottom: max, do not add.
+        let both = WindowInsets {
+            safe: EdgeInsets {
+                bottom: 300.0,
+                ..EdgeInsets::default()
+            },
+            ime: EdgeInsets {
+                bottom: 300.0,
+                ..EdgeInsets::default()
+            },
+        };
+        assert_eq!(both.content_padding().bottom, 300.0);
     }
 
     #[test]
