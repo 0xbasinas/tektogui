@@ -97,4 +97,4 @@ with `replay(&mut tree, layout)`. Lay out the tree before recording or replaying
 use the callback to lay it out after each action so pointer coordinates see the
 current bounds. The helper records actions passed to it; it does not automatically
 capture a live window or dev-server session, run app callbacks, or write patches
-back to source. See `crates/tekto/tests/record_replay.rs` and its JSON fixture.
+back to source. See `crates/tekto/tests/record_replay.rs` and its JSON fixture. Linux CI runs that test and the Notes PNG compare as part of `cargo test --workspace --all-targets`.

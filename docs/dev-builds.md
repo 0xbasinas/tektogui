@@ -36,7 +36,7 @@ Nothing unexpected showed up in the default graph that we should gate or drop in
 
 ## CI caches and times
 
-Linux `fmt` + `clippy -D warnings` + `cargo test --workspace` runs on every PR and every push. Windows and Android compile jobs run only on `push` to `nightly`, or on `workflow_dispatch` with `full=true`. The WASM job (`cargo check -p tekto-wasm --target wasm32-unknown-unknown`, plus `tekto` with `--no-default-features --features cpu,js`) runs on `push` to `nightly` or any `workflow_dispatch`. It is not on PR CI. Swatinem/rust-cache and concurrency cancel are on.
+Linux `fmt` + `clippy -D warnings` + `cargo test --workspace --all-targets` runs on every PR and every push. That one test command is what runs the record/replay integration test and the headless Notes PNG compare. Windows and Android compile jobs run only on `push` to `nightly`, or on `workflow_dispatch` with `full=true`. The WASM job (`cargo check -p tekto-wasm --target wasm32-unknown-unknown`, plus `tekto` with `--no-default-features --features cpu,js`) runs on `push` to `nightly` or any `workflow_dispatch`. It is not on PR CI. Swatinem/rust-cache and concurrency cancel are on.
 
 Times from GitHub-hosted Linux (UTC, job "Linux check", step "Test (includes headless snapshot)"):
 
