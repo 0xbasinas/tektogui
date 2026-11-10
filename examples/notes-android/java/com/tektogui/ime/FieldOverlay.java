@@ -2,12 +2,16 @@ package com.tektogui.ime;
 
 import android.app.Activity;
 import android.content.Context;
+import android.graphics.Insets;
+import android.os.Build;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
+import android.view.DisplayCutout;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -35,6 +39,63 @@ public final class FieldOverlay {
 
     public static int caret() {
         return caret;
+    }
+
+    /**
+     * Physical pixels: safe left, top, right, bottom, then IME left, top, right, bottom.
+     * Safe covers system bars and the display cutout. The IME bottom is how far the
+     * keyboard overlaps this window. A resized window that no longer overlaps the
+     * keyboard reports 0, so layout does not pad twice.
+     */
+    public static int[] insets(Activity activity) {
+        int[] out = new int[] {0, 0, 0, 0, 0, 0, 0, 0};
+        if (activity == null || activity.getWindow() == null) {
+            return out;
+        }
+        View decor = activity.getWindow().getDecorView();
+        if (decor == null) {
+            return out;
+        }
+        WindowInsets wi = decor.getRootWindowInsets();
+        if (wi == null) {
+            return out;
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            int bars = WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout();
+            Insets safe = wi.getInsets(bars);
+            Insets ime = wi.getInsets(WindowInsets.Type.ime());
+            out[0] = safe.left;
+            out[1] = safe.top;
+            out[2] = safe.right;
+            out[3] = safe.bottom;
+            out[4] = ime.left;
+            out[5] = ime.top;
+            out[6] = ime.right;
+            out[7] = ime.bottom;
+            return out;
+        }
+        int left = Math.max(wi.getSystemWindowInsetLeft(), wi.getStableInsetLeft());
+        int top = Math.max(wi.getSystemWindowInsetTop(), wi.getStableInsetTop());
+        int right = Math.max(wi.getSystemWindowInsetRight(), wi.getStableInsetRight());
+        int sysBottom = wi.getSystemWindowInsetBottom();
+        int stableBottom = wi.getStableInsetBottom();
+        int safeBottom = Math.min(sysBottom, stableBottom);
+        int imeBottom = Math.max(0, sysBottom - stableBottom);
+        if (Build.VERSION.SDK_INT >= 28) {
+            DisplayCutout cut = wi.getDisplayCutout();
+            if (cut != null) {
+                left = Math.max(left, cut.getSafeInsetLeft());
+                top = Math.max(top, cut.getSafeInsetTop());
+                right = Math.max(right, cut.getSafeInsetRight());
+                safeBottom = Math.max(safeBottom, cut.getSafeInsetBottom());
+            }
+        }
+        out[0] = left;
+        out[1] = top;
+        out[2] = right;
+        out[3] = safeBottom;
+        out[7] = imeBottom;
+        return out;
     }
 
     public static void sync(
