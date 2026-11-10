@@ -102,7 +102,13 @@ mod tests {
         assert!(tekto_surface_is_live());
         let png = render_notes_headless().expect("headless notes");
         assert!(png.len() > 400);
-        tekto_on_suspended();
+        // Headless paint ends in Suspended: the CPU surface must not stay live.
         assert!(!tekto_surface_is_live());
+        for _ in 0..3 {
+            tekto_on_resumed();
+            assert!(tekto_surface_is_live());
+            tekto_on_suspended();
+            assert!(!tekto_surface_is_live());
+        }
     }
 }
