@@ -14,6 +14,7 @@ members = [
     "crates/tekto",
     "crates/tekto-cli",
     "examples/notes",
+    "examples/notes-android",
 ]
 
 [workspace.package]

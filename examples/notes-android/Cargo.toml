@@ -1,0 +1,18 @@
+[package]
+name = "notes-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Notes example as an Android cdylib (CPU core + lifecycle stubs)"
+publish = false
+
+[lib]
+name = "notes_android"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Path dep (not workspace=true) so default-features=false is honored
+# on edition 2021. See the rustc warning about workspace defaults.
+tekto = { path = "../../crates/tekto", default-features = false, features = ["cpu"] }
