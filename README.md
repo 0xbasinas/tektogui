@@ -20,7 +20,7 @@ This is very early. The first slice can:
 - Open a **window on Linux** (and it should compile for Windows too)
 - Serve `tekto tree`, `tekto screenshot`, `tekto patch`, and MCP `ui.tree` from the same dev server
 
-Android and Windows are compile-checked from day one. A real Android window, the TypeScript engine, GPU rendering, and a WASM web target come next. See [ROADMAP.md](ROADMAP.md).
+Android and Windows are compile-checked from day one. The WASM core and browser HostOp bridge are in; canvas paint comes next. See [ROADMAP.md](ROADMAP.md).
 
 ## Repo branches
 
@@ -79,7 +79,7 @@ Rust crates live in `crates/`. JavaScript packages live in `packages/`. The firs
 
 ## License
 
-MIT. Dependencies are limited to MIT, Apache-2.0, BSD, or zlib. Roboto Regular is bundled under Apache-2.0 (`crates/tekto-text/fonts/`).
+MIT. New direct dependencies stay MIT, Apache-2.0, BSD, or zlib. Roboto Regular is bundled under Apache-2.0 (`crates/tekto-text/fonts/`). The text stack already brings Unicode License v3 transitives (ICU crates such as `icu_segmenter` and `zerovec`, plus `unicode-ident`). That license is permissive, not GPL or LGPL. On Windows, `arboard` also links Boost Software License 1.0 crates (`clipboard-win`, `error-code`). See the web-build and add-native-feature skills.
 
 ## Docs
 

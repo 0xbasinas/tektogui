@@ -13,6 +13,7 @@ members = [
     "crates/tekto-widgets",
     "crates/tekto",
     "crates/tekto-cli",
+    "crates/tekto-wasm",
     "examples/notes",
     "examples/notes-android",
 ]
@@ -37,6 +38,7 @@ tekto-js = { path = "crates/tekto-js", version = "0.1.0" }
 tekto-native = { path = "crates/tekto-native", version = "0.1.0" }
 tekto-widgets = { path = "crates/tekto-widgets", version = "0.1.0" }
 tekto = { path = "crates/tekto", version = "0.1.0" }
+tekto-wasm = { path = "crates/tekto-wasm", version = "0.1.0" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
