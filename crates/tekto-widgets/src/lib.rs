@@ -57,6 +57,8 @@ pub fn window(
             gap: STACK_GAP,
             column: true,
             justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
         };
     }
     Ok(id)
@@ -84,6 +86,8 @@ pub fn banner(
             gap: 0.0,
             column: true,
             justify_center: true,
+            x: f32::NAN,
+            y: f32::NAN,
         };
     }
     Ok(id)
@@ -167,6 +171,8 @@ pub fn scroll(
             gap: 0.0,
             column: true,
             justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
         };
     }
     Ok(id)
@@ -227,6 +233,8 @@ pub fn list(
             gap: LIST_GAP,
             column: true,
             justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
         };
     }
     for row in rows {
@@ -272,6 +280,8 @@ pub fn list_item(
             gap: 0.0,
             column: true,
             justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
         };
     }
     ensure_list_scroll(tree, list)?;

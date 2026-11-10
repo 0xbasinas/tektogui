@@ -4,7 +4,11 @@
 //! agent MCP, and live patches pointed at the same node after a rebuild
 //! of only part of the tree.
 
+mod animate;
 mod recording;
+pub use animate::{
+    ease_smoothstep, reduced_motion_requested, StyleTransition, DEFAULT_TRANSITION_MS,
+};
 pub use recording::{Action, RecordedKey, Recording};
 
 use serde::{Deserialize, Serialize};
@@ -171,6 +175,13 @@ pub struct LayoutStyle {
     /// If true, pack children on the main axis (vertical when `column`).
     #[serde(default)]
     pub justify_center: bool,
+    /// When finite, layout keeps this x after a position transition.
+    /// `NaN` means the flex position.
+    #[serde(default = "nan_f32", skip_serializing_if = "is_nan_f32")]
+    pub x: f32,
+    /// When finite, layout keeps this y after a position transition.
+    #[serde(default = "nan_f32", skip_serializing_if = "is_nan_f32")]
+    pub y: f32,
 }
 
 impl Default for LayoutStyle {
@@ -182,6 +193,8 @@ impl Default for LayoutStyle {
             gap: 0.0,
             column: true,
             justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
         }
     }
 }
@@ -246,6 +259,13 @@ pub struct Node {
     /// reads it when deciding whether to insert a scroll parent.
     #[serde(default = "nan_f32", skip_serializing_if = "is_nan_f32")]
     pub list_viewport: f32,
+    /// Paint multiplier for this node and its children. 1 is solid, 0 is hidden.
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+}
+
+fn default_opacity() -> f32 {
+    1.0
 }
 
 fn nan_f32() -> f32 {
@@ -277,6 +297,7 @@ impl Node {
             scroll_y: 0.0,
             scroll_extent: 0.0,
             list_viewport: f32::NAN,
+            opacity: 1.0,
         }
     }
 
@@ -403,6 +424,10 @@ pub struct Tree {
     pub focus: Option<NodeId>,
     /// Last node that was clicked, if any.
     pub last_click: Option<NodeId>,
+    pub(crate) transitions: Vec<animate::ActiveTransition>,
+    /// Milliseconds last passed to [`Tree::advance`].
+    pub(crate) time_ms: f64,
+    pub(crate) reduced_motion: bool,
 }
 
 impl Default for Tree {
@@ -419,6 +444,9 @@ impl Tree {
             nodes: HashMap::new(),
             focus: None,
             last_click: None,
+            transitions: Vec::new(),
+            time_ms: 0.0,
+            reduced_motion: false,
         }
     }
 
@@ -526,6 +554,7 @@ impl Tree {
             if self.last_click == Some(cur) {
                 self.last_click = None;
             }
+            self.drop_transitions(cur);
         }
         Ok(())
     }

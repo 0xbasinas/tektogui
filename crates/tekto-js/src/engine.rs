@@ -1,6 +1,9 @@
 //! QuickJS-ng engine (rquickjs). Only compiled with `--features quickjs`.
 
-use rquickjs::{function::Func, Context, Ctx, Object, Runtime};
+use rquickjs::{
+    function::{Func, Opt},
+    Context, Ctx, Object, Runtime, Value,
+};
 use std::cell::RefCell;
 
 use crate::{Host, HostOp, JsError};
@@ -54,6 +57,7 @@ pub fn eval_script(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
             tekto.set("setProp", Func::from(js_set_prop))?;
             tekto.set("append", Func::from(js_append))?;
             tekto.set("remove", Func::from(js_remove))?;
+            tekto.set("transition", Func::from(js_transition))?;
             ctx.globals().set("tekto", tekto)?;
             ctx.eval::<(), _>(source)?;
             Ok(())
@@ -113,6 +117,146 @@ fn js_append(ctx: Ctx<'_>, parent: u64, child: u64) -> rquickjs::Result<()> {
         Ok(()) => Ok(()),
         Err(err) => throw(&ctx, err),
     }
+}
+
+/// `tekto.transition(id, key, value, durationMs)` or
+/// `tekto.transition(id, { opacity, x, y, width, height, durationMs })`.
+///
+/// Each call merges onto the node. A later call does not cancel other props.
+/// Pass `0` for `durationMs` to snap. The window loop advances time.
+fn js_transition<'js>(
+    ctx: Ctx<'js>,
+    id: u64,
+    spec_or_key: Value<'js>,
+    value: Opt<Value<'js>>,
+    duration_ms: Opt<u32>,
+) -> rquickjs::Result<()> {
+    let (opacity, x, y, width, height, duration) = if spec_or_key.is_object() {
+        let Some(obj) = spec_or_key.as_object() else {
+            return throw(
+                &ctx,
+                JsError::Message("transition spec must be an object".into()),
+            );
+        };
+        (
+            read_prop(&ctx, obj, "opacity")?,
+            read_prop(&ctx, obj, "x")?,
+            read_prop(&ctx, obj, "y")?,
+            read_prop(&ctx, obj, "width")?,
+            read_prop(&ctx, obj, "height")?,
+            read_duration(&ctx, obj)?.or(Some(DEFAULT_JS_DURATION_MS)),
+        )
+    } else {
+        let Some(text) = spec_or_key.as_string() else {
+            return throw(
+                &ctx,
+                JsError::Message("transition key must be a string or a props object".into()),
+            );
+        };
+        let key = match text.to_string() {
+            Ok(key) => key,
+            Err(err) => {
+                return throw(&ctx, JsError::Message(err.to_string()));
+            }
+        };
+        let raw = match value.0 {
+            Some(value) => value_to_string(&ctx, &value)?,
+            None => {
+                return throw(&ctx, JsError::Message("transition needs a value".into()));
+            }
+        };
+        let mut opacity = None;
+        let mut x = None;
+        let mut y = None;
+        let mut width = None;
+        let mut height = None;
+        match key.as_str() {
+            "opacity" => opacity = Some(raw),
+            "x" => x = Some(raw),
+            "y" => y = Some(raw),
+            "width" => width = Some(raw),
+            "height" => height = Some(raw),
+            other => {
+                return throw(
+                    &ctx,
+                    JsError::Message(format!(
+                        "transition key must be opacity, x, y, width, or height, got `{other}`"
+                    )),
+                );
+            }
+        }
+        let duration = duration_ms.0.or(Some(DEFAULT_JS_DURATION_MS));
+        (opacity, x, y, width, height, duration)
+    };
+    match with_host(|host| {
+        host.apply(&[HostOp::Transition {
+            id,
+            opacity,
+            x,
+            y,
+            width,
+            height,
+            duration_ms: duration,
+        }])?;
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(err) => throw(&ctx, err),
+    }
+}
+
+const DEFAULT_JS_DURATION_MS: u32 = 180;
+
+fn read_prop<'js>(
+    ctx: &Ctx<'js>,
+    obj: &Object<'js>,
+    key: &str,
+) -> rquickjs::Result<Option<String>> {
+    if !obj.contains_key(key)? {
+        return Ok(None);
+    }
+    let value: Value = obj.get(key)?;
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
+    }
+    Ok(Some(value_to_string(ctx, &value)?))
+}
+
+fn read_duration<'js>(ctx: &Ctx<'js>, obj: &Object<'js>) -> rquickjs::Result<Option<u32>> {
+    let key = if obj.contains_key("durationMs")? {
+        "durationMs"
+    } else if obj.contains_key("duration_ms")? {
+        "duration_ms"
+    } else {
+        return Ok(None);
+    };
+    let value: Value = obj.get(key)?;
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
+    }
+    let Some(n) = value.as_number() else {
+        return throw(ctx, JsError::Message(format!("{key} must be a number")));
+    };
+    if !n.is_finite() || n < 0.0 {
+        return throw(ctx, JsError::Message(format!("{key} must be a number")));
+    }
+    Ok(Some(n as u32))
+}
+
+fn value_to_string<'js>(ctx: &Ctx<'js>, value: &Value<'js>) -> rquickjs::Result<String> {
+    if let Some(n) = value.as_number() {
+        return Ok(n.to_string());
+    }
+    if let Some(text) = value.as_string() {
+        return match text.to_string() {
+            Ok(text) => Ok(text),
+            Err(err) => throw(ctx, JsError::Message(err.to_string())),
+        };
+    }
+    throw(
+        ctx,
+        JsError::Message("transition value must be a number".into()),
+    )
 }
 
 fn js_remove(ctx: Ctx<'_>, id: u64) -> rquickjs::Result<()> {

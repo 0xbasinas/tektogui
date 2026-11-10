@@ -13,6 +13,7 @@ use softbuffer::{Context, Surface};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tekto_layout::layout_tree;
 use tekto_mcp::{AppHandle, SharedTreeHandle};
 use tekto_render::{paint_tree, CpuRenderer, Renderer};
@@ -55,6 +56,8 @@ struct State {
     last_ime_commit: Option<String>,
     handle: Option<Arc<SharedTreeHandle>>,
     viewport: Arc<Mutex<Viewport>>,
+    /// Origin for [`Tree::advance`]. Zero at the first frame of this surface.
+    anim_origin: Instant,
     #[cfg(feature = "a11y-os")]
     adapter: accesskit_winit::Adapter,
 }
@@ -123,6 +126,7 @@ impl ApplicationHandler<AppEvent> for App {
             last_ime_commit: None,
             handle: self.handle.clone(),
             viewport: Arc::clone(&self.viewport),
+            anim_origin: Instant::now(),
             #[cfg(feature = "a11y-os")]
             adapter,
         });
@@ -135,6 +139,29 @@ impl ApplicationHandler<AppEvent> for App {
         // Drop the softbuffer surface, then the window. On Android the
         // ANativeWindow is invalid after Suspended; presenting into it crashes.
         self.release_surface();
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // The commit echo, when the OS sends one, is already in this burst.
+        // A key after the queue goes idle is the user's next keystroke.
+        if let Some(state) = self.state.as_mut() {
+            crate::expire_ime_echo(&mut state.last_ime_commit);
+        }
+        let running = self
+            .state
+            .as_ref()
+            .and_then(|state| state.tree.lock().ok())
+            .is_some_and(|tree| tree.animations_running());
+        if running {
+            if let Some(state) = self.state.as_mut() {
+                state.window.request_redraw();
+            }
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(16),
+            ));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: AppEvent) {
@@ -224,14 +251,6 @@ impl ApplicationHandler<AppEvent> for App {
             _ => {}
         }
     }
-
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        // The commit echo, when the OS sends one, is already in this burst.
-        // A key after the queue goes idle is the user's next keystroke.
-        if let Some(state) = self.state.as_mut() {
-            crate::expire_ime_echo(&mut state.last_ime_commit);
-        }
-    }
 }
 
 fn publish_accesskit(
@@ -272,6 +291,8 @@ fn relayout_window(state: &mut State) {
     }
     if let Ok(mut tree) = state.tree.lock() {
         layout_tree(&mut tree, lw, lh);
+        let now_ms = state.anim_origin.elapsed().as_secs_f64() * 1000.0;
+        tree.advance(now_ms);
     }
 }
 
@@ -622,6 +643,9 @@ fn run_event_loop(
     existing_session: Option<crate::DevSession>,
 ) -> Result<(), PlatformError> {
     let mut prepared = runtime.clone();
+    if tekto_tree::reduced_motion_requested() {
+        prepared.tree.set_reduced_motion(true);
+    }
     prepared.layout(opts.width as f32, opts.height as f32);
     let mut builder = EventLoop::<AppEvent>::with_user_event();
     #[cfg(target_os = "android")]

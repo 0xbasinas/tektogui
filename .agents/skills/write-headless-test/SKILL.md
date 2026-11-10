@@ -56,6 +56,10 @@ npm test
 
 Do not start a display or an emulator for these tests.
 
+## Motion
+
+`Tree::transition` then `Tree::advance(ms)` moves opacity and bounds. A channel starts on the first `advance` after the call, so advance a stale clock before `transition` if you are testing an idle gap. Later calls merge props; they do not cancel other channels. Assert a midpoint and the end. After the end, run `layout_tree` again and assert the target bounds still hold (`LayoutStyle` keeps finished x, y, width, and height). Paint with `render_tree_png` if you need pixels. A short loop of frames is enough to note CPU cost; the renderer repaints the whole scene each time. Set `TEKTO_REDUCE_MOTION=1` only when the test should snap. Do not read OS animation settings in the test. AccessKit and the OS reduce-motion settings are still a follow-up.
+
 ## Record and replay
 
 `tekto::Recording` is a version 1 JSON log of tree actions: `patch`, `click`, `type`, `key`, and `pointer_click`. Call `record(&mut tree, action)` to apply an action and append it. Save the log with `serde_json`. Call `replay(&mut tree, layout)` on a tree that was built and laid out the same way. The layout callback runs after each action so pointer hits see current bounds.
