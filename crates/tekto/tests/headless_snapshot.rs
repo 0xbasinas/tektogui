@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use tekto::{
     accesskit_dump, accesskit_tree_update, layout_tree, notes_tree, render_headless_to_file,
-    BANNER_PADDING, STACK_GAP,
+    BANNER_PADDING, PAGE_PADDING, STACK_GAP,
 };
 
 fn shot_dir() -> PathBuf {
@@ -124,4 +124,79 @@ fn notes_headless_snapshot() {
     assert!(path.is_file(), "missing {}", path.display());
     assert!(png.len() > 400, "png too small: {}", png.len());
     compare_png(&png, &reference_png());
+}
+
+fn reference_phone_png() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots/notes-phone-headless.png")
+}
+
+/// Phone-sized viewport (the logical size we saw on AVD beddcode30).
+/// The banner used to keep a 592px width from the 640px construction size
+/// and overflow a 393px window.
+#[test]
+fn notes_phone_size_stays_inside_the_window() {
+    const W: u32 = 393;
+    const H: u32 = 807;
+    // Build at the desktop default, then relayout at phone size — this is
+    // the Android path (tree is created at 640x400, then the window resizes).
+    let mut tree = notes_tree(640.0, 400.0).expect("notes tree");
+    layout_tree(&mut tree, W as f32, H as f32);
+
+    let root = tree.root().expect("root");
+    let banner = tree
+        .ids()
+        .find(|id| tree.get(*id).and_then(|n| n.name.as_deref()) == Some("banner"))
+        .expect("banner");
+    let title = tree
+        .ids()
+        .find(|id| {
+            tree.get(*id)
+                .map(|n| n.text.as_deref() == Some("Notes") && n.parent == Some(banner))
+                .unwrap_or(false)
+        })
+        .expect("title");
+    let body = tree
+        .ids()
+        .find(|id| tree.get(*id).and_then(|n| n.text.as_deref()) == Some("Hello from Tekto"))
+        .expect("body text");
+
+    let window_b = tree.get(root).unwrap().bounds;
+    let banner_b = tree.get(banner).unwrap().bounds;
+    let title_b = tree.get(title).unwrap().bounds;
+    let body_b = tree.get(body).unwrap().bounds;
+
+    assert_eq!(window_b.width, W as f32);
+    assert_eq!(window_b.height, H as f32);
+    for (name, b) in [("banner", banner_b), ("title", title_b), ("body", body_b)] {
+        assert!(
+            b.x >= -0.5 && b.x + b.width <= window_b.width + 0.5,
+            "{name} overflowed horizontally: {b:?}"
+        );
+        assert!(
+            b.y >= -0.5 && b.y + b.height <= window_b.height + 0.5,
+            "{name} overflowed vertically: {b:?}"
+        );
+    }
+    let expected_banner_w = (W as f32 - PAGE_PADDING * 2.0).max(0.0);
+    assert!(
+        (banner_b.width - expected_banner_w).abs() < 0.5,
+        "banner should fill the content box ({expected_banner_w}), got {}",
+        banner_b.width
+    );
+    assert!(
+        title_b.x + 0.5 >= banner_b.x + BANNER_PADDING,
+        "title should stay inset: title.x={} banner.x={}",
+        title_b.x,
+        banner_b.x
+    );
+
+    let pretty = tree.to_pretty_text();
+    assert!(pretty.contains("Hello from Tekto"), "{pretty}");
+
+    let dir = shot_dir();
+    std::fs::create_dir_all(&dir).expect("shot dir");
+    let path = dir.join("notes-phone-headless.png");
+    let png = render_headless_to_file(&tree, W, H, Some(&path)).expect("render");
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    compare_png(&png, &reference_phone_png());
 }
