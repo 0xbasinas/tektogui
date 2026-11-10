@@ -3,7 +3,10 @@
 //! TypeScript / JSX is also first-class, through `tekto-js` and the
 //! `@tektogui/*` packages. Both talk to the same scene tree.
 
-pub use tekto_a11y::tree_update as accesskit_tree_update;
+pub use tekto_a11y::{
+    dump as accesskit_dump, tree_update as accesskit_tree_update, tree_update_with_focus,
+    AccessKitDump,
+};
 pub use tekto_layout::layout_tree;
 pub use tekto_mcp::{
     endpoint_path, read_endpoint, run_stdio_mcp, start_dev_server, AppHandle, DevEndpoint,

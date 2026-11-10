@@ -21,6 +21,8 @@ cargo run -p notes
 cargo run -p tekto-cli -- dev --headless --out /tmp/notes-headless.png
 ```
 
+To also publish the AccessKit tree to the OS (screen readers), run with `--features a11y-os` (off by default so builds stay fast), for example `cargo run -p notes --features tekto/a11y-os`.
+
 The process prints a URL like `Tekto dev server at http://127.0.0.1:PORT`. The endpoint file is `$TEKTO_DEV_FILE`, or `$XDG_RUNTIME_DIR/tekto-dev.json`, or `$TMPDIR/tekto-dev.json` (often `/tmp/tekto-dev.json`).
 
 ## CLI (needs a running dev server, except screenshot)
@@ -40,12 +42,12 @@ cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0"
 
 ## HTTP and MCP
 
-- `GET /tree`, `GET /tree.txt`, `GET /screenshot`, `GET /state`, `GET /logs`
+- `GET /tree`, `GET /tree.txt`, `GET /accesskit`, `GET /screenshot`, `GET /state`, `GET /logs`
 - `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb"}`
 - `POST /click` `{"id":1}`
 - `POST /type` `{"id":4,"text":"typed"}`
 
-Stdio MCP (`cargo run -p tekto-cli -- mcp`) proxies those to the dev server. Tools: `ui.tree`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`.
+Stdio MCP (`cargo run -p tekto-cli -- mcp`) proxies those to the dev server. Tools: `ui.tree`, `ui.accesskit`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`.
 
 Live patches change the running tree only. Writing the change back to source is not implemented yet (issue on Month 2). Hot reload of TS is also not implemented yet; use patch plus a restart for Rust edits.
 

@@ -1,20 +1,70 @@
 //! Map the Tekto scene tree to an AccessKit tree.
 //!
-//! This is the same tree agents get from MCP `ui.tree`. Screen readers
-//! and coding agents share one source of truth.
+//! This is the same tree agents get from MCP `ui.tree` and `GET /accesskit`.
+//! Screen readers and coding agents share one source of truth.
 
 use accesskit::{Node, NodeId, Rect, Role, Tree, TreeUpdate};
+use serde::Serialize;
 use tekto_tree::{NodeKind, Tree as SceneTree};
 
 /// Build a full AccessKit tree update from the current scene.
+///
+/// Focus is `scene.focus` if that node still exists, otherwise the root.
 pub fn tree_update(scene: &SceneTree) -> Option<TreeUpdate> {
+    tree_update_with_focus(scene, scene.focus)
+}
+
+/// Like [`tree_update`], but the caller can override focus.
+pub fn tree_update_with_focus(
+    scene: &SceneTree,
+    focus: Option<tekto_tree::NodeId>,
+) -> Option<TreeUpdate> {
     let root = scene.root()?;
+    let focus_id = focus.filter(|id| scene.get(*id).is_some()).unwrap_or(root);
     let mut nodes = Vec::new();
     collect(scene, root, &mut nodes);
     Some(TreeUpdate {
         nodes,
         tree: Some(Tree::new(ak_id(root))),
-        focus: ak_id(root),
+        focus: ak_id(focus_id),
+    })
+}
+
+/// A JSON-friendly dump of the AccessKit tree (same ids as the scene tree).
+#[derive(Clone, Debug, Serialize)]
+pub struct AccessKitDump {
+    pub focus: u64,
+    pub nodes: Vec<AccessKitNodeDump>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AccessKitNodeDump {
+    pub id: u64,
+    pub role: String,
+    pub label: Option<String>,
+    pub value: Option<String>,
+    pub bounds: [f64; 4],
+    pub children: Vec<u64>,
+}
+
+/// Dump the AccessKit tree for the dev server and for tests.
+pub fn dump(scene: &SceneTree) -> Option<AccessKitDump> {
+    let update = tree_update(scene)?;
+    let nodes = update
+        .nodes
+        .iter()
+        .map(|(id, node)| AccessKitNodeDump {
+            id: id.0,
+            role: format!("{:?}", node.role()),
+            label: node.label().map(|s| s.to_string()),
+            value: node.value().map(|s| s.to_string()),
+            bounds: node.bounds().map_or([0.0; 4], |r| [r.x0, r.y0, r.x1, r.y1]),
+            children: node.children().iter().map(|c| c.0).collect(),
+        })
+        .collect();
+    Some(AccessKitDump {
+        focus: update.focus.0,
+        nodes,
     })
 }
 
@@ -75,9 +125,32 @@ mod tests {
         scene.get_mut(t).unwrap().text = Some("Hello from Tekto".into());
         let update = tree_update(&scene).expect("update");
         assert_eq!(update.nodes.len(), 2);
+        assert_eq!(update.focus, ak_id(w));
         assert!(update
             .nodes
             .iter()
             .any(|(_, n)| { n.label().map(|l| l.contains("Notes")).unwrap_or(false) }));
+    }
+
+    #[test]
+    fn focus_follows_set_focus_and_dump_uses_same_ids() {
+        let mut scene = SceneTree::new();
+        let w = scene.add(K::Window, None).unwrap();
+        let t = scene.add(K::Text, Some(w)).unwrap();
+        scene.get_mut(t).unwrap().text = Some("Hello".into());
+        scene.get_mut(t).unwrap().bounds = tekto_tree::Rect::new(10.0, 20.0, 80.0, 24.0);
+        scene.set_focus(t).unwrap();
+        let update = tree_update(&scene).expect("update");
+        assert_eq!(update.focus, ak_id(t));
+        let dump = dump(&scene).expect("dump");
+        assert_eq!(dump.focus, t.raw());
+        let text = dump.nodes.iter().find(|n| n.id == t.raw()).expect("text");
+        assert_eq!(text.role, "Label");
+        assert_eq!(text.value.as_deref(), Some("Hello"));
+        assert_eq!(text.bounds, [10.0, 20.0, 90.0, 44.0]);
+        assert!(dump
+            .nodes
+            .iter()
+            .any(|n| n.id == w.raw() && n.role == "Window"));
     }
 }

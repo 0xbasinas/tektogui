@@ -236,6 +236,8 @@ pub struct Tree {
     next_id: u64,
     root: Option<NodeId>,
     nodes: HashMap<NodeId, Node>,
+    /// Keyboard / AccessKit focus. Defaults to the root once it exists.
+    pub focus: Option<NodeId>,
 }
 
 impl Default for Tree {
@@ -250,6 +252,7 @@ impl Tree {
             next_id: 1,
             root: None,
             nodes: HashMap::new(),
+            focus: None,
         }
     }
 
@@ -294,9 +297,23 @@ impl Tree {
             });
         } else {
             self.root = Some(id);
+            if self.focus.is_none() {
+                self.focus = Some(id);
+            }
         }
         self.nodes.insert(id, node);
         Ok(id)
+    }
+
+    /// Set AccessKit / keyboard focus. The id must already be in the tree.
+    pub fn set_focus(&mut self, id: NodeId) -> Result<(), TreeError> {
+        if !self.nodes.contains_key(&id) {
+            return Err(TreeError {
+                message: format!("unknown node {id}"),
+            });
+        }
+        self.focus = Some(id);
+        Ok(())
     }
 
     pub fn patch(&mut self, id: NodeId, patch: NodePatch) -> Result<(), TreeError> {

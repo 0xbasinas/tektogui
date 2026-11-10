@@ -1,4 +1,9 @@
 //! winit + softbuffer window that presents the CPU-rendered framebuffer.
+//!
+//! After every layout the AccessKit tree is rebuilt (same stable ids as
+//! the scene tree). The optional `a11y-os` feature publishes that tree to
+//! the OS. Live patches wake the event loop so the window and AccessKit
+//! stay in sync.
 
 use crate::{rgba_to_u32_softbuffer, AppRuntime, PlatformError, WindowOptions};
 use softbuffer::{Context, Surface};
@@ -13,12 +18,20 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
+/// Wakes the window when the dev server patches the tree.
+#[derive(Clone, Copy, Debug)]
+enum AppEvent {
+    TreeChanged,
+}
+
 struct State {
     window: Rc<Window>,
     surface: Surface<Rc<Window>, Rc<Window>>,
     renderer: CpuRenderer,
     tree: Arc<Mutex<Tree>>,
     clear: tekto_tree::Color,
+    #[cfg(feature = "a11y-os")]
+    adapter: accesskit_winit::Adapter,
 }
 
 struct App {
@@ -28,7 +41,7 @@ struct App {
     state: Option<State>,
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
@@ -38,8 +51,24 @@ impl ApplicationHandler for App {
             .with_inner_size(winit::dpi::LogicalSize::new(
                 self.opts.width,
                 self.opts.height,
-            ));
-        let window = Rc::new(event_loop.create_window(attrs).expect("window"));
+            ))
+            .with_visible(false);
+        let window = event_loop.create_window(attrs).expect("window");
+        #[cfg(feature = "a11y-os")]
+        let adapter = {
+            let tree = Arc::clone(&self.tree);
+            accesskit_winit::Adapter::with_direct_handlers(
+                event_loop,
+                &window,
+                LiveActivation {
+                    tree: Arc::clone(&tree),
+                },
+                LiveActions,
+                LiveDeactivate,
+            )
+        };
+        window.set_visible(true);
+        let window = Rc::new(window);
         let context = Context::new(window.clone()).expect("softbuffer context");
         let surface = Surface::new(&context, window.clone()).expect("softbuffer surface");
         let size = window.inner_size();
@@ -51,13 +80,25 @@ impl ApplicationHandler for App {
             renderer,
             tree: Arc::clone(&self.tree),
             clear: self.runtime.clear,
+            #[cfg(feature = "a11y-os")]
+            adapter,
         });
         if let Some(state) = self.state.as_mut() {
             redraw(state);
         }
     }
 
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: AppEvent) {
+        if let Some(state) = self.state.as_mut() {
+            state.window.request_redraw();
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        #[cfg(feature = "a11y-os")]
+        if let Some(state) = self.state.as_mut() {
+            state.adapter.process_event(&state.window, &event);
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => {
@@ -81,6 +122,21 @@ impl ApplicationHandler for App {
     }
 }
 
+fn publish_accesskit(
+    tree: &Tree,
+    #[cfg(feature = "a11y-os")] adapter: &mut accesskit_winit::Adapter,
+) {
+    let _ = tree;
+    #[cfg(feature = "a11y-os")]
+    adapter.update_if_active(|| {
+        tekto_a11y::tree_update(tree).unwrap_or_else(|| accesskit::TreeUpdate {
+            nodes: Vec::new(),
+            tree: None,
+            focus: accesskit::NodeId(0),
+        })
+    });
+}
+
 fn redraw(state: &mut State) {
     let size = state.window.inner_size();
     let w = size.width.max(1);
@@ -89,6 +145,11 @@ fn redraw(state: &mut State) {
     if let Ok(mut tree) = state.tree.lock() {
         layout_tree(&mut tree, w as f32, h as f32);
         paint_tree(&mut state.renderer, &tree, state.clear);
+        publish_accesskit(
+            &tree,
+            #[cfg(feature = "a11y-os")]
+            &mut state.adapter,
+        );
     }
     let Ok(rgba) = state.renderer.rgba8() else {
         return;
@@ -109,18 +170,55 @@ fn redraw(state: &mut State) {
     }
 }
 
+#[cfg(feature = "a11y-os")]
+struct LiveActivation {
+    tree: Arc<Mutex<Tree>>,
+}
+
+#[cfg(feature = "a11y-os")]
+impl accesskit::ActivationHandler for LiveActivation {
+    fn request_initial_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+        let tree = self.tree.lock().ok()?;
+        tekto_a11y::tree_update(&tree)
+    }
+}
+
+#[cfg(feature = "a11y-os")]
+struct LiveActions;
+
+#[cfg(feature = "a11y-os")]
+impl accesskit::ActionHandler for LiveActions {
+    fn do_action(&mut self, _request: accesskit::ActionRequest) {}
+}
+
+#[cfg(feature = "a11y-os")]
+struct LiveDeactivate;
+
+#[cfg(feature = "a11y-os")]
+impl accesskit::DeactivationHandler for LiveDeactivate {
+    fn deactivate_accessibility(&mut self) {}
+}
+
 pub fn run_windowed(runtime: AppRuntime, opts: WindowOptions) -> Result<(), PlatformError> {
     let mut prepared = runtime.clone();
     prepared.layout(opts.width as f32, opts.height as f32);
+    let event_loop = EventLoop::<AppEvent>::with_user_event()
+        .build()
+        .map_err(|e| PlatformError::msg(e.to_string()))?;
     let tree = if opts.dev_server {
+        let proxy = event_loop.create_proxy();
         let (handle, ep) = crate::start_handle(&prepared, opts.width, opts.height)?;
+        if let Ok(mut slot) = handle.on_change.lock() {
+            *slot = Some(Arc::new(move || {
+                let _ = proxy.send_event(AppEvent::TreeChanged);
+            }));
+        }
         eprintln!("Tekto dev server at {}", ep.base_url());
         eprintln!("Try: tekto tree    or    tekto screenshot");
         Arc::clone(&handle.tree)
     } else {
         Arc::new(Mutex::new(prepared.tree.clone()))
     };
-    let event_loop = EventLoop::new().map_err(|e| PlatformError::msg(e.to_string()))?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = App {
         opts,

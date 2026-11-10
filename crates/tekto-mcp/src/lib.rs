@@ -58,10 +58,25 @@ pub trait AppHandle: Send + Sync {
 pub type RenderFn = Arc<dyn Fn(&Tree) -> Result<Vec<u8>, McpError> + Send + Sync>;
 
 /// A simple handle over a mutex-protected tree plus a render callback.
+pub type OnChangeFn = Arc<dyn Fn() + Send + Sync>;
+
 pub struct SharedTreeHandle {
     pub tree: Arc<Mutex<Tree>>,
     pub render: RenderFn,
     pub logs: Arc<Mutex<Vec<String>>>,
+    /// Called after a live patch (and later, clicks) so a window can redraw
+    /// and refresh AccessKit.
+    pub on_change: Mutex<Option<OnChangeFn>>,
+}
+
+impl SharedTreeHandle {
+    fn notify_change(&self) {
+        if let Ok(cb) = self.on_change.lock() {
+            if let Some(f) = cb.as_ref() {
+                f();
+            }
+        }
+    }
 }
 
 impl AppHandle for SharedTreeHandle {
@@ -77,7 +92,10 @@ impl AppHandle for SharedTreeHandle {
     fn patch(&self, id: NodeId, patch: NodePatch) -> Result<(), McpError> {
         let mut tree = self.tree.lock().expect("tree lock");
         tree.patch(id, patch)
-            .map_err(|e| McpError::msg(e.to_string()))
+            .map_err(|e| McpError::msg(e.to_string()))?;
+        drop(tree);
+        self.notify_change();
+        Ok(())
     }
 
     fn logs(&self) -> Vec<String> {
@@ -208,6 +226,11 @@ fn dispatch(
         ("GET", "/screenshot") => {
             let png = handle.screenshot_png()?;
             Ok(("200 OK", "image/png", png))
+        }
+        ("GET", "/accesskit") => {
+            let tree = handle.tree();
+            let dump = tekto_a11y::dump(&tree).ok_or_else(|| McpError::msg("empty tree"))?;
+            ok_json(serde_json::to_value(dump)?)
         }
         ("GET", "/state") => ok_json(handle.state_json()),
         ("GET", "/logs") => ok_json(json!({ "logs": handle.logs() })),
@@ -362,6 +385,7 @@ pub fn run_stdio_mcp() -> Result<(), McpError> {
 fn tool_list() -> Value {
     json!([
         {"name": "ui.tree", "description": "Dump the AccessKit / scene tree with stable node ids.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "ui.accesskit", "description": "Dump the AccessKit tree (roles, labels, bounds, focus) with the same stable ids.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.screenshot", "description": "Take a PNG screenshot using the CPU renderer.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.click", "description": "Click a node by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}}, "required": ["id"]}},
         {"name": "ui.type", "description": "Type text into a node by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
@@ -379,6 +403,11 @@ fn call_tool(params: &Value) -> Result<Value, McpError> {
     match name {
         "ui.tree" => {
             let (_, body) = http_get(&format!("{base}/tree"))?;
+            let text = String::from_utf8_lossy(&body).into_owned();
+            Ok(json!({"content": [{"type": "text", "text": text}]}))
+        }
+        "ui.accesskit" => {
+            let (_, body) = http_get(&format!("{base}/accesskit"))?;
             let text = String::from_utf8_lossy(&body).into_owned();
             Ok(json!({"content": [{"type": "text", "text": text}]}))
         }

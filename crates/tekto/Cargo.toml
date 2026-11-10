@@ -13,6 +13,7 @@ default = ["cpu", "desktop"]
 cpu = ["tekto-render/cpu", "tekto-platform/cpu"]
 desktop = ["tekto-platform/desktop", "cpu"]
 gpu = ["tekto-render/gpu"]
+a11y-os = ["tekto-platform/a11y-os"]
 js = ["dep:tekto-js"]
 
 [dependencies]
