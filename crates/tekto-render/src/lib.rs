@@ -60,15 +60,20 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
     }
     if let Some(text) = &node.text {
         let color = node.color.unwrap_or(Color::INK);
+        let inset = if matches!(node.kind, tekto_tree::NodeKind::Button) {
+            node.layout.padding
+        } else {
+            0.0
+        };
         let max_w = if node.bounds.width > 0.0 {
-            Some(node.bounds.width)
+            Some((node.bounds.width - 2.0 * inset).max(0.0))
         } else {
             None
         };
         renderer.draw_text(
             text,
-            node.bounds.x,
-            node.bounds.y,
+            node.bounds.x + inset,
+            node.bounds.y + inset,
             node.font_size,
             color,
             max_w,

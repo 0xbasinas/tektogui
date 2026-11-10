@@ -66,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-You can also build a tree yourself with `tekto::window`, `tekto::banner`, and `tekto::text`.
+You can also build a tree yourself with `tekto::window`, `tekto::banner`, `tekto::text`, and `tekto::button`. `button(&mut tree, parent, "Save")` returns the button node id for clicks and accessibility. JSX also accepts `<button>Save</button>`; set its style properties explicitly.
 
 ## TypeScript
 
