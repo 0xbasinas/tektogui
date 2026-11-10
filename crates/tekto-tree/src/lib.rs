@@ -6,6 +6,7 @@
 
 mod animate;
 mod recording;
+mod scroll_feel;
 mod store;
 pub use animate::{
     ease_smoothstep, reduced_motion_requested, StyleTransition, DEFAULT_TRANSITION_MS,
@@ -505,6 +506,8 @@ pub struct Tree {
     /// Milliseconds last passed to [`Tree::advance`].
     pub(crate) time_ms: f64,
     pub(crate) reduced_motion: bool,
+    pub(crate) gesture: Option<scroll_feel::Gesture>,
+    pub(crate) flings: Vec<scroll_feel::Fling>,
 }
 
 impl Default for Tree {
@@ -524,6 +527,8 @@ impl Tree {
             transitions: Vec::new(),
             time_ms: 0.0,
             reduced_motion: false,
+            gesture: None,
+            flings: Vec::new(),
         }
     }
 
@@ -681,6 +686,7 @@ impl Tree {
                 self.last_click = None;
             }
             self.drop_transitions(*cur);
+            self.drop_scroll_motion(*cur);
         }
         for node in self.nodes.values_mut() {
             node.children.retain(|child| !queued.contains(child));
@@ -934,6 +940,7 @@ impl Tree {
     /// Set the vertical offset of a scroll container. Clamped to the content
     /// from the last layout. There is no overscroll.
     pub fn set_scroll_y(&mut self, id: NodeId, y: f32) -> Result<f32, TreeError> {
+        self.stop_fling(id);
         self.write_scroll(id, y, false)
     }
 
@@ -948,6 +955,9 @@ impl Tree {
                 message: format!("unknown node {id}"),
             })?
             .scroll_y;
+        // A wheel or programmatic step owns the offset. A running fling would
+        // add itself on the next tick and fight that step.
+        self.stop_fling(id);
         self.write_scroll(id, current + delta_y, true)
     }
 
