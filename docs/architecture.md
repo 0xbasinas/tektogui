@@ -64,7 +64,7 @@ Apps never call tiny-skia or wgpu directly.
 
 `tekto-mcp` starts a localhost HTTP server and writes `tekto-dev.json` (or `$TEKTO_DEV_FILE`). The `tekto` CLI and the stdio MCP adapter both use that server.
 
-Dev-mode tools (first slice): `ui.tree`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`. Record / replay and write-back to source files are planned.
+Dev-mode tools (first slice): `ui.tree`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`. Unique live patches can write back to source. Tree actions can be recorded and replayed with `tekto::Recording` (see the agent guide); that helper does not capture a live session by itself.
 
 `NodeKind::TextField` is a single-line field. The scene `text` is the value agents read and patch; `name` is the label. AccessKit maps it to `Role::TextInput` on the same id. Desktop key input covers printable characters and Backspace when the field is focused. Full IME is not in this slice: no preedit, marked text, candidate window, or Android soft keyboard (`WindowEvent::Ime` is ignored). That work is Month 3.
 
