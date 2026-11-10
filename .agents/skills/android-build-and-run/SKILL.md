@@ -157,7 +157,7 @@ winit turns `InitWindow` into `ApplicationHandler::resumed` and `TerminateWindow
 
 Chosen path: a native `EditText` overlay, not winit IME. winit's Android `set_ime_allowed` only shows or hides the soft keyboard. It does not emit `WindowEvent::Ime`. android-activity's `NativeActivity` text-input state is a no-op.
 
-`examples/notes-android/java/com/tektogui/ime/FieldOverlay.java` is compiled by cargo-apk2 (`java_sources = "java"`). When a `text_field` is focused, Rust polls `FieldOverlay.text` / `caret` and writes them with `Tree::set_focused_field_value`. AccessKit and MCP read that `text`. An agent `text` patch is pushed back into the `EditText`. The activity uses `adjustResize`.
+`examples/notes-android/java/com/tektogui/ime/FieldOverlay.java` is compiled by cargo-apk2 (`java_sources = "java"`). When a `text_field` is focused, Rust polls `FieldOverlay.text` / `caret` and writes them with `Tree::set_focused_field_value`. AccessKit and MCP read that `text`. An agent `text` patch is pushed back into the `EditText`. The activity uses `adjustResize`. `FieldOverlay.insets` also reads `WindowInsets` (system bars, display cutout, IME) in physical pixels. Each frame converts them by the window scale and calls `layout_with_insets`. Content is padded by the safe area. The bottom edge is the larger of the safe bottom and the IME, so a keyboard that covers the nav bar is not applied twice. If the focused `text_field` is still under that edge, the nearest scroll parent scrolls it into the remaining band (portrait). No rubber-band. Host tests inject logical insets and do not need a device.
 
 Limits: single-line only. The candidate window is the Android IME's. Tekto does not keep a preedit on this path. The overlay string is the committed value. If the class is missing, the app falls back to key events. A live type-into-field check needs a free emulator or device. Do not start the emulator next to a heavy build.
 
@@ -165,6 +165,7 @@ Host checks (no emulator):
 
 ```bash
 cargo test -p tekto-platform --lib android_field
+cargo test -p tekto-platform --lib android_insets
 cargo test -p tekto-tree --lib android_overlay_value
 cargo test -p tekto-a11y --lib android_overlay_value
 cargo check -p notes-android --target aarch64-linux-android
