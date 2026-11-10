@@ -1,4 +1,3 @@
-#![cfg_attr(not(target_os = "android"), allow(dead_code))]
 //! Host-testable plan for the Android text-field overlay.
 //!
 //! The device path paints a native `EditText` over the focused field and
