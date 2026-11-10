@@ -66,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-You can also build a tree yourself with `tekto::window`, `tekto::banner`, `tekto::text`, and `tekto::button`. `button(&mut tree, parent, "Save")` returns the button node id for clicks and accessibility. JSX also accepts `<button>Save</button>`; set its style properties explicitly.
+You can also build a tree yourself with `tekto::window`, `tekto::banner`, `tekto::text`, `tekto::button`, and `tekto::text_field`. `button(&mut tree, parent, "Save")` returns the button node id for clicks and accessibility. `text_field(&mut tree, parent, "Title", "Hello")` is a single-line field: `name` is the label, `text` is the value (read and set it with `ui.patch`). JSX also accepts `<button>Save</button>` and `<text_field name="Title">Hello</text_field>`; set style properties explicitly. The field takes printable keys and Backspace on the desktop when it is focused. It is not a full IME (no composition, marked text, or candidate window).
 
 ## TypeScript
 

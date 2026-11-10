@@ -38,14 +38,14 @@ cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0" --font-size
 # If no server is running, `screenshot` falls back to a headless Notes PNG.
 ```
 
-`tree` should include `window#1` and `Hello from Tekto` (unless you patched the text). A button built with `tekto::button` shows up as `button#N` with the label as its name. `tekto click N` (or a left-click on its bounds) sets `last_click` to that id. `GET /accesskit` reports role `Button` and the label. JSX `<button>` only creates the kind and text; fill, color, font size, and padding stay unset until you patch them or set the props.
+`tree` should include `window#1` and `Hello from Tekto` (unless you patched the text). A button built with `tekto::button` shows up as `button#N` with the label as its name. `tekto click N` (or a left-click on its bounds) sets `last_click` to that id. `GET /accesskit` reports role `Button` and the label. JSX `<button>` only creates the kind and text; fill, color, font size, and padding stay unset until you patch them or set the props. A `tekto::text_field` shows up as `text_field#N`. Its value is node `text` (patchable); its label is `name`. AccessKit role is `TextInput`. Focused desktop keys (printable characters and Backspace) edit the value. `POST /type` does the same for plain characters. Full IME is not implemented.
 
 ## HTTP and MCP
 
 - `GET /tree`, `GET /tree.txt`, `GET /accesskit`, `GET /screenshot`, `GET /state`, `GET /logs`
 - `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb","fontSize":20,"padding":24,"gap":20}` — response is `{ "ok": true, "node": { ... }, "writeback": { ... } }` or an error
 - `POST /click` `{"id":1}`
-- `POST /type` `{"id":4,"text":"typed"}`
+- `POST /type` `{"id":N,"text":"typed"}` inserts plain characters into a `text_field` (errors if the node is not one). Backspace is a focused desktop key, not this route. No IME.
 - `POST /reload` raw JS bundle, or `{"js":"…"}`
 
 Stdio MCP (`cargo run -p tekto-cli -- mcp`) proxies those to the dev server. Tools: `ui.tree`, `ui.accesskit`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`.

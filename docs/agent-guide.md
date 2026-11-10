@@ -39,12 +39,16 @@ Tools in the first slice:
 | `ui.accesskit` | Dump AccessKit roles, labels, bounds, and focus (same ids) |
 | `ui.screenshot` | CPU-rendered PNG |
 | `ui.click` | Click a node id (focus + last_click; a real window click uses the same hit test) |
-| `ui.type` | Type into a node id (stubs a field until IME lands) |
+| `ui.type` | Insert plain characters at the caret of a text field and focus it. Not an IME |
 | `ui.patch` | Live-edit text, name, fill, color, or fontSize on a running node. Returns `{ ok, node }`. |
 | `app.state` | Opt-in JSON state (empty for now) |
 | `app.logs` | Recent log lines |
 
 Live patches change the running tree immediately and do not require a reload. `POST /patch` and `ui.patch` accept JSON `{ "id", "text?", "name?", "fill?", "color?", "fontSize?", "padding?", "gap?" }` (`#rrggbb` or `#rrggbbaa`) and return the updated node, or a clear error (unknown id, bad color).
+
+A text field (`kind` `text_field`) stores its value in `text` and its accessible label in `name`. `ui.patch` with `text` replaces the value and leaves `name` alone. `ui.type` inserts plain characters at the caret (control characters are skipped) and focuses that field. Backspace is a desktop key on the focused field, not part of `ui.type`. AccessKit role is `TextInput`, with the same stable id, label `name`, and value `text`.
+
+Known IME gaps (Month 3): no composition or preedit, no marked range, no candidate window, no CJK input method, no Android soft keyboard, no selection, arrow keys, copy, or paste. The desktop path uses committed characters from `KeyboardInput` plus Backspace. `WindowEvent::Ime` is ignored. A click puts the caret at the end of the value.
 
 When the old text or a simple style literal (`"#rrggbb"`, `fontSize={N}`) appears once in the app project, `ui.patch` / `tekto patch` also writes that change back to source. The JSON includes a `writeback` object (`written`, `skipped`, or `partial`) and the reason if it did not write. Ambiguous literals, named colors such as `Color::BANNER`, and files outside the app project (`TEKTO_APP_ROOT`, or the `--js` entry's app folder) are left as runtime-only changes. `crates/`, `target/`, `node_modules/`, and `docs/` are never written.
 
