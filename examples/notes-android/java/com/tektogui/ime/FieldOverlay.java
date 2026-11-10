@@ -114,14 +114,21 @@ public final class FieldOverlay {
         field.setVisibility(View.VISIBLE);
         field.bringToFront();
         String current = field.getText() == null ? "" : field.getText().toString();
-        if (push && !current.equals(value)) {
-            updating = true;
-            field.setText(value);
-            int c = clamp(caretIn, value.length());
-            field.setSelection(c);
-            updating = false;
-            text = value;
-            caret = c;
+        if (push) {
+            boolean textChanged = !current.equals(value);
+            int c = snap(value, caretIn);
+            boolean caretChanged = field.getSelectionStart() != c || field.getSelectionEnd() != c;
+            if (textChanged || caretChanged) {
+                updating = true;
+                if (textChanged) {
+                    field.setText(value);
+                    c = snap(value, caretIn);
+                }
+                field.setSelection(c);
+                updating = false;
+                text = value;
+                caret = c;
+            }
         }
         if (!field.hasFocus()) {
             field.requestFocus();
@@ -150,6 +157,18 @@ public final class FieldOverlay {
             return 0;
         }
         return Math.min(caretIn, length);
+    }
+
+    /// `caretIn` is a UTF-16 index. Snap an index that lands between a surrogate pair.
+    private static int snap(String value, int caretIn) {
+        int c = clamp(caretIn, value.length());
+        if (c > 0
+                && c < value.length()
+                && Character.isHighSurrogate(value.charAt(c - 1))
+                && Character.isLowSurrogate(value.charAt(c))) {
+            c += 1;
+        }
+        return c;
     }
 
     private static void hideIme(Activity activity, View view) {

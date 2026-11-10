@@ -277,12 +277,25 @@ impl ApplicationHandler<AppEvent> for App {
             // drawing that popup is the OS input method's job.
             WindowEvent::KeyboardInput { event, .. } => {
                 if let Some(state) = self.state.as_mut() {
-                    // The Android overlay owns the soft keyboard. Key events
-                    // would insert the same character a second time.
+                    // The Android overlay owns the soft keyboard while a text
+                    // field is focused. Key events would insert the same
+                    // character a second time. Keys still work when the
+                    // overlay class is loaded but no text field is focused.
                     #[cfg(target_os = "android")]
-                    if state.overlay.as_ref().is_some_and(|o| o.ready) {
-                        sync_ime(state);
-                        return;
+                    {
+                        let class_ready = state.overlay.as_ref().is_some_and(|o| o.ready);
+                        let text_field_focused = state.tree.lock().ok().is_some_and(|tree| {
+                            tree.focus
+                                .and_then(|id| tree.get(id))
+                                .is_some_and(|node| node.kind == tekto_tree::NodeKind::TextField)
+                        });
+                        if crate::android_field::overlay_suppresses_keys(
+                            class_ready,
+                            text_field_focused,
+                        ) {
+                            sync_ime(state);
+                            return;
+                        }
                     }
                     apply_field_key(state, &event);
                     sync_ime(state);
