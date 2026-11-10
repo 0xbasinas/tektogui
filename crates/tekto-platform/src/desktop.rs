@@ -16,9 +16,9 @@ use std::sync::{Arc, Mutex};
 use tekto_layout::layout_tree;
 use tekto_mcp::{AppHandle, SharedTreeHandle};
 use tekto_render::{paint_tree, CpuRenderer, Renderer};
-use tekto_tree::{FieldKey, Tree};
+use tekto_tree::{FieldKey, NodeId, Tree, SCROLL_WHEEL_LINE};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, WindowEvent};
+use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
@@ -39,6 +39,12 @@ struct State {
     tree: Arc<Mutex<Tree>>,
     clear: tekto_tree::Color,
     cursor: Option<(f32, f32)>,
+    /// Left button is down. A drag inside a scroll container pans it.
+    pointer_down: bool,
+    press_origin: Option<(f32, f32)>,
+    drag_scroll: Option<NodeId>,
+    drag_last_y: f32,
+    dragged: bool,
     modifiers: Modifiers,
     handle: Option<Arc<SharedTreeHandle>>,
     viewport: Arc<Mutex<Viewport>>,
@@ -100,6 +106,11 @@ impl ApplicationHandler<AppEvent> for App {
             tree: Arc::clone(&self.tree),
             clear: self.runtime.clear,
             cursor: None,
+            pointer_down: false,
+            press_origin: None,
+            drag_scroll: None,
+            drag_last_y: 0.0,
+            dragged: false,
             modifiers: Modifiers::default(),
             handle: self.handle.clone(),
             viewport: Arc::clone(&self.viewport),
@@ -147,17 +158,37 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(state) = self.state.as_mut() {
                     let scale = state.window.scale_factor();
-                    state.cursor = Some(logical_from_physical(position.x, position.y, scale));
+                    let (x, y) = logical_from_physical(position.x, position.y, scale);
+                    state.cursor = Some((x, y));
+                    if state.pointer_down {
+                        apply_pointer_drag(state, x, y);
+                    }
                 }
             }
             WindowEvent::MouseInput {
-                state: ElementState::Pressed,
+                state: button_state,
                 button: MouseButton::Left,
                 ..
             } => {
                 if let Some(state) = self.state.as_mut() {
+                    match button_state {
+                        ElementState::Pressed => {
+                            if let Some((x, y)) = state.cursor {
+                                begin_pointer(state, x, y);
+                            }
+                        }
+                        ElementState::Released => end_pointer(state),
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some(state) = self.state.as_mut() {
                     if let Some((x, y)) = state.cursor {
-                        apply_pointer_click(state, x, y);
+                        let scale = state.window.scale_factor();
+                        let dy = wheel_delta_logical(delta, scale);
+                        if dy != 0.0 {
+                            apply_wheel(state, x, y, dy);
+                        }
                     }
                 }
             }
@@ -304,6 +335,84 @@ impl App {
         let _ = crate::lifecycle::end_surface(epoch);
         drop(surface);
         drop(window);
+    }
+}
+
+/// A few pixels of movement before a press becomes a pan, so a click still clicks.
+const DRAG_SLOP: f32 = 4.0;
+
+fn wheel_delta_logical(delta: MouseScrollDelta, scale: f64) -> f32 {
+    match delta {
+        // Positive line delta is a wheel notch away from the user: reveal content above.
+        MouseScrollDelta::LineDelta(_, lines) => -lines * SCROLL_WHEEL_LINE,
+        MouseScrollDelta::PixelDelta(pos) => {
+            let scale = if scale.abs() < 0.01 { 1.0 } else { scale };
+            -(pos.y as f32) / scale as f32
+        }
+    }
+}
+
+fn begin_pointer(state: &mut State, x: f32, y: f32) {
+    state.pointer_down = true;
+    state.press_origin = Some((x, y));
+    state.drag_last_y = y;
+    state.dragged = false;
+    state.drag_scroll = state
+        .tree
+        .lock()
+        .ok()
+        .and_then(|tree| tree.scroll_target_at(x, y));
+    if state.drag_scroll.is_none() {
+        apply_pointer_click(state, x, y);
+    }
+}
+
+fn apply_pointer_drag(state: &mut State, x: f32, y: f32) {
+    let Some(id) = state.drag_scroll else {
+        return;
+    };
+    if let Some((ox, oy)) = state.press_origin {
+        if (x - ox).abs() + (y - oy).abs() >= DRAG_SLOP {
+            state.dragged = true;
+        }
+    }
+    if !state.dragged {
+        return;
+    }
+    // Dragging down pulls content down, which decreases the offset.
+    let delta = state.drag_last_y - y;
+    state.drag_last_y = y;
+    if delta == 0.0 {
+        return;
+    }
+    if let Ok(mut tree) = state.tree.lock() {
+        let _ = tree.scroll_by(id, delta);
+    }
+    state.window.request_redraw();
+}
+
+fn end_pointer(state: &mut State) {
+    let was_down = state.pointer_down;
+    state.pointer_down = false;
+    let scroll = state.drag_scroll.take();
+    state.press_origin = None;
+    if was_down && scroll.is_some() && !state.dragged {
+        if let Some((x, y)) = state.cursor {
+            apply_pointer_click(state, x, y);
+        }
+    }
+    state.dragged = false;
+}
+
+fn apply_wheel(state: &mut State, x: f32, y: f32, delta_y: f32) {
+    let changed = state
+        .tree
+        .lock()
+        .ok()
+        .and_then(|mut tree| tree.scroll_at(x, y, delta_y))
+        .is_some();
+    if changed {
+        state.window.request_redraw();
     }
 }
 

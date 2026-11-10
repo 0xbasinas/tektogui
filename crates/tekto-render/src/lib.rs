@@ -41,6 +41,9 @@ pub trait Renderer {
     fn height(&self) -> u32;
     /// Tight, packed RGBA8 pixels (row-major) for presenting to a window.
     fn rgba8(&self) -> Result<Vec<u8>, RenderError>;
+    /// Clip later draws to `rect` (intersected with any clip already active).
+    fn push_clip(&mut self, _rect: Rect) {}
+    fn pop_clip(&mut self) {}
 }
 
 /// Paint a whole tree with the default look.
@@ -95,8 +98,15 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
             node.color.unwrap_or(Color::INK),
         );
     }
+    let clip = node.kind == tekto_tree::NodeKind::Scroll;
+    if clip {
+        renderer.push_clip(node.bounds);
+    }
     for child in &node.children {
         paint_node(renderer, tree, *child);
+    }
+    if clip {
+        renderer.pop_clip();
     }
 }
 

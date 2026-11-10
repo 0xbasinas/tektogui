@@ -9,7 +9,7 @@ use skrifa::raw::FontRef as ReadFontsRef;
 use skrifa::{GlyphId, MetadataProvider, OutlineGlyph};
 use tekto_text::TextEngine;
 use tekto_tree::{Color as TektoColor, Rect};
-use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, PixmapMut, Transform};
+use tiny_skia::{Color, FillRule, Mask, Paint, PathBuilder, Pixmap, PixmapMut, Transform};
 
 pub struct CpuRenderer {
     pixmap: Pixmap,
@@ -18,6 +18,8 @@ pub struct CpuRenderer {
     /// units; the pixmap is `logical * scale`. At 1.0 the output matches
     /// the old unscaled path (headless snapshots stay stable).
     scale: f32,
+    /// Logical clip rectangles. Empty means no clip.
+    clips: Vec<Rect>,
 }
 
 impl CpuRenderer {
@@ -29,6 +31,7 @@ impl CpuRenderer {
             pixmap,
             text: TextEngine::new(),
             scale: 1.0,
+            clips: Vec::new(),
         })
     }
 
@@ -65,6 +68,9 @@ impl Renderer for CpuRenderer {
     }
 
     fn fill_rect(&mut self, rect: Rect, color: TektoColor) {
+        let Some(rect) = clip_rect(rect, self.clip_bounds()) else {
+            return;
+        };
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
@@ -77,8 +83,9 @@ impl Renderer for CpuRenderer {
         let mut paint = Paint::default();
         paint.set_color(to_color(color));
         paint.anti_alias = true;
+        let mask = self.clip_mask();
         self.pixmap
-            .fill_rect(r, &paint, Transform::identity(), None);
+            .fill_rect(r, &paint, Transform::identity(), mask.as_ref());
     }
 
     fn draw_text(
@@ -98,8 +105,9 @@ impl Renderer for CpuRenderer {
         let layout = self
             .text
             .layout(text, size * s, brush, max_width.map(|w| w * s));
+        let mask = self.clip_mask();
         let pixmap = self.pixmap.as_mut();
-        let mut pen = TinySkiaPen::new(pixmap);
+        let mut pen = TinySkiaPen::new(pixmap, mask.as_ref());
         for line in layout.lines() {
             for item in line.items() {
                 if let PositionedLayoutItem::GlyphRun(glyph_run) = item {
@@ -137,6 +145,67 @@ impl Renderer for CpuRenderer {
             }
         }
         Ok(out)
+    }
+
+    fn push_clip(&mut self, rect: Rect) {
+        self.clips.push(rect);
+    }
+
+    fn pop_clip(&mut self) {
+        self.clips.pop();
+    }
+}
+
+impl CpuRenderer {
+    /// `None` when nothing is clipped. `Some(None)` when the clip is empty.
+    fn clip_bounds(&self) -> Option<Option<Rect>> {
+        if self.clips.is_empty() {
+            return None;
+        }
+        let mut acc = self.clips[0];
+        for clip in self.clips.iter().skip(1) {
+            match intersect_rect(acc, *clip) {
+                Some(next) => acc = next,
+                None => return Some(None),
+            }
+        }
+        Some(Some(acc))
+    }
+
+    fn clip_mask(&self) -> Option<Mask> {
+        let rect = match self.clip_bounds() {
+            Some(Some(rect)) => rect,
+            _ => return None,
+        };
+        let mut mask = Mask::new(self.pixmap.width(), self.pixmap.height())?;
+        let s = self.scale;
+        let r =
+            tiny_skia::Rect::from_xywh(rect.x * s, rect.y * s, rect.width * s, rect.height * s)?;
+        let path = PathBuilder::from_rect(r);
+        mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
+        Some(mask)
+    }
+}
+
+/// `None` means "no clip is active" (draw `rect`). `Some(None)` means the
+/// clip is empty. `Some(Some(r))` is `rect` intersected with the clip.
+fn clip_rect(rect: Rect, clip: Option<Option<Rect>>) -> Option<Rect> {
+    match clip {
+        None => Some(rect),
+        Some(None) => None,
+        Some(Some(bounds)) => intersect_rect(rect, bounds),
+    }
+}
+
+fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.width).min(b.x + b.width);
+    let y1 = (a.y + a.height).min(b.y + b.height);
+    if x1 <= x0 || y1 <= y0 {
+        None
+    } else {
+        Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
     }
 }
 
@@ -187,6 +256,7 @@ fn render_glyph_run(
 
 struct TinySkiaPen<'a> {
     pixmap: PixmapMut<'a>,
+    clip: Option<&'a Mask>,
     x: f32,
     y: f32,
     paint: Paint<'static>,
@@ -194,9 +264,10 @@ struct TinySkiaPen<'a> {
 }
 
 impl<'a> TinySkiaPen<'a> {
-    fn new(pixmap: PixmapMut<'a>) -> Self {
+    fn new(pixmap: PixmapMut<'a>, clip: Option<&'a Mask>) -> Self {
         Self {
             pixmap,
+            clip,
             x: 0.0,
             y: 0.0,
             paint: Paint::default(),
@@ -232,7 +303,7 @@ impl<'a> TinySkiaPen<'a> {
                 &self.paint,
                 FillRule::Winding,
                 Transform::identity(),
-                None,
+                self.clip,
             );
         }
     }
