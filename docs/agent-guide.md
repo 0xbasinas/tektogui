@@ -46,7 +46,7 @@ Tools in the first slice:
 
 Live patches change the running tree immediately and do not require a reload. `POST /patch` and `ui.patch` accept JSON `{ "id", "text?", "name?", "fill?", "color?", "fontSize?" }` (`#rrggbb` or `#rrggbbaa`) and return the updated node, or a clear error (unknown id, bad color). Padding and other layout styles are not in this slice.
 
-Writing those edits back into `.rs` or `.tsx` source is a separate step (issue #19).
+When the old text or a simple style literal (`"#rrggbb"`, `fontSize={N}`) appears once in the app project, `ui.patch` / `tekto patch` also writes that change back to source. The JSON includes a `writeback` object (`written`, `skipped`, or `partial`) and the reason if it did not write. Ambiguous literals, named colors such as `Color::BANNER`, and files outside the app project (`TEKTO_APP_ROOT`, or the `--js` entry's app folder) are left as runtime-only changes. `crates/`, `target/`, `node_modules/`, and `docs/` are never written.
 
 ## Hot reload TypeScript
 

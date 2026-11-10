@@ -33,15 +33,24 @@ pub fn missing_feature_hint() -> String {
         .into()
 }
 
+pub fn export_writeback_env(entry: &std::path::Path) {
+    if let Some(root) = tekto_mcp::find_app_root(entry) {
+        std::env::set_var("TEKTO_APP_ROOT", &root);
+    }
+    std::env::set_var("TEKTO_JS_ENTRY", entry);
+    std::env::set_var("TEKTO_WRITEBACK_PREFER", "ts");
+}
+
 pub fn run_js_dev(
     entry: PathBuf,
     headless: bool,
     out: PathBuf,
     watch: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    export_writeback_env(&entry);
     #[cfg(not(feature = "quickjs"))]
     {
-        let _ = (entry, headless, out, watch);
+        let _ = (headless, out, watch);
         Err(missing_feature_hint().into())
     }
     #[cfg(feature = "quickjs")]
@@ -102,7 +111,7 @@ fn run_js_dev_inner(
     println!("JS entry {}", entry.display());
     println!("saving a .tsx / .ts / .js file reloads the JS side; the Rust core stays up.");
     println!("JS remounts from source, so in-memory signal state resets.");
-    println!("Live ui.patch edits are not written back to source in this path.");
+    println!("Live ui.patch edits write back to source when the old literal is unique in the app project.");
 
     if watch {
         let handle = Arc::clone(&handle);
