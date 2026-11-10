@@ -13,7 +13,7 @@ On Windows, `arboard` links `clipboard-win` 5.4.3 and `error-code` 3.4.0, both B
 
 A present platform implementation that cannot reach the OS service (headless Linux, no `DISPLAY` and no `WAYLAND_DISPLAY`, no session bus / notification daemon, no status notifier watcher, or an X11 grab the server refuses) returns `NativeError::Unavailable { capability, platform, reason }`, not `Unsupported`. Do not open displays `:1` or `:2`. Opt-in live checks are `TEKTO_CLIPBOARD_LIVE=1`, `TEKTO_NOTIFY_LIVE=1`, `TEKTO_TRAY_LIVE=1`, and `TEKTO_SHORTCUTS_LIVE=1`.
 
-JS calls clipboard and files through `NativeOp` and `apply_native_op`. `tekto-js::apply_native_host_op` wraps that in `JsError`. It is not a scene-tree `HostOp` (get returns text, not a node id). There is still no QuickJS binding for it; do not enable the `quickjs` feature by default.
+JS calls clipboard, files, notifications, tray, and shortcuts through `NativeOp` and `apply_native_op`. `tekto-js::apply_native_host_op` wraps that in `JsError`. It is not a scene-tree `HostOp` (get returns text, not a node id). With `--features quickjs`, a script calls `tekto.applyNativeOp(json)` where `json` is one `NativeOp` object. `@tektogui/core` `nativeOpJson(op)` builds that string. Do not enable the `quickjs` feature by default. A headless or unsupported call throws (`not available` or `not implemented`) and does not panic.
 
 `NativeOp` is internally tagged (`#[serde(tag = "op", rename_all = "camelCase")]`). Clipboard ops:
 
@@ -49,7 +49,7 @@ Shortcut ops (Linux, and only when the `shortcuts` feature is on; otherwise `Uns
 - `{"op":"shortcutsUnregister","id":"search"}` — returns `None`. A missing id is success.
 - `{"op":"shortcutsTakeActivation"}` — `Some(id)` for the oldest chord, or `None` when the queue is empty
 
-`set_on_activation` is Rust-only (same idea as `set_on_click`). TypeScript polls `shortcutsTakeActivation`.
+`set_on_activation` is Rust-only (same idea as `set_on_click`). TypeScript polls with `tekto.applyNativeOp(nativeOpJson({ op: "shortcutsTakeActivation" }))`. Register and unregister use `shortcutsRegister` and `shortcutsUnregister` the same way.
 
 ## Linux global shortcuts
 
