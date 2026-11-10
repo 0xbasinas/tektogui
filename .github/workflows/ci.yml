@@ -68,3 +68,5 @@ jobs:
           shared-key: android-check
       - name: Check (CPU / no desktop shell)
         run: cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu
+      - name: Check Notes Android skeleton
+        run: cargo check -p notes-android --target aarch64-linux-android

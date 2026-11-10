@@ -230,3 +230,5 @@ mod tests {
         assert!((y - 50.0).abs() < f32::EPSILON);
     }
 }
+
+pub mod lifecycle;

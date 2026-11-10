@@ -38,6 +38,7 @@ Short, command-accurate how-tos live in `.agents/skills/<slug>/SKILL.md`. The sa
 - Never force-push to `main` or `nightly`.
 - Commit as `0xbasinas <241305723+0xbasinas@users.noreply.github.com>` when committing in this project.
 - Do not print secrets. Keep GitHub Actions minutes low (Linux checks on PRs; Windows and Android only on `nightly` or a manual run).
+- Default `cargo test` is the `dev` profile. Use `--profile dev-fast` for a slightly faster local window, `--release` for a small binary. Default features stay lean (`cpu` + `desktop` only). See [docs/dev-builds.md](docs/dev-builds.md).
 
 ## Code rules
 
