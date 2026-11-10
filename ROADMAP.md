@@ -61,7 +61,7 @@ Still in Month 1:
 - Android text input uses a native `EditText` overlay (`FieldOverlay`), not winit IME. A live type-into-field check still needs a free emulator or device
 - Safe areas and keyboard insets: layout pads recorded safe-area insets and scrolls a focused field above the IME (host tests; a live portrait check is still open)
 - Android GPU paint compiles behind `notes-android` feature `gpu`, but the default stays CPU (`TEKTO_ANDROID_GPU=1` to try it). Drivers were not proven here. A lost surface skips present.
-- Android notifications post through `NotificationManager` (`notificationsShow`). A live post still needs a device. Clipboard and files on Android are still open.
+- Android notifications post through `NotificationManager` (`notificationsShow`). A live post still needs a device. Android clipboard get/set uses `ClipboardManager` (`clipboardGetText` / `clipboardSetText`). A read while the activity is in the background is `Unavailable` on API 29+. A live device clipboard check is still open. Files on Android are still open.
 - Animation and scroll feel on touch (1:1 tracking, fling, finger cancels the coast; no bounce)
 - macOS catch-up if we have a Mac
 
