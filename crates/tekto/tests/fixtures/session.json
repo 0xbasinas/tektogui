@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "events": [
+    { "action": "patch", "id": 2, "patch": { "text": "Hello" } },
+    { "action": "click", "id": 2 },
+    { "action": "type", "id": 2, "text": "!" },
+    { "action": "key", "key": { "kind": "backspace" } },
+    { "action": "key", "key": { "kind": "insert", "char": "?" } },
+    { "action": "pointer_click", "x": 20.0, "y": 20.0 }
+  ]
+}

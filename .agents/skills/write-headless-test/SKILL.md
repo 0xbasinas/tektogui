@@ -1,6 +1,6 @@
 ---
 name: write-headless-test
-description: Add or update a headless Tekto test that asserts the scene/AccessKit tree and a CPU-rendered PNG. Use when changing widgets, layout, text, or painting, or when adding a snapshot.
+description: Add or update a headless Tekto test that asserts the scene/AccessKit tree and a CPU-rendered PNG, or a JSON record/replay script. Use when changing widgets, layout, text, or painting, or when adding a snapshot or a recorded session.
 ---
 
 # Write a headless test
@@ -10,8 +10,9 @@ Prefer tests that do not need a window. Use the CPU renderer, a fixed size (Note
 ## Files to touch
 
 - Integration snapshot: `crates/tekto/tests/headless_snapshot.rs`
+- Record/replay script: `crates/tekto/tests/record_replay.rs` and `crates/tekto/tests/fixtures/session.json`
 - Or a unit test next to the code (`crates/tekto-widgets`, `tekto-layout`, `tekto-text`, `tekto-a11y`, `tekto/src/lib.rs`)
-- This skill, if the snapshot command or `TEKTO_SHOT_DIR` changes
+- This skill, if the snapshot command, `TEKTO_SHOT_DIR`, or the recording helper changes
 
 ## Pattern
 
@@ -54,3 +55,15 @@ npm test
 ```
 
 Do not start a display or an emulator for these tests.
+
+## Record and replay
+
+`tekto::Recording` is a version 1 JSON log of tree actions: `patch`, `click`, `type`, `key`, and `pointer_click`. Call `record(&mut tree, action)` to apply an action and append it. Save the log with `serde_json`. Call `replay(&mut tree, layout)` on a tree that was built and laid out the same way. The layout callback runs after each action so pointer hits see current bounds.
+
+This helper does not watch a live window or the dev server. It does not run app callbacks or write patches back to source. Pass each action in yourself.
+
+The CI test loads `crates/tekto/tests/fixtures/session.json`, records those events, replays the log, and checks that the tree text, focus, and last click match.
+
+```bash
+cargo test -p tekto --test record_replay
+```
