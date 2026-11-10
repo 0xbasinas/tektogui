@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
-use tekto_tree::{NodeId, NodeKind, NodePatch, Tree, TreeError};
+use tekto_tree::{NodeId, NodeKind, NodePatch, StyleTransition, Tree, TreeError};
 use thiserror::Error;
 
 #[cfg(feature = "quickjs")]
@@ -43,11 +43,43 @@ impl From<TreeError> for JsError {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum HostOp {
-    Create { kind: String },
-    SetText { id: u64, text: String },
-    SetProp { id: u64, key: String, value: String },
-    Append { parent: u64, child: u64 },
-    Remove { id: u64 },
+    Create {
+        kind: String,
+    },
+    SetText {
+        id: u64,
+        text: String,
+    },
+    SetProp {
+        id: u64,
+        key: String,
+        value: String,
+    },
+    Append {
+        parent: u64,
+        child: u64,
+    },
+    Remove {
+        id: u64,
+    },
+    /// Start a quiet style tween. The window loop calls [`Tree::advance`].
+    /// Headless callers advance time themselves. Numbers are decimal strings
+    /// so this op stays `Eq`.
+    Transition {
+        id: u64,
+        #[serde(default)]
+        opacity: Option<String>,
+        #[serde(default)]
+        x: Option<String>,
+        #[serde(default)]
+        y: Option<String>,
+        #[serde(default)]
+        width: Option<String>,
+        #[serde(default)]
+        height: Option<String>,
+        #[serde(default)]
+        duration_ms: Option<u32>,
+    },
 }
 
 /// Host that applies ops. The desktop QuickJS runtime and the web WASM
@@ -112,6 +144,33 @@ pub fn apply_ops(tree: &mut Tree, ops: &[HostOp]) -> Result<Vec<u64>, JsError> {
             }
             HostOp::Remove { id } => {
                 tree.remove(NodeId::from_raw(*id))?;
+            }
+            HostOp::Transition {
+                id,
+                opacity,
+                x,
+                y,
+                width,
+                height,
+                duration_ms,
+            } => {
+                let num = |key: &str, value: &Option<String>| -> Result<Option<f32>, JsError> {
+                    match value {
+                        Some(text) => Ok(Some(parse_f32(key, text)?)),
+                        None => Ok(None),
+                    }
+                };
+                tree.transition(
+                    NodeId::from_raw(*id),
+                    StyleTransition {
+                        opacity: num("opacity", opacity)?,
+                        x: num("x", x)?,
+                        y: num("y", y)?,
+                        width: num("width", width)?,
+                        height: num("height", height)?,
+                        duration_ms: duration_ms.map(|ms| ms as f32),
+                    },
+                )?;
             }
         }
     }
@@ -180,8 +239,11 @@ fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), J
 /// Run a JS script against `host`.
 ///
 /// When the `quickjs` feature is on, the script sees a global `tekto`
-/// object: `create`, `setText`, `setProp`, `append`, `remove`. Those
-/// call the same [`HostOp`] protocol the web target will use.
+/// object: `create`, `setText`, `setProp`, `append`, `remove`, and
+/// `transition(id, key, value, durationMs)` for one of `opacity`, `x`,
+/// `y`, `width`, `height`. Those call the same [`HostOp`] protocol the
+/// web target will use. `transition` starts a tween; the host loop
+/// advances time with [`tekto_tree::Tree::advance`].
 ///
 /// Without the feature this returns [`JsError::EngineDisabled`].
 pub fn eval_to_tree(source: &str) -> Result<Tree, JsError> {
@@ -375,6 +437,33 @@ mod tests {
         );
         assert!(banner.layout.justify_center);
         assert_eq!(banner.layout.padding, 20.0);
+    }
+
+    #[test]
+    fn transition_op_reaches_the_end_when_time_advances() {
+        let mut tree = Tree::new();
+        let id = tree.add(NodeKind::Rect, None).unwrap();
+        tree.get_mut(id).unwrap().bounds = tekto_tree::Rect::new(0.0, 0.0, 20.0, 10.0);
+        apply_ops(
+            &mut tree,
+            &[HostOp::Transition {
+                id: id.raw(),
+                opacity: Some("0".into()),
+                x: Some("40".into()),
+                y: None,
+                width: None,
+                height: None,
+                duration_ms: Some(100),
+            }],
+        )
+        .unwrap();
+        assert!(tree.advance(50.0));
+        let mid = tree.get(id).unwrap();
+        assert!(mid.opacity > 0.2 && mid.opacity < 0.8);
+        assert!(mid.bounds.x > 10.0 && mid.bounds.x < 30.0);
+        assert!(!tree.advance(100.0));
+        assert!(tree.get(id).unwrap().opacity < 0.01);
+        assert!((tree.get(id).unwrap().bounds.x - 40.0).abs() < 0.01);
     }
 
     #[cfg(feature = "quickjs")]

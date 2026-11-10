@@ -54,6 +54,7 @@ pub fn eval_script(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
             tekto.set("setProp", Func::from(js_set_prop))?;
             tekto.set("append", Func::from(js_append))?;
             tekto.set("remove", Func::from(js_remove))?;
+            tekto.set("transition", Func::from(js_transition))?;
             ctx.globals().set("tekto", tekto)?;
             ctx.eval::<(), _>(source)?;
             Ok(())
@@ -108,6 +109,53 @@ fn js_set_prop(ctx: Ctx<'_>, id: u64, key: String, value: String) -> rquickjs::R
 fn js_append(ctx: Ctx<'_>, parent: u64, child: u64) -> rquickjs::Result<()> {
     match with_host(|host| {
         host.apply(&[HostOp::Append { parent, child }])?;
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(err) => throw(&ctx, err),
+    }
+}
+
+/// `tekto.transition(id, key, value, durationMs)`.
+/// `key` is `opacity`, `x`, `y`, `width`, or `height`. One prop per call.
+/// Pass `0` for `durationMs` to snap. The window loop advances time.
+fn js_transition(
+    ctx: Ctx<'_>,
+    id: u64,
+    key: String,
+    value: String,
+    duration_ms: u32,
+) -> rquickjs::Result<()> {
+    let mut opacity = None;
+    let mut x = None;
+    let mut y = None;
+    let mut width = None;
+    let mut height = None;
+    match key.as_str() {
+        "opacity" => opacity = Some(value),
+        "x" => x = Some(value),
+        "y" => y = Some(value),
+        "width" => width = Some(value),
+        "height" => height = Some(value),
+        other => {
+            return throw(
+                &ctx,
+                JsError::Message(format!(
+                    "transition key must be opacity, x, y, width, or height, got `{other}`"
+                )),
+            );
+        }
+    }
+    match with_host(|host| {
+        host.apply(&[HostOp::Transition {
+            id,
+            opacity,
+            x,
+            y,
+            width,
+            height,
+            duration_ms: Some(duration_ms),
+        }])?;
         Ok(())
     }) {
         Ok(()) => Ok(()),

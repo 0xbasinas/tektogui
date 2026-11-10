@@ -29,8 +29,9 @@ pub use tekto_platform::{
 };
 pub use tekto_render::{paint_tree, render_tree_png, CpuRenderer, RenderError, Renderer};
 pub use tekto_tree::{
-    Action, Color, FieldKey, LayoutStyle, Node, NodeId, NodeKind, NodePatch, RecordedKey,
-    Recording, Rect, Tree, TreeDump, SCROLL_WHEEL_LINE,
+    ease_smoothstep, reduced_motion_requested, Action, Color, FieldKey, LayoutStyle, Node, NodeId,
+    NodeKind, NodePatch, RecordedKey, Recording, Rect, StyleTransition, Tree, TreeDump,
+    DEFAULT_TRANSITION_MS, SCROLL_WHEEL_LINE,
 };
 
 pub use tekto_widgets::{
