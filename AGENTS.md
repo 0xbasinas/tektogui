@@ -61,7 +61,7 @@ Short, command-accurate how-tos live in `.agents/skills/<slug>/SKILL.md`. The sa
 - Android (and later iOS)
 - Web (WASM core + browser JS, not QuickJS)
 
-`tekto-js` is an op protocol. Desktop will embed QuickJS-ng later. Web uses the browser engine and calls the same ops on a WASM module.
+`tekto-js` is the `HostOp` protocol. Desktop embeds QuickJS-ng behind `--features quickjs` (off by default, not on PR CI). Web uses the browser engine and calls the same ops on a WASM module.
 
 `tekto-native` is the plugin API for files, dialogs, clipboard, notifications, tray, and global shortcuts. Fill in one platform at a time; stubs should return a clear error.
 

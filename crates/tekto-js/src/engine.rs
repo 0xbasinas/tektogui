@@ -1,0 +1,114 @@
+//! QuickJS-ng engine (rquickjs). Only compiled with `--features quickjs`.
+
+use rquickjs::{function::Func, Context, Ctx, Object, Runtime};
+use std::cell::RefCell;
+
+use crate::{Host, HostOp, JsError};
+
+thread_local! {
+    static HOST: RefCell<Option<*mut (dyn Host + 'static)>> = const { RefCell::new(None) };
+}
+
+struct HostGuard;
+
+impl Drop for HostGuard {
+    fn drop(&mut self) {
+        HOST.with(|slot| *slot.borrow_mut() = None);
+    }
+}
+
+/// Extend the host pointer to `'static` for the QuickJS callbacks.
+///
+/// Safety: the pointer is only used on this thread until [`HostGuard`]
+/// clears it, and those callbacks run synchronously inside `eval_script`.
+unsafe fn attach_host(host: &mut dyn Host) -> HostGuard {
+    let ptr: *mut (dyn Host + 'static) = unsafe {
+        std::mem::transmute::<*mut dyn Host, *mut (dyn Host + 'static)>(host as *mut dyn Host)
+    };
+    HOST.with(|slot| *slot.borrow_mut() = Some(ptr));
+    HostGuard
+}
+
+fn with_host<T>(f: impl FnOnce(&mut dyn Host) -> Result<T, JsError>) -> Result<T, JsError> {
+    HOST.with(|slot| {
+        let ptr = slot
+            .borrow()
+            .ok_or_else(|| JsError::Message("JS host is not attached".into()))?;
+        f(unsafe { &mut *ptr })
+    })
+}
+
+fn throw<'js, T>(ctx: &Ctx<'js>, err: JsError) -> rquickjs::Result<T> {
+    Err(rquickjs::Exception::throw_message(ctx, &err.to_string()))
+}
+
+pub fn eval_script(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
+    let _guard = unsafe { attach_host(host) };
+    let runtime = Runtime::new().map_err(|e| JsError::Message(e.to_string()))?;
+    let context = Context::full(&runtime).map_err(|e| JsError::Message(e.to_string()))?;
+    context
+        .with(|ctx| -> rquickjs::Result<()> {
+            let tekto = Object::new(ctx.clone())?;
+            tekto.set("create", Func::from(js_create))?;
+            tekto.set("setText", Func::from(js_set_text))?;
+            tekto.set("setProp", Func::from(js_set_prop))?;
+            tekto.set("append", Func::from(js_append))?;
+            tekto.set("remove", Func::from(js_remove))?;
+            ctx.globals().set("tekto", tekto)?;
+            ctx.eval::<(), _>(source)?;
+            Ok(())
+        })
+        .map_err(|e| JsError::Message(e.to_string()))
+}
+
+fn js_create(ctx: Ctx<'_>, kind: String) -> rquickjs::Result<u64> {
+    match with_host(|host| {
+        let ids = host.apply(&[HostOp::Create { kind }])?;
+        ids.into_iter()
+            .next()
+            .ok_or_else(|| JsError::Message("create did not return an id".into()))
+    }) {
+        Ok(id) => Ok(id),
+        Err(err) => throw(&ctx, err),
+    }
+}
+
+fn js_set_text(ctx: Ctx<'_>, id: u64, text: String) -> rquickjs::Result<()> {
+    match with_host(|host| {
+        host.apply(&[HostOp::SetText { id, text }])?;
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(err) => throw(&ctx, err),
+    }
+}
+
+fn js_set_prop(ctx: Ctx<'_>, id: u64, key: String, value: String) -> rquickjs::Result<()> {
+    match with_host(|host| {
+        host.apply(&[HostOp::SetProp { id, key, value }])?;
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(err) => throw(&ctx, err),
+    }
+}
+
+fn js_append(ctx: Ctx<'_>, parent: u64, child: u64) -> rquickjs::Result<()> {
+    match with_host(|host| {
+        host.apply(&[HostOp::Append { parent, child }])?;
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(err) => throw(&ctx, err),
+    }
+}
+
+fn js_remove(ctx: Ctx<'_>, id: u64) -> rquickjs::Result<()> {
+    match with_host(|host| {
+        host.apply(&[HostOp::Remove { id }])?;
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(err) => throw(&ctx, err),
+    }
+}

@@ -5,14 +5,17 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "TypeScript runtime bindings. On desktop this will embed QuickJS-ng; on the web, apps use the browser JS engine."
+description = "TypeScript runtime bindings. On desktop this embeds QuickJS-ng behind a feature flag; on the web, apps use the browser JS engine."
 publish = false
 
 [features]
 default = []
-# QuickJS-ng (rquickjs) is optional and off by default: it is slow to compile.
-quickjs = []
+# QuickJS-ng via rquickjs (both MIT). Off by default: compiling the engine is slow.
+# Do not enable this on PR CI.
+quickjs = ["dep:rquickjs"]
 
 [dependencies]
 tekto-tree = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
+rquickjs = { version = "0.14", optional = true, default-features = true }

@@ -51,6 +51,18 @@ impl NodeKind {
             NodeKind::Button => "button",
         }
     }
+
+    /// Parse a kind name (`window`, `group`, `rect`, `text`, `button`).
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "window" => Some(Self::Window),
+            "group" => Some(Self::Group),
+            "rect" => Some(Self::Rect),
+            "text" => Some(Self::Text),
+            "button" => Some(Self::Button),
+            _ => None,
+        }
+    }
 }
 
 /// RGBA color, channels in 0..=255.
@@ -299,11 +311,7 @@ impl Tree {
             })?;
             parent_node.children.push(id);
             node.parent = Some(pid);
-        } else if self.root.is_some() {
-            return Err(TreeError {
-                message: "tree already has a root".into(),
-            });
-        } else {
+        } else if self.root.is_none() {
             self.root = Some(id);
             if self.focus.is_none() {
                 self.focus = Some(id);
@@ -311,6 +319,69 @@ impl Tree {
         }
         self.nodes.insert(id, node);
         Ok(id)
+    }
+
+    /// Attach an existing node as the last child of `parent`.
+    /// The child may be an orphan, or it is moved from its previous parent.
+    pub fn append(&mut self, parent: NodeId, child: NodeId) -> Result<(), TreeError> {
+        if parent == child {
+            return Err(TreeError {
+                message: "cannot append a node to itself".into(),
+            });
+        }
+        if self.root == Some(child) {
+            return Err(TreeError {
+                message: "cannot append the root".into(),
+            });
+        }
+        if !self.nodes.contains_key(&parent) {
+            return Err(TreeError {
+                message: format!("unknown parent {parent}"),
+            });
+        }
+        if !self.nodes.contains_key(&child) {
+            return Err(TreeError {
+                message: format!("unknown node {child}"),
+            });
+        }
+        if let Some(old) = self.nodes[&child].parent {
+            if let Some(old_node) = self.nodes.get_mut(&old) {
+                old_node.children.retain(|c| *c != child);
+            }
+        }
+        self.nodes.get_mut(&parent).unwrap().children.push(child);
+        self.nodes.get_mut(&child).unwrap().parent = Some(parent);
+        Ok(())
+    }
+
+    /// Drop a node and its descendants. Ids are never reused.
+    pub fn remove(&mut self, id: NodeId) -> Result<(), TreeError> {
+        if !self.nodes.contains_key(&id) {
+            return Err(TreeError {
+                message: format!("unknown node {id}"),
+            });
+        }
+        if self.root == Some(id) {
+            self.root = None;
+        }
+        if let Some(parent) = self.nodes[&id].parent {
+            if let Some(p) = self.nodes.get_mut(&parent) {
+                p.children.retain(|c| *c != id);
+            }
+        }
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            if let Some(node) = self.nodes.remove(&cur) {
+                stack.extend(node.children);
+            }
+            if self.focus == Some(cur) {
+                self.focus = self.root;
+            }
+            if self.last_click == Some(cur) {
+                self.last_click = None;
+            }
+        }
+        Ok(())
     }
 
     /// Set AccessKit / keyboard focus. The id must already be in the tree.
@@ -526,5 +597,36 @@ mod tests {
         let dump = tree.to_dump();
         assert_eq!(dump.last_click, Some(back.raw()));
         assert_eq!(dump.focus, Some(back.raw()));
+    }
+
+    #[test]
+    fn from_name_round_trips() {
+        for kind in [
+            NodeKind::Window,
+            NodeKind::Group,
+            NodeKind::Rect,
+            NodeKind::Text,
+            NodeKind::Button,
+        ] {
+            assert_eq!(NodeKind::from_name(kind.as_str()), Some(kind));
+        }
+        assert_eq!(NodeKind::from_name("nope"), None);
+    }
+
+    #[test]
+    fn append_attaches_an_orphan_and_remove_drops_it() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let orphan = tree.add(NodeKind::Text, None).unwrap();
+        assert!(tree.get(root).unwrap().children.is_empty());
+        tree.append(root, orphan).unwrap();
+        assert_eq!(tree.get(root).unwrap().children, vec![orphan]);
+        assert_eq!(tree.get(orphan).unwrap().parent, Some(root));
+        tree.remove(orphan).unwrap();
+        assert!(tree.get(orphan).is_none());
+        assert!(tree.get(root).unwrap().children.is_empty());
+        // ids are not reused
+        let next = tree.add(NodeKind::Text, Some(root)).unwrap();
+        assert_ne!(next, orphan);
     }
 }

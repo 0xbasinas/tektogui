@@ -101,6 +101,14 @@ Commit the updated reference PNG. Do not bless a change you did not mean to make
 
 See [dev-builds.md](dev-builds.md) for default features, what is *not* in the default crate graph, and recorded CI compile times.
 
+To try the optional JS engine (not in default builds or PR CI):
+
+```bash
+cargo test -p tekto-js --features quickjs
+```
+
+A script can create nodes with `tekto.create` / `tekto.setText` / `tekto.append`. TypeScript JSX on top of this is the next step.
+
 ## Targets
 
 - Linux: windowed + headless. This is what everyday CI runs.
