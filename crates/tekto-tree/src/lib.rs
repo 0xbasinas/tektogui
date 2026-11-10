@@ -234,6 +234,12 @@ pub struct NodePatch {
     /// Also accepted as `fontSize` in JSON / MCP.
     #[serde(default, alias = "fontSize")]
     pub font_size: Option<f32>,
+    /// Uniform padding in logical pixels. Also accepted as JSX `padding`.
+    #[serde(default)]
+    pub padding: Option<f32>,
+    /// Gap between stacked children.
+    #[serde(default)]
+    pub gap: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -437,6 +443,12 @@ impl Tree {
         if let Some(size) = patch.font_size {
             node.font_size = size;
         }
+        if let Some(padding) = patch.padding {
+            node.layout.padding = padding;
+        }
+        if let Some(gap) = patch.gap {
+            node.layout.gap = gap;
+        }
         Ok(())
     }
 
@@ -501,6 +513,8 @@ impl Tree {
             fill: node.fill.map(|c| c.to_hex()),
             color: node.color.map(|c| c.to_hex()),
             font_size: node.font_size,
+            padding: node.layout.padding,
+            gap: node.layout.gap,
             bounds: node.bounds,
             children: node.children.iter().map(|c| c.raw()).collect(),
         })
@@ -531,6 +545,8 @@ impl Tree {
             fill: node.fill.map(|c| c.to_hex()),
             color: node.color.map(|c| c.to_hex()),
             font_size: node.font_size,
+            padding: node.layout.padding,
+            gap: node.layout.gap,
             bounds: node.bounds,
             children: node.children.iter().map(|c| c.raw()).collect(),
         });
@@ -561,6 +577,8 @@ pub struct NodeDump {
     pub fill: Option<String>,
     pub color: Option<String>,
     pub font_size: f32,
+    pub padding: f32,
+    pub gap: f32,
     pub bounds: Rect,
     pub children: Vec<u64>,
 }

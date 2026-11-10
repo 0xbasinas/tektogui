@@ -10,10 +10,15 @@ export function Notes() {
     width: 640,
     height: 400,
     fill: "#f4f3f0",
+    padding: 24,
+    gap: 20,
     children: [
       jsxs("rect", {
         name: "banner",
         fill: "#3a424a",
+        height: 64,
+        padding: 20,
+        justifyCenter: true,
         children: [
           jsx("text", {
             fontSize: 22,

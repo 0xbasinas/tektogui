@@ -117,19 +117,57 @@ pub fn apply_ops(tree: &mut Tree, ops: &[HostOp]) -> Result<Vec<u64>, JsError> {
     Ok(created)
 }
 
+fn parse_f32(key: &str, value: &str) -> Result<f32, JsError> {
+    value
+        .parse::<f32>()
+        .map_err(|_| JsError::Message(format!("{key} must be a number, got `{value}`")))
+}
+
+fn parse_dim(key: &str, value: &str) -> Result<f32, JsError> {
+    match value.trim() {
+        "" | "auto" | "nan" | "NaN" | "unset" => Ok(f32::NAN),
+        other => parse_f32(key, other),
+    }
+}
+
+fn parse_bool(key: &str, value: &str) -> Result<bool, JsError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" => Ok(true),
+        "false" | "0" | "no" => Ok(false),
+        other => Err(JsError::Message(format!(
+            "{key} must be true or false, got `{other}`"
+        ))),
+    }
+}
+
 fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), JsError> {
+    match key {
+        "width" | "height" | "column" | "justifyCenter" | "justify_center" => {
+            let node = tree
+                .get_mut(id)
+                .ok_or_else(|| JsError::Message(format!("unknown node {id}")))?;
+            match key {
+                "width" => node.layout.width = parse_dim(key, value)?,
+                "height" => node.layout.height = parse_dim(key, value)?,
+                "column" => node.layout.column = parse_bool(key, value)?,
+                "justifyCenter" | "justify_center" => {
+                    node.layout.justify_center = parse_bool(key, value)?;
+                }
+                _ => unreachable!(),
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
     let mut patch = NodePatch::default();
     match key {
         "text" => patch.text = Some(value.into()),
         "name" => patch.name = Some(value.into()),
         "fill" => patch.fill = Some(value.into()),
         "color" => patch.color = Some(value.into()),
-        "fontSize" | "font_size" => {
-            let size = value.parse::<f32>().map_err(|_| {
-                JsError::Message(format!("fontSize must be a number, got `{value}`"))
-            })?;
-            patch.font_size = Some(size);
-        }
+        "fontSize" | "font_size" => patch.font_size = Some(parse_f32(key, value)?),
+        "padding" => patch.padding = Some(parse_f32(key, value)?),
+        "gap" => patch.gap = Some(parse_f32(key, value)?),
         other => {
             return Err(JsError::Message(format!("unknown prop `{other}`")));
         }
@@ -210,6 +248,69 @@ mod tests {
                 .as_deref(),
             Some("Hello from Tekto")
         );
+    }
+
+    #[test]
+    fn set_prop_applies_layout_and_padding() {
+        let mut host = TreeHost::new();
+        let ids = host
+            .apply(&[
+                HostOp::Create {
+                    kind: "window".into(),
+                },
+                HostOp::SetProp {
+                    id: 1,
+                    key: "padding".into(),
+                    value: "24".into(),
+                },
+                HostOp::SetProp {
+                    id: 1,
+                    key: "gap".into(),
+                    value: "20".into(),
+                },
+                HostOp::Create {
+                    kind: "rect".into(),
+                },
+                HostOp::SetProp {
+                    id: 2,
+                    key: "height".into(),
+                    value: "64".into(),
+                },
+                HostOp::SetProp {
+                    id: 2,
+                    key: "width".into(),
+                    value: "auto".into(),
+                },
+                HostOp::SetProp {
+                    id: 2,
+                    key: "justifyCenter".into(),
+                    value: "true".into(),
+                },
+                HostOp::SetProp {
+                    id: 2,
+                    key: "padding".into(),
+                    value: "20".into(),
+                },
+                HostOp::Append {
+                    parent: 1,
+                    child: 2,
+                },
+            ])
+            .expect("ops");
+        assert_eq!(ids, vec![1, 2]);
+        let tree = host.tree.borrow();
+        let window = tree.get(NodeId::from_raw(1)).unwrap();
+        assert_eq!(window.layout.padding, 24.0);
+        assert_eq!(window.layout.gap, 20.0);
+        let banner = tree.get(NodeId::from_raw(2)).unwrap();
+        assert_eq!(banner.layout.height, 64.0);
+        assert!(
+            !banner.layout.is_width_set(),
+            "auto width should stay unset, got {}",
+            banner.layout.width
+        );
+        assert!(banner.layout.justify_center);
+        assert_eq!(banner.layout.padding, 20.0);
     }
 
     #[cfg(feature = "quickjs")]
