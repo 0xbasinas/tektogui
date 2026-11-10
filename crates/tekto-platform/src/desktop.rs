@@ -6,7 +6,8 @@
 //! stay in sync.
 
 use crate::{
-    logical_from_physical, rgba_to_u32_softbuffer, AppRuntime, PlatformError, WindowOptions,
+    logical_from_physical, rgba_to_u32_softbuffer, AppRuntime, PlatformError, Viewport,
+    WindowOptions,
 };
 use softbuffer::{Context, Surface};
 use std::num::NonZeroU32;
@@ -35,6 +36,7 @@ struct State {
     clear: tekto_tree::Color,
     cursor: Option<(f32, f32)>,
     handle: Option<Arc<SharedTreeHandle>>,
+    viewport: Arc<Mutex<Viewport>>,
     #[cfg(feature = "a11y-os")]
     adapter: accesskit_winit::Adapter,
 }
@@ -44,6 +46,7 @@ struct App {
     runtime: AppRuntime,
     tree: Arc<Mutex<Tree>>,
     handle: Option<Arc<SharedTreeHandle>>,
+    viewport: Arc<Mutex<Viewport>>,
     state: Option<State>,
 }
 
@@ -88,6 +91,7 @@ impl ApplicationHandler<AppEvent> for App {
             clear: self.runtime.clear,
             cursor: None,
             handle: self.handle.clone(),
+            viewport: Arc::clone(&self.viewport),
             #[cfg(feature = "a11y-os")]
             adapter,
         });
@@ -108,20 +112,15 @@ impl ApplicationHandler<AppEvent> for App {
             state.adapter.process_event(&state.window, &event);
         }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => event_loop.exit(), // run_windowed then clear_endpoint()
             WindowEvent::RedrawRequested => {
                 if let Some(state) = self.state.as_mut() {
                     redraw(state);
                 }
             }
-            WindowEvent::Resized(size) => {
+            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(state) = self.state.as_mut() {
-                    let w = size.width.max(1);
-                    let h = size.height.max(1);
-                    let _ = state.renderer.resize(w, h);
-                    if let Ok(mut tree) = state.tree.lock() {
-                        layout_tree(&mut tree, w as f32, h as f32);
-                    }
+                    relayout_window(state);
                     state.window.request_redraw();
                 }
             }
@@ -162,13 +161,36 @@ fn publish_accesskit(
     });
 }
 
-fn redraw(state: &mut State) {
-    let size = state.window.inner_size();
-    let w = size.width.max(1);
-    let h = size.height.max(1);
-    let _ = state.renderer.resize(w, h);
+fn window_logical_and_physical(window: &Window) -> (f32, f32, f32, u32, u32) {
+    let physical = window.inner_size();
+    let pw = physical.width.max(1);
+    let ph = physical.height.max(1);
+    let scale = (window.scale_factor().max(0.01)) as f32;
+    let lw = pw as f32 / scale;
+    let lh = ph as f32 / scale;
+    (lw, lh, scale, pw, ph)
+}
+
+fn relayout_window(state: &mut State) {
+    let (lw, lh, scale, pw, ph) = window_logical_and_physical(&state.window);
+    let _ = state.renderer.resize(pw, ph);
+    state.renderer.set_scale(scale);
+    if let Ok(mut vp) = state.viewport.lock() {
+        *vp = Viewport {
+            width: lw.round().max(1.0) as u32,
+            height: lh.round().max(1.0) as u32,
+            scale,
+        };
+    }
     if let Ok(mut tree) = state.tree.lock() {
-        layout_tree(&mut tree, w as f32, h as f32);
+        layout_tree(&mut tree, lw, lh);
+    }
+}
+
+fn redraw(state: &mut State) {
+    relayout_window(state);
+    let (_lw, _lh, _scale, pw, ph) = window_logical_and_physical(&state.window);
+    if let Ok(tree) = state.tree.lock() {
         paint_tree(&mut state.renderer, &tree, state.clear);
         publish_accesskit(
             &tree,
@@ -179,10 +201,10 @@ fn redraw(state: &mut State) {
     let Ok(rgba) = state.renderer.rgba8() else {
         return;
     };
-    let Some(width) = NonZeroU32::new(w) else {
+    let Some(width) = NonZeroU32::new(pw) else {
         return;
     };
-    let Some(height) = NonZeroU32::new(h) else {
+    let Some(height) = NonZeroU32::new(ph) else {
         return;
     };
     let _ = state.surface.resize(width, height);
@@ -248,9 +270,9 @@ pub fn run_windowed(runtime: AppRuntime, opts: WindowOptions) -> Result<(), Plat
     let event_loop = EventLoop::<AppEvent>::with_user_event()
         .build()
         .map_err(|e| PlatformError::msg(e.to_string()))?;
-    let (tree, handle) = if opts.dev_server {
+    let (tree, handle, viewport) = if opts.dev_server {
         let proxy = event_loop.create_proxy();
-        let (handle, ep) = crate::start_handle(&prepared, opts.width, opts.height)?;
+        let (handle, ep, viewport) = crate::start_handle(&prepared, opts.width, opts.height)?;
         if let Ok(mut slot) = handle.on_change.lock() {
             *slot = Some(Arc::new(move || {
                 let _ = proxy.send_event(AppEvent::TreeChanged);
@@ -258,16 +280,28 @@ pub fn run_windowed(runtime: AppRuntime, opts: WindowOptions) -> Result<(), Plat
         }
         eprintln!("Tekto dev server at {}", ep.base_url());
         eprintln!("Try: tekto tree    or    tekto screenshot    or    tekto click <id>");
-        (Arc::clone(&handle.tree), Some(handle))
+        (Arc::clone(&handle.tree), Some(handle), viewport)
     } else {
-        (Arc::new(Mutex::new(prepared.tree.clone())), None)
+        (
+            Arc::new(Mutex::new(prepared.tree.clone())),
+            None,
+            Arc::new(Mutex::new(Viewport::new(opts.width, opts.height))),
+        )
     };
     event_loop.set_control_flow(ControlFlow::Wait);
+    struct EndpointGuard;
+    impl Drop for EndpointGuard {
+        fn drop(&mut self) {
+            tekto_mcp::clear_endpoint();
+        }
+    }
+    let _endpoint_guard = EndpointGuard;
     let mut app = App {
         opts,
         runtime: prepared,
         tree,
         handle,
+        viewport,
         state: None,
     };
     event_loop
