@@ -8,12 +8,17 @@
 //! `android.permission.POST_NOTIFICATIONS`. The manifest must declare it.
 //! A denial is [`NativeError::Unavailable`], not a panic. The first denied
 //! call asks the activity to show the system dialog, then returns. A later
-//! `show` succeeds after the user allows notifications.
+//! `show` succeeds after the user allows notifications. On API 26+ the user
+//! can also block the `tekto` channel. That is `Unavailable` as well.
 
 use crate::NativeError;
 
 /// API level that introduced the runtime notification permission.
 const POST_NOTIFICATIONS_SDK: i32 = 33;
+/// API level that requires a notification channel.
+const CHANNEL_SDK: i32 = 26;
+/// `NotificationManager.IMPORTANCE_NONE`. A blocked channel reports this.
+const IMPORTANCE_NONE: i32 = 0;
 
 pub(crate) fn plain_text(title: &str, body: &str) -> Result<(), NativeError> {
     if title.contains('\0') || body.contains('\0') {
@@ -42,6 +47,23 @@ pub(crate) fn allow_post(
     Ok(())
 }
 
+/// Decide whether the `tekto` channel can show a notification.
+///
+/// Channels exist on API 26 and later. `None` means `getNotificationChannel`
+/// returned null after the channel was created. `IMPORTANCE_NONE` (0) means
+/// the user blocked that channel. Creating the channel again does not raise
+/// an importance the user already set.
+pub(crate) fn allow_channel(sdk: i32, importance: Option<i32>) -> Result<(), NativeError> {
+    if sdk < CHANNEL_SDK {
+        return Ok(());
+    }
+    match importance {
+        Some(level) if level > IMPORTANCE_NONE => Ok(()),
+        Some(_) => Err(channel_blocked()),
+        None => Err(channel_missing()),
+    }
+}
+
 fn denied() -> NativeError {
     NativeError::Unavailable {
         capability: "notifications.show",
@@ -55,6 +77,22 @@ fn disabled() -> NativeError {
         capability: "notifications.show",
         platform: "android",
         reason: "notifications are disabled for this app",
+    }
+}
+
+fn channel_blocked() -> NativeError {
+    NativeError::Unavailable {
+        capability: "notifications.show",
+        platform: "android",
+        reason: "the tekto notification channel is blocked",
+    }
+}
+
+fn channel_missing() -> NativeError {
+    NativeError::Unavailable {
+        capability: "notifications.show",
+        platform: "android",
+        reason: "the tekto notification channel is missing",
     }
 }
 
@@ -79,11 +117,10 @@ fn service_unavailable() -> NativeError {
 #[cfg(target_os = "android")]
 mod jni_post {
     use super::{
-        allow_post, denied, not_ready, plain_text, service_unavailable, POST_NOTIFICATIONS_SDK,
+        allow_channel, allow_post, denied, not_ready, plain_text, service_unavailable, CHANNEL_SDK,
+        POST_NOTIFICATIONS_SDK,
     };
 
-    /// API level that requires a notification channel.
-    const CHANNEL_SDK: i32 = 26;
     const CHANNEL_ID: &str = "tekto";
     /// `NotificationManager.IMPORTANCE_DEFAULT`.
     const IMPORTANCE_DEFAULT: i32 = 3;
@@ -198,6 +235,8 @@ mod jni_post {
 
         if sdk >= CHANNEL_SDK {
             create_channel(env, &context)?;
+            let importance = channel_importance(env, &context)?;
+            allow_channel(sdk, importance)?;
         }
         let notification = build_notification(env, &context, sdk, title, body)?;
         let manager = notification_manager(env, &context)?;
@@ -318,6 +357,42 @@ mod jni_post {
         Ok(())
     }
 
+    /// Importance of channel `tekto` after `createNotificationChannel`.
+    ///
+    /// `None` when the manager has no such channel. `IMPORTANCE_NONE` when
+    /// the user blocked it. An existing channel keeps the user's importance.
+    fn channel_importance(
+        env: &mut jni::Env<'_>,
+        context: &JObject<'_>,
+    ) -> Result<Option<i32>, Step> {
+        let manager = notification_manager(env, context)?;
+        let id = env.new_string(CHANNEL_ID)?;
+        let sig = method_sig("(Ljava/lang/String;)Landroid/app/NotificationChannel;")?;
+        let sig = sig.method_signature();
+        let channel = env
+            .call_method(
+                &manager,
+                JNIString::new("getNotificationChannel"),
+                &sig,
+                &[JValue::from(&id)],
+            )?
+            .l()?;
+        if channel.is_null() {
+            return Ok(None);
+        }
+        let importance_sig = method_sig("()I")?;
+        let importance_sig = importance_sig.method_signature();
+        Ok(Some(
+            env.call_method(
+                &channel,
+                JNIString::new("getImportance"),
+                &importance_sig,
+                &[],
+            )?
+            .i()?,
+        ))
+    }
+
     fn build_notification<'local>(
         env: &mut jni::Env<'local>,
         context: &JObject<'_>,
@@ -393,7 +468,7 @@ pub(crate) use jni_post::show;
 
 #[cfg(test)]
 mod tests {
-    use super::{allow_post, plain_text};
+    use super::{allow_channel, allow_post, plain_text};
     use crate::NativeError;
 
     #[test]
@@ -448,6 +523,47 @@ mod tests {
             ),
             "{err}"
         );
+    }
+
+    #[test]
+    fn android_blocked_channel_is_unavailable() {
+        let err = allow_channel(26, Some(0)).expect_err("importance none");
+        assert!(
+            matches!(
+                err,
+                NativeError::Unavailable {
+                    capability: "notifications.show",
+                    platform: "android",
+                    reason: "the tekto notification channel is blocked",
+                }
+            ),
+            "{err}"
+        );
+        let err = allow_channel(33, Some(0)).expect_err("blocked on 33");
+        assert!(
+            matches!(
+                err,
+                NativeError::Unavailable {
+                    reason: "the tekto notification channel is blocked",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        let err = allow_channel(26, None).expect_err("missing channel");
+        assert!(
+            matches!(
+                err,
+                NativeError::Unavailable {
+                    reason: "the tekto notification channel is missing",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        assert!(allow_channel(25, Some(0)).is_ok());
+        assert!(allow_channel(26, Some(3)).is_ok());
+        assert!(allow_channel(34, Some(1)).is_ok());
     }
 
     #[test]

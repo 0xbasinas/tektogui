@@ -135,7 +135,7 @@ That command does not link or run on Windows. Icon lifetime, session failures, a
 
 `Notifications::show` on Android posts one status-bar notification through `NotificationManager` (`src/android_notify.rs`). No GPL library. Android-only dependencies are `jni` 0.22.4 and `ndk-context` 0.1.1, both MIT OR Apache-2.0. `jni` uses default features off, so it does not launch a JVM. The activity or application context is the handle `android-activity` stores in `ndk-context` before `android_main`. If that handle is missing, the error is `NativeError::Unavailable` with reason `Android activity context is not ready`.
 
-The call creates the channel `tekto` on API 26+, then `Notification.Builder` with title, body, and `android.R.drawable.ic_dialog_info`. The notification id is `1`, so a later show replaces the previous one. A NUL in the title or body is `NativeError::Message`.
+The call creates the channel `tekto` on API 26+, then reads it back with `NotificationManager.getNotificationChannel`. `createNotificationChannel` does not change the importance of a channel the user already blocked. If `getImportance` is `IMPORTANCE_NONE` (0), the error is `NativeError::Unavailable` with reason `the tekto notification channel is blocked`. A missing channel after create uses reason `the tekto notification channel is missing`. Below API 26 there is no channel check. The builder uses title, body, and `android.R.drawable.ic_dialog_info`. The notification id is `1`, so a later show replaces the previous one. A NUL in the title or body is `NativeError::Message`.
 
 Manifest, for every APK that calls this (cargo-apk2 metadata):
 
@@ -144,11 +144,11 @@ Manifest, for every APK that calls this (cargo-apk2 metadata):
 name = "android.permission.POST_NOTIFICATIONS"
 ```
 
-`POST_NOTIFICATIONS` is a runtime permission on API 33+ when `targetSdkVersion` is 33 or higher. Below that target the system grants it at install. The plugin calls `checkSelfPermission`. If it is not granted and the context is an `Activity`, it calls `requestPermissions` so the system dialog can appear, then returns `NativeError::Unavailable` with reason `POST_NOTIFICATIONS was denied`. The grant arrives later. Call `show` again after the user allows it. If notifications are turned off for the app, the reason is `notifications are disabled for this app`. A `SecurityException` from `notify` uses the same denial error. Other JNI failures are `NativeError::Message`. None of these panic.
+`POST_NOTIFICATIONS` is a runtime permission on API 33+ when `targetSdkVersion` is 33 or higher. Below that target the system grants it at install. The plugin calls `checkSelfPermission`. If it is not granted and the context is an `Activity`, it calls `requestPermissions` so the system dialog can appear, then returns `NativeError::Unavailable` with reason `POST_NOTIFICATIONS was denied`. The grant arrives later. Call `show` again after the user allows it. If notifications are turned off for the app, the reason is `notifications are disabled for this app`. That check is `areNotificationsEnabled` and does not see a blocked channel. The channel check above covers that case. A `SecurityException` from `notify` uses the same denial error. Other JNI failures are `NativeError::Message`. None of these panic.
 
 `examples/notes-android` declares `POST_NOTIFICATIONS`. Its `target_sdk_version` is still 30, so the runtime dialog is not required until that target is raised.
 
-Host tests cover the denial and disabled decisions (`allow_post`) without a device. Compile-check:
+Host tests cover the denial and disabled decisions (`allow_post`) and a blocked or missing channel (`allow_channel`) without a device. Compile-check:
 
 ```bash
 cargo check -p tekto-native --target aarch64-linux-android
