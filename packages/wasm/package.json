@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",
-  "description": "Browser glue for the Tekto WASM core. Same HostOp JSON as desktop. No DOM types.",
+  "description": "Browser glue for the Tekto WASM core. Same HostOp JSON as desktop. App calls have no DOM types. Optional canvas blit lives in ./canvas.",
   "main": "./src/index.js",
   "types": "./src/index.d.ts",
   "exports": {
@@ -11,11 +11,17 @@
       "types": "./src/index.d.ts",
       "import": "./src/index.js",
       "default": "./src/index.js"
+    },
+    "./canvas": {
+      "types": "./src/canvas.d.ts",
+      "import": "./src/canvas.js",
+      "default": "./src/canvas.js"
     }
   },
   "files": [
     "src",
-    "smoke.html"
+    "smoke.html",
+    "notes.html"
   ],
   "scripts": {
     "test": "node --test test.js"
