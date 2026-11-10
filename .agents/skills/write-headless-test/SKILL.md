@@ -36,7 +36,7 @@ let png = render_headless_to_file(&tree, 640, 400, Some(&path)).unwrap();
 assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
 ```
 
-The existing snapshot test writes a copy to `$TEKTO_SHOT_DIR` if set, otherwise `target/tektogui-shots/notes-headless.png`, and compares PNG bytes to the blessed file `crates/tekto/tests/snapshots/notes-headless.png`. CI fails if the pixels change.
+The existing snapshot test writes a copy to `$TEKTO_SHOT_DIR` if set, otherwise `target/tektogui-shots/notes-headless.png`, and compares PNG bytes to the blessed file `crates/tekto/tests/snapshots/notes-headless.png`. Linux PR CI runs this inside `cargo test --workspace --all-targets` (workflow step "Test (replay + headless PNG compare)"). There is no separate screenshot job. CI fails if the pixels change.
 
 ## Commands
 
@@ -70,7 +70,7 @@ Do not start a display or an emulator for these tests.
 
 This helper does not watch a live window or the dev server. It does not run app callbacks or write patches back to source. Pass each action in yourself.
 
-The CI test loads `crates/tekto/tests/fixtures/session.json`, records those events, replays the log, and checks that the tree text, focus, and last click match.
+The same Linux `cargo test --workspace --all-targets` step loads `crates/tekto/tests/fixtures/session.json`, records those events, replays the log, and checks that the tree text, focus, and last click match. That is the CI replay test. Do not add another workflow job for it.
 
 ```bash
 cargo test -p tekto --test record_replay

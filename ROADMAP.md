@@ -71,7 +71,7 @@ Still in Month 1:
 - `app.components` schemas for agents
 - iOS hello (needs a Mac)
 - One real example app people can use
-- CI: headless replay + screenshots; documented store signing
+- CI: headless replay + screenshots; documented store signing (replay and PNG compare run in the Linux test step; signing requirements are in `docs/signing.md`; we still do not sign)
 - Honest list of what is still weaker than Flutter or a native toolkit
 
 Web, GPU, iOS, and perfect IME may slip. If they do, we cut scope rather than rush a wrapper around someone else's engine.
