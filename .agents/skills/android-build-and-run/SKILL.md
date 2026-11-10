@@ -65,6 +65,8 @@ cargo check -p notes-android --target aarch64-linux-android
 
 Do not put this in PR CI. Do not start the emulator if another heavy build is running, and do not run heavy `cargo test` / compiles in parallel with it. This machine often has `/dev/kvm` but no permission, so you **must** pass `-accel off` (TCG, software). Be patient: a cold boot can take several minutes. `-gpu swiftshader_indirect` is optional.
 
+Build the APK first (see Package), with the emulator stopped. Reuse `target/x86_64-linux-android/debug/apk/notes.apk` when it is already current. `tekto dev --android` rebuilds the APK; do not run it while the emulator is up.
+
 ```bash
 source ~/.android-env.sh
 emulator -avd beddcode30 -no-window -memory 2048 -accel off &
@@ -73,21 +75,12 @@ adb wait-for-device
 adb shell getprop sys.boot_completed
 ```
 
-Then install and launch. Either:
-
-```bash
-# Builds, adb install -r, am start, adb forward tcp:8474, waits for /tree.txt
-cargo run -p tekto-cli -- dev --android
-```
-
-or by hand:
+Then install and launch the APK you already built:
 
 ```bash
 adb install -r target/x86_64-linux-android/debug/apk/notes.apk
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 adb forward tcp:8474 tcp:8474
-# Host endpoint so `tekto tree` works (the on-device tekto-dev.json is useless here):
-# tekto dev --android writes this for you.
 ```
 
 The APK requests `android.permission.INTERNET` so the dev server can bind `127.0.0.1:8474` (`ANDROID_DEV_PORT`, overridable with `TEKTO_DEV_HOST` / `TEKTO_DEV_PORT`). After `adb forward`:
@@ -120,13 +113,12 @@ Do not use a broad `pkill`.
 The default APK does **not** enable `quickjs` (keeps nightly Android CI lean). `tekto dev --js --android` builds with `-F quickjs`, installs, forwards port 8474, bundles the TSX entry with esbuild, and `POST /reload`. The host CLI does **not** need `--features quickjs`.
 
 ```bash
-# Prefer a single ABI. beddcode30 is x86_64. Or let the CLI detect it.
-export TEKTO_ANDROID_TARGET=x86_64-linux-android
-# AVD should already be up; do not compile the APK and run the emulator in parallel.
-cargo run -p tekto-cli -- dev --js examples/notes/src/app.tsx --android
+# Emulator stopped. Prefer one ABI. beddcode30 is x86_64.
+cargo apk2 build -p notes-android -F quickjs --target x86_64-linux-android
+# Start beddcode30 only after that APK exists, then adb install, am start, and
+# adb forward tcp:8474. Host esbuild + POST /reload do not need --features quickjs.
+# `tekto dev --js --android` rebuilds the APK; do not run it while the emulator is up.
 ```
-
-Equivalent APK-only command: `cargo apk2 build -p notes-android -F quickjs --target x86_64-linux-android`.
 
 The first painted frame may be the Rust `notes_tree`; the posted bundle then replaces it. Saving the `.tsx` rebuilds and posts again. `POST /reload` still works by hand after `adb forward tcp:8474 tcp:8474`.
 
@@ -155,11 +147,13 @@ Do not start the emulator while another heavy build is running. Do not use displ
 source ~/.android-env.sh
 export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/27.1.12297006}"
 
+# Build (or reuse) the APK first. Do not compile alongside the emulator.
+cargo apk2 build -p notes-android --target x86_64-linux-android
+
 emulator -avd beddcode30 -no-window -memory 2048 -accel off &
 adb wait-for-device
 until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done
 
-cargo apk2 build -p notes-android --target x86_64-linux-android
 adb install -r target/x86_64-linux-android/debug/apk/notes.apk
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 sleep 3
