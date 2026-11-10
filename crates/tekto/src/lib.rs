@@ -16,7 +16,7 @@ pub use tekto_mcp::{
 };
 pub use tekto_native::{
     apply_native_op, current_platform, native, Clipboard, Files, NativeError, NativeOp,
-    Notifications,
+    Notifications, SystemTray, TrayMenuItem,
 };
 pub use tekto_platform::lifecycle::{
     handle_lifecycle, on_resumed, on_suspended, surface_is_live, AppLifecycle,

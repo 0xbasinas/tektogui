@@ -27,6 +27,7 @@ Off by default (opt in only when you need them):
 - `js` — the `HostOp` protocol only (no engine)
 - `quickjs` — embeds QuickJS-ng via `rquickjs` (both MIT). Slow to compile. Do not enable on PR CI. Local check: `cargo test -p tekto-js --features quickjs`. The CLI flag is the same: `cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx`. Hot reload also needs the MIT `esbuild` binary on `PATH` (not a Rust dependency, not on PR CI).
 - `a11y-os` — `accesskit_winit`, which pulls zbus / AT-SPI on Linux
+- `tray` — Linux StatusNotifierItem client inside `tekto-native` (no extra crate). Off by default. `cargo test -p tekto-native --features tray`. Do not enable it on default tests or PR CI.
 
 The `tekto` crate still Android-checks with `--no-default-features --features cpu` so the desktop/winit shell is not in that graph. The Notes APK (`examples/notes-android`) enables `cpu` + `desktop` only for `target_os = "android"` and is packaged with `cargo apk2` / `tekto build --target android`. The default APK does not enable `quickjs`; `tekto dev --js --android` (or `cargo apk2 build -p notes-android -F quickjs`) embeds QuickJS-ng so a TSX bundle can be posted over `adb forward`. Do not enable `quickjs` on the nightly Android CI check, and do not add APK packaging or an emulator to PR CI.
 

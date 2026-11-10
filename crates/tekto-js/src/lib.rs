@@ -255,14 +255,16 @@ pub fn eval_to_tree(source: &str) -> Result<Tree, JsError> {
     Ok(tree)
 }
 
-/// Apply a native plugin op (clipboard, files, and Linux notifications).
+/// Apply a native plugin op (clipboard, files, notifications, and tray).
 ///
 /// This is the JS-facing hook beside [`HostOp`]. Tree ops stay on [`Host`];
 /// these calls return text or nothing, so they do not go through [`Host::apply`].
 /// The JSON shape is [`NativeOp`] (`clipboardGetText`, `clipboardSetText`,
-/// `notificationsShow`, and the `files*` ops).
-/// A missing Linux clipboard session or notification daemon is a
-/// [`JsError::Message`] whose text contains `not available`.
+/// `notificationsShow`, `trayShow`, `trayHide`, `traySetLabel`, `trayTakeClick`,
+/// and the `files*` ops).
+/// A missing Linux clipboard session, notification daemon, or tray watcher is a
+/// [`JsError::Message`] whose text contains `not available`. The tray ops need
+/// the `tekto-native` `tray` feature; without it the error says `not implemented`.
 pub fn apply_native_host_op(op: &NativeOp) -> Result<Option<String>, JsError> {
     apply_native_op(op).map_err(|err| JsError::Message(err.to_string()))
 }

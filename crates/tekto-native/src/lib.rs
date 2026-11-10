@@ -3,8 +3,10 @@
 //! Each capability is a small trait so platforms can be filled in one
 //! at a time (Windows, Linux, Android, later macOS, iOS, and web).
 //! Text clipboard and notifications are implemented on Linux and Windows.
-//! Linux notifications use the freedesktop session bus. The API is
-//! stable for apps and for the JS [`NativeOp`] hook.
+//! Linux notifications use the freedesktop session bus. The Linux system
+//! tray is behind the `tray` feature (StatusNotifierItem on the session
+//! bus, no extra crate). The API is stable for apps and for the JS
+//! [`NativeOp`] hook.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -15,6 +17,8 @@ mod linux;
 mod linux_dialog;
 #[cfg(target_os = "linux")]
 mod linux_notify;
+#[cfg(all(target_os = "linux", feature = "tray"))]
+mod linux_tray;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
@@ -74,6 +78,27 @@ pub enum NativeOp {
         title: String,
         body: String,
     },
+    /// Show the Linux tray icon (`tray` feature). `menu` entries are plain
+    /// labels. A click is collected by [`NativeOp::TrayTakeClick`].
+    TrayShow {
+        label: String,
+        menu: Vec<TrayMenuItem>,
+    },
+    /// Hide the tray icon. Already hidden is success.
+    TrayHide,
+    /// Remember the tray tooltip. Updates a visible icon.
+    TraySetLabel {
+        label: String,
+    },
+    /// `Some(id)` is the oldest menu click. `None` means the queue is empty.
+    TrayTakeClick,
+}
+
+/// One tray menu row. `id` is what a click reports. `label` is the visible text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrayMenuItem {
+    pub id: String,
+    pub label: String,
 }
 
 /// Run one [`NativeOp`] against [`native`].
@@ -101,6 +126,10 @@ pub fn apply_native_op(op: &NativeOp) -> Result<Option<String>, NativeError> {
         }),
         NativeOp::FilesWriteBytes { path, bytes } => host.write_bytes(path, bytes).map(|()| None),
         NativeOp::NotificationsShow { title, body } => host.show(title, body).map(|()| None),
+        NativeOp::TrayShow { label, menu } => host.show_icon(label, menu).map(|()| None),
+        NativeOp::TrayHide => host.hide_icon().map(|()| None),
+        NativeOp::TraySetLabel { label } => host.set_label(label).map(|()| None),
+        NativeOp::TrayTakeClick => host.take_click(),
     }
 }
 
@@ -168,7 +197,21 @@ pub trait Notifications {
 }
 
 pub trait SystemTray {
+    /// Tooltip text. On Linux with the `tray` feature this is stored even
+    /// when the icon is hidden, and pushed to a visible icon.
     fn set_label(&self, label: &str) -> Result<(), NativeError>;
+    /// Show a tray icon and a simple menu. A click is queued for
+    /// [`Self::take_click`] and also passed to the [`Self::set_on_click`] hook.
+    fn show_icon(&self, label: &str, menu: &[TrayMenuItem]) -> Result<(), NativeError>;
+    /// Remove the tray icon.
+    fn hide_icon(&self) -> Result<(), NativeError>;
+    /// Oldest queued menu click, if any.
+    fn take_click(&self) -> Result<Option<String>, NativeError>;
+    /// `fn` called on the tray thread when a menu row is clicked.
+    /// The hook must return quickly and must not call back into the tray
+    /// on that same thread (`hide_icon` from the hook is safe; blocking
+    /// on the hook is not).
+    fn set_on_click(&self, on_click: Option<fn(&str)>) -> Result<(), NativeError>;
 }
 
 pub trait GlobalShortcuts {
@@ -294,8 +337,62 @@ impl Notifications for StubNative {
 }
 
 impl SystemTray for StubNative {
-    fn set_label(&self, _label: &str) -> Result<(), NativeError> {
-        Err(unsupported("tray.set_label"))
+    fn set_label(&self, label: &str) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "tray"))]
+        {
+            linux_tray::set_label(label)
+        }
+        #[cfg(not(all(target_os = "linux", feature = "tray")))]
+        {
+            let _ = label;
+            Err(unsupported("tray.set_label"))
+        }
+    }
+
+    fn show_icon(&self, label: &str, menu: &[TrayMenuItem]) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "tray"))]
+        {
+            linux_tray::show_icon(label, menu)
+        }
+        #[cfg(not(all(target_os = "linux", feature = "tray")))]
+        {
+            let _ = (label, menu);
+            Err(unsupported("tray.show"))
+        }
+    }
+
+    fn hide_icon(&self) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "tray"))]
+        {
+            linux_tray::hide_icon()
+        }
+        #[cfg(not(all(target_os = "linux", feature = "tray")))]
+        {
+            Err(unsupported("tray.hide"))
+        }
+    }
+
+    fn take_click(&self) -> Result<Option<String>, NativeError> {
+        #[cfg(all(target_os = "linux", feature = "tray"))]
+        {
+            linux_tray::take_click()
+        }
+        #[cfg(not(all(target_os = "linux", feature = "tray")))]
+        {
+            Err(unsupported("tray.take_click"))
+        }
+    }
+
+    fn set_on_click(&self, on_click: Option<fn(&str)>) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "tray"))]
+        {
+            linux_tray::set_on_click(on_click)
+        }
+        #[cfg(not(all(target_os = "linux", feature = "tray")))]
+        {
+            let _ = on_click;
+            Err(unsupported("tray.on_click"))
+        }
     }
 }
 
@@ -622,6 +719,99 @@ mod tests {
                     ..
                 }
             ));
+        }
+    }
+
+    #[test]
+    fn tray_op_json_roundtrip() {
+        let op = NativeOp::TrayShow {
+            label: "Tekto".into(),
+            menu: vec![TrayMenuItem {
+                id: "quit".into(),
+                label: "Quit".into(),
+            }],
+        };
+        let json = serde_json::to_string(&op).unwrap();
+        assert_eq!(
+            json,
+            r#"{"op":"trayShow","label":"Tekto","menu":[{"id":"quit","label":"Quit"}]}"#
+        );
+        assert_eq!(serde_json::from_str::<NativeOp>(&json).unwrap(), op);
+        let hide = r#"{"op":"trayHide"}"#;
+        assert_eq!(
+            serde_json::from_str::<NativeOp>(hide).unwrap(),
+            NativeOp::TrayHide
+        );
+        let set = NativeOp::TraySetLabel {
+            label: "Notes".into(),
+        };
+        let set_json = serde_json::to_string(&set).unwrap();
+        assert_eq!(set_json, r#"{"op":"traySetLabel","label":"Notes"}"#);
+        assert_eq!(
+            serde_json::from_str::<NativeOp>(r#"{"op":"trayTakeClick"}"#).unwrap(),
+            NativeOp::TrayTakeClick
+        );
+    }
+
+    /// Without the `tray` feature the icon stays out of the binary and the
+    /// call is a clear `Unsupported` error. Windows stays unsupported (issue #47).
+    #[cfg(not(all(target_os = "linux", feature = "tray")))]
+    #[test]
+    fn tray_without_linux_feature_is_unsupported() {
+        let err = native()
+            .show_icon(
+                "Tekto",
+                &[TrayMenuItem {
+                    id: "quit".into(),
+                    label: "Quit".into(),
+                }],
+            )
+            .expect_err("no tray");
+        assert!(
+            matches!(
+                err,
+                NativeError::Unsupported {
+                    capability: "tray.show",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        let via = apply_native_op(&NativeOp::TrayHide).expect_err("op");
+        assert!(
+            matches!(
+                via,
+                NativeError::Unsupported {
+                    capability: "tray.hide",
+                    ..
+                }
+            ),
+            "{via}"
+        );
+    }
+
+    /// Opt-in live registration. Off unless `TEKTO_TRAY_LIVE=1`. Never uses
+    /// displays `:1` or `:2`.
+    #[cfg(all(target_os = "linux", feature = "tray"))]
+    #[test]
+    fn tray_live_is_opt_in() {
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let reserved = matches!(display.as_str(), ":1" | ":2" | ":1.0" | ":2.0");
+        assert!(
+            !reserved || std::env::var_os("TEKTO_TRAY_LIVE").is_none(),
+            "refusing tray on reserved display {display}"
+        );
+        if std::env::var_os("TEKTO_TRAY_LIVE").is_some() && !linux_tray::skip_live_tray() {
+            native()
+                .show_icon(
+                    "Tekto",
+                    &[TrayMenuItem {
+                        id: "quit".into(),
+                        label: "Quit".into(),
+                    }],
+                )
+                .expect("live tray");
+            native().hide_icon().expect("hide live tray");
         }
     }
 }

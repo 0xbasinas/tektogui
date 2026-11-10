@@ -5,13 +5,13 @@ description: Implement a tekto-native plugin (files, open/save dialogs, clipboar
 
 # Add a native feature
 
-`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs are still `NativeError::Unsupported` (issue #45). Other platforms, tray, and shortcuts return `NativeError::Unsupported { capability, platform }`.
+`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs are still `NativeError::Unsupported` (issue #45). The Linux system tray is the `tray` feature in `src/linux_tray.rs` (no extra crate). Windows tray stays `Unsupported` (issue #47). Other platforms and global shortcuts return `NativeError::Unsupported { capability, platform }`. Without the `tray` feature, tray methods also return `Unsupported`.
 
 Windows code is compile-checked on Linux with `cargo check --target x86_64-pc-windows-gnu -p tekto-native` (no linker, no Windows runtime). Clipboard, files, and notifications still need a Windows machine. Do not treat that check as a runtime test. A toast was not shown on the Linux host that added this path.
 
 On Windows, `arboard` links `clipboard-win` 5.4.3 and `error-code` 3.4.0, both Boost Software License 1.0. That is outside the MIT / Apache-2.0 / BSD / zlib set used for crates this repo adds directly. `windows-sys` and `windows-link` (pulled by `clipboard-win`) are MIT OR Apache-2.0. The file sandbox does not add a crate.
 
-A present platform implementation that cannot reach the OS service (headless Linux, no `DISPLAY` and no `WAYLAND_DISPLAY`, or no session bus / notification daemon) returns `NativeError::Unavailable { capability, platform, reason }`, not `Unsupported`. Do not open displays `:1` or `:2`. Opt-in live checks are `TEKTO_CLIPBOARD_LIVE=1` and `TEKTO_NOTIFY_LIVE=1`.
+A present platform implementation that cannot reach the OS service (headless Linux, no `DISPLAY` and no `WAYLAND_DISPLAY`, no session bus / notification daemon, or no status notifier watcher) returns `NativeError::Unavailable { capability, platform, reason }`, not `Unsupported`. Do not open displays `:1` or `:2`. Opt-in live checks are `TEKTO_CLIPBOARD_LIVE=1`, `TEKTO_NOTIFY_LIVE=1`, and `TEKTO_TRAY_LIVE=1`.
 
 JS calls clipboard and files through `NativeOp` and `apply_native_op`. `tekto-js::apply_native_host_op` wraps that in `JsError`. It is not a scene-tree `HostOp` (get returns text, not a node id). There is still no QuickJS binding for it; do not enable the `quickjs` feature by default.
 
@@ -35,6 +35,21 @@ Dialog ops (Linux only; Windows and other platforms return `Unsupported` for `fi
 Notification op (Linux and Windows; other platforms return `Unsupported` for `notifications.show`):
 
 - `{"op":"notificationsShow","title":"...","body":"..."}` — returns `None`. Title and body are plain text.
+
+Tray ops (Linux, and only when the `tray` feature is on; otherwise `Unsupported` for `tray.show`, `tray.hide`, `tray.set_label`, `tray.take_click`, and `tray.on_click`. Windows is issue #47):
+
+- `{"op":"trayShow","label":"Tekto","menu":[{"id":"quit","label":"Quit"}]}` — returns `None`
+- `{"op":"trayHide"}` — returns `None`
+- `{"op":"traySetLabel","label":"Notes"}` — returns `None`
+- `{"op":"trayTakeClick"}` — `Some(id)` for the oldest menu click, or `None` when the queue is empty
+
+## Linux tray
+
+`SystemTray` on Linux is feature `tray` (`tekto` forwards it to `tekto-native`). Default builds leave it out. The implementation is `src/linux_tray.rs`: StatusNotifierItem plus a D-Bus menu on the session bus. No GTK, no libappindicator, no extra crate.
+
+`show_icon(label, menu)` registers with `org.kde.StatusNotifierWatcher`. `hide_icon` drops that connection. `set_label` stores the tooltip and, when the icon is visible, emits `NewTitle`. Menu rows are `TrayMenuItem { id, label }` (at most 16, unique non-empty ids, no NUL). A click queues `id` for `take_click` and calls the `set_on_click` hook (`Option<fn(&str)>`) on the tray thread. The hook must return quickly. It may call `hide_icon`. It must not block on tray work from that same thread.
+
+No session bus, a refused connection, or a missing watcher is `NativeError::Unavailable` with reason `no session bus or status notifier watcher`. The call does not open `DISPLAY`. Headless tests clear `DBUS_SESSION_BUS_ADDRESS` and point `XDG_RUNTIME_DIR` at an empty directory (`TEKTO_TRAY_HEADLESS_CHILD=1`). `TEKTO_TRAY_LIVE=1` registers a real icon and hides it again. Do not set it when `DISPLAY` is `:1` or `:2`. Run the feature tests with `cargo test -p tekto-native --features tray`. Do not add `tray` to default PR CI.
 
 ## Linux notifications
 
