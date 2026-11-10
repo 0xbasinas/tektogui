@@ -2,6 +2,8 @@
 
 The Tekto CPU core, packaged as a `NativeActivity` APK (`com.tektogui.notes`) that runs the same Notes window as desktop. Entry point is `android_main` in `src/lib.rs`.
 
+GPU paint is optional and not the default. `--features gpu` compiles wgpu / Vello, but the activity still uses the CPU renderer unless you also set `TEKTO_ANDROID_GPU=1`. This repo could not prove Android drivers (the build host has no `/dev/dri`, and the emulator is not part of the check). If the opt-in cannot create a device, paint falls back to CPU. Suspend drops the window surface; a later redraw does not present into a lost `ANativeWindow`.
+
 ## Why cargo-apk2
 
 We use [cargo-apk2](https://crates.io/crates/cargo-apk2) (MIT OR Apache-2.0) instead of a Gradle wrapper or the older rust-mobile `cargo-apk`:
@@ -67,7 +69,7 @@ The first frame may still be the Rust Notes tree; `POST /reload` then swaps in t
 
 Or by hand: `cargo apk2 build -p notes-android -F quickjs --target x86_64-linux-android`.
 
-CI runs `cargo check -p notes-android --target aarch64-linux-android` on `nightly` (and on a manual `workflow_dispatch` with `full=true`), not on every PR. It does not start an emulator or build an APK.
+CI runs `cargo check -p notes-android --target aarch64-linux-android` on `nightly` (and on a manual `workflow_dispatch` with `full=true`), not on every PR. It does not start an emulator or build an APK. It does not pass `--features gpu`. A local GPU compile check is `cargo check -p notes-android --target aarch64-linux-android --features gpu`.
 
 ## Suspend / resume
 

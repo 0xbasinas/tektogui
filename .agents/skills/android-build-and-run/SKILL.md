@@ -36,6 +36,27 @@ cargo install cargo-apk2   # 1.5.x; provides `cargo apk2`
 
 The host `notes-android` crate stays CPU-only so `android-activity` does not enter the default Linux graph. On `target_os = "android"` it enables `tekto` features `cpu` + `desktop`.
 
+## GPU (opt-in, CPU is the default)
+
+Do not turn `gpu` on for the default APK or for nightly Android CI. This environment has no `/dev/dri` and must not start the emulator, so Vulkan / GLES drivers are not treated as reliable.
+
+The `gpu` feature compiles the same offscreen wgpu / Vello path used on desktop (readback, then the softbuffer blit). At runtime Android still uses `CpuRenderer` unless `TEKTO_ANDROID_GPU=1`. If adapter or device creation fails, or a later GPU readback fails while the surface epoch is live, the window paints with the CPU renderer. `classify_present_failure` maps "surface lost", "surface outdated", and a destroyed `ANativeWindow` to "do not present". Suspend still drops the softbuffer before the window.
+
+```bash
+cargo check -p notes-android --target aarch64-linux-android
+cargo check -p notes-android --target aarch64-linux-android --features gpu
+cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu,desktop,gpu
+```
+
+Host tests for the policy and the lost-surface classifier (no emulator):
+
+```bash
+cargo test -p tekto-platform --lib gpu_policy
+cargo test -p tekto-render --lib present_failure
+```
+
+A device trial, only when you already have a running emulator or a phone, is `cargo apk2 build -p notes-android --features gpu` and `TEKTO_ANDROID_GPU=1` in the process environment. Leave the default package without that flag.
+
 ## Package
 
 ```bash
