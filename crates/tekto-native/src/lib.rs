@@ -3,7 +3,7 @@
 //! Each capability is a small trait so platforms can be filled in one
 //! at a time (Windows, Linux, Android, later macOS, iOS, and web).
 //! Text clipboard, notifications, and open/save dialogs are implemented on
-//! Linux and Windows.
+//! Linux and Windows. Android notifications use `NotificationManager`.
 //! Linux notifications use the freedesktop session bus. The system tray is
 //! behind the `tray` feature (StatusNotifierItem on Linux, `Shell_NotifyIconW`
 //! on Windows, no extra crate). Linux and Windows global shortcuts are behind
@@ -13,6 +13,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[cfg(any(target_os = "android", test))]
+mod android_notify;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
@@ -82,8 +84,8 @@ pub enum NativeOp {
         path: String,
         bytes: Vec<u8>,
     },
-    /// Show a plain-text desktop notification. Linux and Windows; other platforms
-    /// return [`NativeError::Unsupported`].
+    /// Show a plain-text notification. Linux, Windows, and Android; other
+    /// platforms return [`NativeError::Unsupported`].
     NotificationsShow {
         title: String,
         body: String,
@@ -372,7 +374,11 @@ impl Notifications for StubNative {
         {
             windows_notify::show(title, body)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "android")]
+        {
+            android_notify::show(title, body)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
         {
             let _ = (title, body);
             Err(unsupported("notifications.show"))
@@ -1033,7 +1039,23 @@ mod tests {
             );
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "android")]
+        {
+            let err = native().show("Tekto", "body").expect_err("no activity");
+            assert!(
+                matches!(
+                    err,
+                    NativeError::Unavailable {
+                        capability: "notifications.show",
+                        platform: "android",
+                        ..
+                    }
+                ),
+                "{err}"
+            );
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
         {
             let err = native().show("Tekto", "body").expect_err("stub");
             assert!(matches!(
