@@ -5,7 +5,7 @@ description: Implement a tekto-native plugin (files, open/save dialogs, clipboar
 
 # Add a native feature
 
-`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Other platforms, dialogs, tray, and shortcuts return `NativeError::Unsupported { capability, platform }`.
+`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs are still `NativeError::Unsupported` (issue #45). Other platforms, tray, and shortcuts return `NativeError::Unsupported { capability, platform }`.
 
 Windows code is compile-checked on Linux with `cargo check --target x86_64-pc-windows-gnu -p tekto-native` (no linker, no Windows runtime). Clipboard, files, and notifications still need a Windows machine. Do not treat that check as a runtime test. A toast was not shown on the Linux host that added this path.
 
@@ -26,6 +26,11 @@ File ops (Linux and Windows; other platforms return `Unsupported` for `files.rea
 - `{"op":"filesWriteText","path":"notes/a.txt","text":"..."}` — returns `None`
 - `{"op":"filesReadBytes","path":"blob"}` — returns `Some` of a JSON byte array encoded as a string, for example `"[0,255]"`. The op result type is still `Option<String>`.
 - `{"op":"filesWriteBytes","path":"blob","bytes":[0,255]}` — `bytes` is a JSON array of numbers 0–255 (`Vec<u8>`). Returns `None`.
+
+Dialog ops (Linux only; Windows and other platforms return `Unsupported` for `files.open_dialog` / `files.save_dialog`, issue #45):
+
+- `{"op":"filesOpenDialog"}` — `Ok(Some(absolute path))`, or `Ok(None)` on cancel
+- `{"op":"filesSaveDialog"}` — same result shape. Save asks zenity to confirm overwrite.
 
 Notification op (Linux and Windows; other platforms return `Unsupported` for `notifications.show`):
 
@@ -49,7 +54,11 @@ That command does not link or run on Windows. Icon lifetime, session failures, a
 
 ## Linux file sandbox
 
-`Files::read_to_string`, `write_string`, `read_bytes`, and `write_bytes` on Linux go through `linux::read_file` / `write_file`. The root is `$XDG_DATA_HOME/tekto` when `XDG_DATA_HOME` is absolute, otherwise `$HOME/.local/share/tekto`. The root is created if needed. Paths must be relative and made only of normal components: no absolute paths, empty segments, `.`, `..`, or a NUL. Each component is opened with `openat` and `O_NOFOLLOW` (and `O_DIRECTORY` for parents), so a symlink or a rename out of the tree fails. Parent directories must already exist; the plugin does not create them. New files are mode `0o600`. `read_to_string` is UTF-8 over `read_bytes`. Dialogs and paths outside this directory stay unsupported. Headless confinement tests set `XDG_DATA_HOME` in a child process (`TEKTO_FILES_TEST_CHILD=1`) so they do not write the developer’s real app-data directory.
+`Files::read_to_string`, `write_string`, `read_bytes`, and `write_bytes` on Linux go through `linux::read_file` / `write_file`. The root is `$XDG_DATA_HOME/tekto` when `XDG_DATA_HOME` is absolute, otherwise `$HOME/.local/share/tekto`. The root is created if needed. Paths must be relative and made only of normal components: no absolute paths, empty segments, `.`, `..`, or a NUL. Each component is opened with `openat` and `O_NOFOLLOW` (and `O_DIRECTORY` for parents), so a symlink or a rename out of the tree fails. Parent directories must already exist; the plugin does not create them. New files are mode `0o600`. `read_to_string` is UTF-8 over `read_bytes`. The sandboxed read and write methods do not accept a dialog path. Headless confinement tests set `XDG_DATA_HOME` in a child process (`TEKTO_FILES_TEST_CHILD=1`) so they do not write the developer’s real app-data directory.
+
+## Linux open and save dialogs
+
+`Files::open_dialog` and `Files::save_dialog` on Linux run `zenity --file-selection` from `src/linux_dialog.rs`. Save also passes `--save --confirm-overwrite`. No new crate. A chosen file is `Ok(Some(path))` only when the path is absolute. Cancel (zenity exit code 1 and empty stderr) is `Ok(None)`. If both `DISPLAY` and `WAYLAND_DISPLAY` are missing or empty, if `zenity` cannot be started, or if the helper fails another way, the error is `NativeError::Unavailable` with reason `no usable display or zenity file dialog`. A non-UTF-8 path is `NativeError::Message`. Do not open displays `:1` or `:2`. Windows still returns `Unsupported` for `files.open_dialog` and `files.save_dialog` (issue #45). Rust can open the selected path with normal filesystem APIs. The TypeScript bridge returns the same path string and does not yet read that file.
 
 ## Windows file sandbox
 

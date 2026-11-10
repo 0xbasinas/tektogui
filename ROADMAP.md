@@ -52,7 +52,7 @@ Still in Month 1:
 - WASM build of the core
 - Web paint: CPU renderer to canvas, then WebGPU if the GPU backend is ready
 - TypeScript apps on the browser engine, same JSX API
-- File open/save dialogs on Windows and Linux
+- File open/save dialogs on Windows (Linux uses zenity; see `docs/architecture.md`)
 - System tray and global shortcuts on desktop
 - Better list virtualization and scroll feel
 
