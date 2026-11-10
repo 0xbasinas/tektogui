@@ -1,5 +1,10 @@
 /** JSX factory. Returns a plain element tree, never a DOM node. */
 
+import schema from "./components.json" with { type: "json" };
+
+/** Same document `app.components` returns. Kinds, props, and events. */
+export const componentSchema = schema;
+
 export const Fragment = Symbol.for("tekto.fragment");
 
 export function jsx(type, props, key) {
@@ -18,18 +23,10 @@ export function isElement(value) {
   return value !== null && typeof value === "object" && "type" in value && "props" in value;
 }
 
-const INTRINSICS = new Set([
-  "window",
-  "group",
-  "rect",
-  "text",
-  "button",
-  "text_field",
-  "scroll",
-  "list",
-  "list_item",
-]);
-const PROPS = new Set(["name", "title", "text", "fill", "color", "fontSize", "font_size", "width", "height", "padding", "gap", "column", "justifyCenter", "justify_center"]);
+const INTRINSICS = new Set(schema.components.map((c) => c.name));
+const PROPS = new Set(
+  schema.components.flatMap((c) => c.props.map((p) => p.name)).concat(Object.keys(schema.propAliases ?? {})),
+);
 
 function childrenOf(props) {
   if (!props || props.children == null) return [];

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { jsx, jsxs, isElement, Fragment } from "./src/index.js";
+import { jsx, jsxs, isElement, Fragment, componentSchema } from "./src/index.js";
 
 test("jsx builds a plain element, not a DOM node", () => {
   const el = jsxs("window", { title: "Notes", children: [jsx("text", { children: "Hi" })] });
@@ -98,6 +98,18 @@ test("list lowers to list and list_item rows", () => {
   assert.ok(ops.some((o) => o.op === "create" && o.kind === "list_item"));
   assert.ok(ops.some((o) => o.op === "setProp" && o.key === "height" && o.value === "80"));
   assert.ok(ops.some((o) => o.op === "setText" && o.text === "Tall"));
+});
+
+test("component schema is what the runtime mounts", () => {
+  const names = componentSchema.components.map((c) => c.name);
+  for (const kind of ["button", "text_field", "scroll", "list", "list_item", "text", "window"]) {
+    const spec = componentSchema.components.find((c) => c.name === kind);
+    assert.ok(spec, `schema omits core widget ${kind}`);
+    assert.ok(Array.isArray(spec.props));
+    assert.ok(Array.isArray(spec.events));
+  }
+  assert.ok(names.includes("button"));
+  assert.throws(() => renderToOps(jsx("nope", {})), /unknown element type nope/);
 });
 
 test("text_field lowers to a labeled value", () => {

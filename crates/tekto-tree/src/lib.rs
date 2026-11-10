@@ -96,6 +96,22 @@ impl NodeKind {
             _ => None,
         }
     }
+
+    /// Every kind. Add a variant here when you add one to the enum so the
+    /// component schema test fails until `components.json` lists it.
+    pub fn all() -> &'static [NodeKind] {
+        &[
+            NodeKind::Window,
+            NodeKind::Group,
+            NodeKind::Rect,
+            NodeKind::Text,
+            NodeKind::Button,
+            NodeKind::TextField,
+            NodeKind::Scroll,
+            NodeKind::List,
+            NodeKind::ListItem,
+        ]
+    }
 }
 
 /// RGBA color, channels in 0..=255.

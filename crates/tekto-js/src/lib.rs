@@ -200,6 +200,24 @@ fn parse_bool(key: &str, value: &str) -> Result<bool, JsError> {
     }
 }
 
+/// Prop keys `setProp` accepts. `components.json` must stay inside this set
+/// (plus the JSX alias `title`, which is rewritten to `name` before the host).
+pub const HOST_PROP_KEYS: &[&str] = &[
+    "width",
+    "height",
+    "column",
+    "justifyCenter",
+    "justify_center",
+    "text",
+    "name",
+    "fill",
+    "color",
+    "fontSize",
+    "font_size",
+    "padding",
+    "gap",
+];
+
 fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), JsError> {
     match key {
         "width" | "height" | "column" | "justifyCenter" | "justify_center" => {
@@ -730,5 +748,26 @@ mod tests {
             );
         }
         assert!(report.contains("native op JSON"), "{pretty}");
+    }
+
+    #[test]
+    fn component_schema_props_are_host_props() {
+        let raw = include_str!("../../../packages/jsx-runtime/src/components.json");
+        let schema: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let aliases = schema["propAliases"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        for comp in schema["components"].as_array().unwrap() {
+            for prop in comp["props"].as_array().unwrap() {
+                let name = prop["name"].as_str().unwrap();
+                let host = aliases.get(name).and_then(|v| v.as_str()).unwrap_or(name);
+                assert!(
+                    HOST_PROP_KEYS.contains(&host),
+                    "{} prop {name} is not a host prop",
+                    comp["name"]
+                );
+            }
+        }
     }
 }

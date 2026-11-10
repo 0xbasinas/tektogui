@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "description": "JSX components an agent can mount. Kinds match NodeKind and tekto-widgets. Props are forwarded by @tektogui/jsx-runtime. There is no onClick prop; events are host actions (ui.click, ui.type, wheel, IME).",
+  "propAliases": {
+    "title": "name",
+    "font_size": "fontSize",
+    "justify_center": "justifyCenter"
+  },
+  "components": [
+    {
+      "name": "window",
+      "description": "Root window. Rust helper tekto::window sets page fill, padding, and gap. JSX does not.",
+      "props": [
+        {"name": "name", "type": "string", "description": "Accessible name. JSX title is an alias."},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string", "description": "#rrggbb or #rrggbbaa."},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"}
+      ],
+      "events": []
+    },
+    {
+      "name": "group",
+      "description": "Layout box with no paint of its own.",
+      "props": [
+        {"name": "name", "type": "string"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": []
+    },
+    {
+      "name": "rect",
+      "description": "Filled rectangle. The Rust banner() helper is a rect named banner, not a separate kind.",
+      "props": [
+        {"name": "name", "type": "string"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": []
+    },
+    {
+      "name": "text",
+      "description": "Text leaf. A string child becomes the text.",
+      "props": [
+        {"name": "name", "type": "string"},
+        {"name": "text", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"}
+      ],
+      "events": []
+    },
+    {
+      "name": "button",
+      "description": "Labeled button. Rust button() sets fill, color, font size, and padding. JSX does not, so set those props when the sketch should match.",
+      "props": [
+        {"name": "name", "type": "string", "description": "Accessible label. Defaults from the text child when unset."},
+        {"name": "text", "type": "string"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "padding", "type": "number"}
+      ],
+      "events": [
+        {"name": "click", "description": "Pointer click on the node. Agents use ui.click with the stable id. No onClick prop."}
+      ]
+    },
+    {
+      "name": "text_field",
+      "description": "Single-line field. name is the label. text is the committed value.",
+      "props": [
+        {"name": "name", "type": "string", "description": "Accessible label."},
+        {"name": "text", "type": "string", "description": "Committed value."},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "padding", "type": "number"}
+      ],
+      "events": [
+        {"name": "click", "description": "Focuses the field, moves the caret to the end, and clears a preedit."},
+        {"name": "type", "description": "ui.type inserts plain characters at the caret. Not an IME and not Backspace."},
+        {"name": "key", "description": "Desktop Backspace and printable keys on the focused field."},
+        {"name": "ime", "description": "Desktop IME preedit and commit. AccessKit value includes the preedit."}
+      ]
+    },
+    {
+      "name": "scroll",
+      "description": "Vertical viewport. Children keep their height. Paint is clipped. scroll_y shifts them.",
+      "props": [
+        {"name": "name", "type": "string"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"}
+      ],
+      "events": [
+        {"name": "scroll", "description": "Wheel (48px per notch) and pointer drag change scroll_y. Clamped, no rubber-band."}
+      ]
+    },
+    {
+      "name": "list",
+      "description": "Column of list_item rows. JSX does not add a scroll parent; wrap the list in scroll when it should clip. The Rust list() helper may insert that scroll.",
+      "props": [
+        {"name": "name", "type": "string"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number", "description": "Viewport height used by the Rust helper."},
+        {"name": "gap", "type": "number"}
+      ],
+      "events": []
+    },
+    {
+      "name": "list_item",
+      "description": "One list row. name and text are the label.",
+      "props": [
+        {"name": "name", "type": "string"},
+        {"name": "text", "type": "string"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "padding", "type": "number"}
+      ],
+      "events": [
+        {"name": "click", "description": "Pointer click. Agents use ui.click with the row id."}
+      ]
+    }
+  ]
+}

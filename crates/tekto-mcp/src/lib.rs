@@ -447,6 +447,7 @@ fn dispatch(
         }
         ("GET", "/state") => ok_json(handle.state_json()),
         ("GET", "/logs") => ok_json(json!({ "logs": handle.logs() })),
+        ("GET", "/components") => ok_json(components_value()?),
         ("POST", "/patch") => {
             let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
             let id = v
@@ -655,13 +656,26 @@ fn tool_list() -> Value {
         {"name": "ui.type", "description": "Insert plain characters at the caret of a text field (by stable id) and focus it. Not an IME: no composition or candidate window. Backspace is a desktop key, not this tool.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
         {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, fontSize, padding, or gap. Returns the updated node and a writeback report. Applies immediately (no reload). Unique literals in the app project are written back to source; ambiguous edits stay in the runtime tree.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}, "padding": {"type": "number"}, "gap": {"type": "number"}}, "required": ["id"]}},
         {"name": "app.state", "description": "Read opted-in app state as JSON.", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "app.logs", "description": "Read structured logs.", "inputSchema": {"type": "object", "properties": {}}}
+        {"name": "app.logs", "description": "Read structured logs.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "app.components", "description": "JSON schema of JSX components: kinds, props, and events. Same file the JSX runtime mounts. Does not need a running app.", "inputSchema": {"type": "object", "properties": {}}}
     ])
+}
+
+/// Shared component catalog (`packages/jsx-runtime/src/components.json`).
+/// The JSX runtime imports this file. `app.components` returns it.
+pub const COMPONENTS_SCHEMA: &str =
+    include_str!("../../../packages/jsx-runtime/src/components.json");
+
+fn components_value() -> Result<Value, McpError> {
+    Ok(serde_json::from_str(COMPONENTS_SCHEMA)?)
 }
 
 fn call_tool(params: &Value) -> Result<Value, McpError> {
     let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
+    if name == "app.components" {
+        return Ok(json!({"content": [{"type": "text", "text": COMPONENTS_SCHEMA}]}));
+    }
     let ep = read_endpoint()?;
     let base = ep.base_url();
     match name {
@@ -833,5 +847,109 @@ mod tests {
             .enqueue_js("tekto.create('window')".into())
             .unwrap_err();
         assert!(err.to_string().contains("no JS runtime"), "{err}");
+    }
+
+    #[test]
+    fn app_components_lists_core_widgets() {
+        let listed = tool_list();
+        assert!(listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "app.components"));
+
+        let result = call_tool(&json!({"name": "app.components", "arguments": {}})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert_eq!(text, COMPONENTS_SCHEMA);
+        let schema: Value = serde_json::from_str(text).unwrap();
+        let names: Vec<&str> = schema["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap())
+            .collect();
+
+        let kind_names: Vec<&str> = tekto_tree::NodeKind::all()
+            .iter()
+            .map(|k| k.as_str())
+            .collect();
+        assert_eq!(
+            names, kind_names,
+            "components.json must list every NodeKind and nothing else"
+        );
+
+        // Minimum an agent needs. Dropping a core widget, or a prop/event
+        // the widgets actually expose, fails this test.
+        let required: &[(&str, &[&str], &[&str])] = &[
+            (
+                "button",
+                &["name", "text", "fill", "color", "fontSize", "padding"],
+                &["click"],
+            ),
+            (
+                "text_field",
+                &["name", "text", "fill", "color", "fontSize", "padding"],
+                &["click", "type", "key", "ime"],
+            ),
+            ("scroll", &["width", "height"], &["scroll"]),
+            ("list", &["name", "width", "height"], &[]),
+            ("list_item", &["name", "text", "height"], &["click"]),
+            ("text", &["text", "color", "fontSize"], &[]),
+            (
+                "window",
+                &["name", "width", "height", "fill", "padding", "gap"],
+                &[],
+            ),
+        ];
+        for (widget, props, events) in required {
+            let spec = schema["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["name"] == *widget)
+                .unwrap_or_else(|| panic!("schema omits core widget {widget}"));
+            let got_props: Vec<&str> = spec["props"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["name"].as_str().unwrap())
+                .collect();
+            for prop in *props {
+                assert!(
+                    got_props.contains(prop),
+                    "{widget} schema omits prop {prop}"
+                );
+            }
+            let got_events: Vec<&str> = spec["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["name"].as_str().unwrap())
+                .collect();
+            for event in *events {
+                assert!(
+                    got_events.contains(event),
+                    "{widget} schema omits event {event}"
+                );
+            }
+        }
+
+        let (_status, _ct, body) = dispatch(
+            &SharedTreeHandle {
+                tree: Arc::new(Mutex::new(Tree::new())),
+                render: Arc::new(|_| Ok(Vec::new())),
+                logs: Arc::new(Mutex::new(Vec::new())),
+                on_change: Mutex::new(None),
+                pending_js: Mutex::new(None),
+                apply_js: Mutex::new(None),
+                last_writeback: Mutex::new(None),
+            },
+            "GET",
+            "/components",
+            "",
+        )
+        .unwrap();
+        let http: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(http["components"], schema["components"]);
     }
 }
