@@ -6,7 +6,8 @@
 //! real mouse event works even when the backend never sends a synthetic
 //! release.
 //!
-//! A completed tap on a scroll clicks. A cancelled touch does not.
+//! A completed undragged tap clicks, on a scroll or off it. The click waits
+//! until that end. A cancelled touch does not click.
 
 use tekto_tree::{NodeId, Tree};
 
@@ -145,25 +146,17 @@ pub(crate) fn apply_pointer_op(
             pointer.press_origin = Some((x, y));
             pointer.dragged = false;
             pointer.drag_scroll = tree.scroll_touch_begin(x, y, now_ms);
-            if pointer.drag_scroll.is_none() {
-                PointerEffect {
-                    redraw: false,
-                    click_at: Some((x, y)),
-                }
-            } else {
-                PointerEffect::quiet()
-            }
+            // Click only after a completed undragged end. A press that is not
+            // on a scroll must not click yet: a later cancel cannot undo it.
+            PointerEffect::quiet()
         }
         PointerOp::Drag { x, y } => {
-            if pointer.drag_scroll.is_none() {
-                return PointerEffect::quiet();
-            }
             if let Some((ox, oy)) = pointer.press_origin {
                 if (x - ox).abs() + (y - oy).abs() >= DRAG_SLOP {
                     pointer.dragged = true;
                 }
             }
-            if !pointer.dragged {
+            if pointer.drag_scroll.is_none() || !pointer.dragged {
                 return PointerEffect::quiet();
             }
             let _ = tree.scroll_touch_move(y, now_ms);
@@ -175,7 +168,7 @@ pub(crate) fn apply_pointer_op(
         PointerOp::End { commit } => {
             let was_down = pointer.pointer_down;
             pointer.pointer_down = false;
-            let scroll = pointer.drag_scroll.take();
+            pointer.drag_scroll = None;
             pointer.press_origin = None;
             let flung = if commit {
                 tree.scroll_touch_end(now_ms)
@@ -183,7 +176,7 @@ pub(crate) fn apply_pointer_op(
                 tree.scroll_touch_cancel();
                 false
             };
-            let click_at = if commit && was_down && scroll.is_some() && !pointer.dragged {
+            let click_at = if commit && was_down && !pointer.dragged {
                 pointer.cursor
             } else {
                 None
@@ -278,6 +271,46 @@ mod tests {
         let release = pointer.on_left_button(false);
         assert!(drive(&mut pointer, &mut tree, release, 70.0));
         assert_eq!(tree.last_click, Some(button));
+    }
+
+    /// Same delivery as `deliver_pointer`: a `click_at` on the effect is a
+    /// click, and it happens in this call, not later.
+    #[test]
+    fn cancelled_touch_off_scroll_does_not_click() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        tree.get_mut(root).unwrap().bounds = Rect::new(0.0, 0.0, 200.0, 400.0);
+        let button = tree.add(NodeKind::Button, Some(root)).unwrap();
+        tree.get_mut(button).unwrap().bounds = Rect::new(10.0, 20.0, 80.0, 32.0);
+        assert!(tree.scroll_target_at(20.0, 30.0).is_none());
+
+        let mut pointer = PointerSession::default();
+        let start = pointer.on_touch(9, FingerPhase::Started, 20.0, 30.0);
+        let began = apply_pointer_op(&mut pointer, &mut tree, start, 0.0);
+        assert_eq!(began.click_at, None);
+        assert_eq!(tree.last_click, None);
+
+        let cancel = pointer.on_touch(9, FingerPhase::Cancelled, 21.0, 30.0);
+        assert!(!pointer.swallow_mouse);
+        let cancelled = apply_pointer_op(&mut pointer, &mut tree, cancel, 30.0);
+        assert_eq!(cancelled.click_at, None);
+        assert_eq!(tree.last_click, None);
+        assert!(!pointer.pointer_down);
+
+        let start = pointer.on_touch(9, FingerPhase::Started, 20.0, 30.0);
+        assert!(!drive(&mut pointer, &mut tree, start, 40.0));
+        let end = pointer.on_touch(9, FingerPhase::Ended, 20.0, 30.0);
+        assert!(drive(&mut pointer, &mut tree, end, 80.0));
+        assert_eq!(tree.last_click, Some(button));
+
+        tree.last_click = None;
+        let start = pointer.on_touch(9, FingerPhase::Started, 20.0, 30.0);
+        assert!(!drive(&mut pointer, &mut tree, start, 100.0));
+        let drag = pointer.on_touch(9, FingerPhase::Moved, 40.0, 30.0);
+        assert!(!drive(&mut pointer, &mut tree, drag, 120.0));
+        let end = pointer.on_touch(9, FingerPhase::Ended, 40.0, 30.0);
+        assert!(!drive(&mut pointer, &mut tree, end, 140.0));
+        assert_eq!(tree.last_click, None);
     }
 
     #[test]
