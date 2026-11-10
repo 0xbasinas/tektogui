@@ -1,39 +1,173 @@
 //! Windows text clipboard and sandboxed app-data files.
 //!
-//! Compile-checked on Linux for `x86_64-pc-windows-gnu`. Clipboard and file
-//! behavior still need a Windows machine. No new crates: clipboard uses
-//! `arboard` (MIT OR Apache-2.0); files use `ntdll` (`NtCreateFile`).
+//! Clipboard uses Win32 directly; files use `ntdll` (`NtCreateFile`).
 use crate::NativeError;
-use arboard::{Clipboard, Error};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Component, Path, PathBuf};
 
-fn map_error(capability: &'static str, err: Error) -> NativeError {
-    match err {
-        Error::ClipboardNotSupported => NativeError::Unavailable {
-            capability,
-            platform: "windows",
-            reason: "clipboard is not available in this session",
-        },
-        other => NativeError::Message(format!("{capability}: {other}")),
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn CreateWindowExW(
+        ex_style: u32,
+        class: *const u16,
+        name: *const u16,
+        style: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        parent: *mut core::ffi::c_void,
+        menu: *mut core::ffi::c_void,
+        instance: *mut core::ffi::c_void,
+        param: *mut core::ffi::c_void,
+    ) -> *mut core::ffi::c_void;
+    fn DestroyWindow(window: *mut core::ffi::c_void) -> i32;
+    fn OpenClipboard(owner: *mut core::ffi::c_void) -> i32;
+    fn CloseClipboard() -> i32;
+    fn EmptyClipboard() -> i32;
+    fn IsClipboardFormatAvailable(format: u32) -> i32;
+    fn GetClipboardData(format: u32) -> *mut core::ffi::c_void;
+    fn SetClipboardData(format: u32, memory: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+}
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GlobalAlloc(flags: u32, bytes: usize) -> *mut core::ffi::c_void;
+    fn GlobalFree(memory: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+    fn GlobalLock(memory: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+    fn GlobalUnlock(memory: *mut core::ffi::c_void) -> i32;
+    fn GlobalSize(memory: *mut core::ffi::c_void) -> usize;
+}
+const CF_UNICODETEXT: u32 = 13;
+const GMEM_MOVEABLE: u32 = 2;
+
+struct OpenClipboardGuard(*mut core::ffi::c_void);
+impl OpenClipboardGuard {
+    fn open(capability: &'static str) -> Result<Self, NativeError> {
+        // SAFETY: STATIC is a system window class. A message-only window gives
+        // EmptyClipboard a real owner, as required by SetClipboardData.
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let window = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                (-3isize) as *mut _,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            if window.is_null() {
+                return Err(clipboard_error("create owner"));
+            }
+            if OpenClipboard(window) == 0 {
+                DestroyWindow(window);
+                return Err(NativeError::Unavailable {
+                    capability,
+                    platform: "windows",
+                    reason: "cannot open clipboard (it may be in use)",
+                });
+            }
+            Ok(Self(window))
+        }
     }
+}
+impl Drop for OpenClipboardGuard {
+    fn drop(&mut self) {
+        // SAFETY: this guard owns an open clipboard.
+        unsafe {
+            CloseClipboard();
+            DestroyWindow(self.0);
+        }
+    }
+}
+struct GlobalLockGuard(*mut core::ffi::c_void);
+impl Drop for GlobalLockGuard {
+    fn drop(&mut self) {
+        // SAFETY: the guard owns one successful GlobalLock call.
+        unsafe {
+            GlobalUnlock(self.0);
+        }
+    }
+}
+fn clipboard_error(action: &str) -> NativeError {
+    NativeError::Message(format!(
+        "clipboard {action}: {}",
+        std::io::Error::last_os_error()
+    ))
 }
 
 pub(crate) fn get_text() -> Result<String, NativeError> {
-    let mut clipboard = Clipboard::new().map_err(|e| map_error("clipboard.get", e))?;
-    match clipboard.get_text() {
-        Ok(text) => Ok(text),
-        Err(Error::ContentNotAvailable) => Ok(String::new()),
-        Err(e) => Err(map_error("clipboard.get", e)),
+    let _clipboard = OpenClipboardGuard::open("clipboard.get")?;
+    // SAFETY: clipboard is open; the handle remains valid until it closes.
+    unsafe {
+        if IsClipboardFormatAvailable(CF_UNICODETEXT) == 0 {
+            return Ok(String::new());
+        }
+        let memory = GetClipboardData(CF_UNICODETEXT);
+        if memory.is_null() {
+            return Err(clipboard_error("get"));
+        }
+        let size = GlobalSize(memory);
+        let ptr = GlobalLock(memory).cast::<u16>();
+        if ptr.is_null() {
+            return Err(clipboard_error("lock"));
+        }
+        let _lock = GlobalLockGuard(memory);
+        let units = std::slice::from_raw_parts(ptr, size / 2);
+        let result = match units.iter().position(|&unit| unit == 0) {
+            Some(end) => String::from_utf16(&units[..end])
+                .map_err(|e| NativeError::Message(format!("clipboard: invalid UTF-16: {e}"))),
+            None => Err(NativeError::Message(
+                "clipboard: unterminated Unicode text".into(),
+            )),
+        };
+        result
     }
 }
 
 pub(crate) fn set_text(text: &str) -> Result<(), NativeError> {
-    Clipboard::new()
-        .and_then(|mut clipboard| clipboard.set_text(text))
-        .map_err(|e| map_error("clipboard.set", e))
+    if text.contains('\0') {
+        return Err(NativeError::Message("clipboard: text contains NUL".into()));
+    }
+    let units: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: movable global memory is required by SetClipboardData; it is freed
+    // on every failure and becomes owned by the system after a successful set.
+    unsafe {
+        let memory = GlobalAlloc(GMEM_MOVEABLE, units.len() * 2);
+        if memory.is_null() {
+            return Err(clipboard_error("allocate"));
+        }
+        let ptr = GlobalLock(memory).cast::<u16>();
+        if ptr.is_null() {
+            GlobalFree(memory);
+            return Err(clipboard_error("lock"));
+        }
+        std::ptr::copy_nonoverlapping(units.as_ptr(), ptr, units.len());
+        GlobalUnlock(memory);
+        let _clipboard = match OpenClipboardGuard::open("clipboard.set") {
+            Ok(guard) => guard,
+            Err(err) => {
+                GlobalFree(memory);
+                return Err(err);
+            }
+        };
+        if EmptyClipboard() == 0 {
+            GlobalFree(memory);
+            return Err(clipboard_error("empty"));
+        }
+        if SetClipboardData(CF_UNICODETEXT, memory).is_null() {
+            GlobalFree(memory);
+            return Err(clipboard_error("set"));
+        }
+        Ok(())
+    }
 }
 
 fn fail(reason: String) -> NativeError {
@@ -93,7 +227,6 @@ fn app_data_dir() -> Result<PathBuf, NativeError> {
 const FILE_LIST_DIRECTORY: u32 = 0x0001;
 const FILE_READ_DATA: u32 = 0x0001;
 const FILE_WRITE_DATA: u32 = 0x0002;
-const FILE_APPEND_DATA: u32 = 0x0004;
 const FILE_READ_ATTRIBUTES: u32 = 0x0080;
 const FILE_TRAVERSE: u32 = 0x0020;
 const SYNCHRONIZE: u32 = 0x0010_0000;
@@ -191,17 +324,25 @@ fn wide(text: &str) -> Result<Vec<u16>, NativeError> {
 
 /// `\??\` form so `NtCreateFile` does not go through Win32 path parsing.
 fn nt_root_name(path: &Path) -> Result<Vec<u16>, NativeError> {
-    let display = path.to_string_lossy();
-    let nt = if let Some(rest) = display.strip_prefix(r"\\?\UNC\") {
-        format!(r"\??\UNC\{rest}")
-    } else if let Some(rest) = display.strip_prefix(r"\\?\") {
-        format!(r"\??\{rest}")
-    } else if let Some(rest) = display.strip_prefix(r"\\") {
-        format!(r"\??\UNC\{rest}")
+    let input: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let extended_unc: Vec<u16> = r"\\?\UNC\".encode_utf16().collect();
+    let extended: Vec<u16> = r"\\?\".encode_utf16().collect();
+    let unc: Vec<u16> = r"\\".encode_utf16().collect();
+    let (prefix, rest) = if input.starts_with(&extended_unc) {
+        (r"\??\UNC\", &input[extended_unc.len()..])
+    } else if input.starts_with(&extended) {
+        (r"\??\", &input[extended.len()..])
+    } else if input.starts_with(&unc) {
+        (r"\??\UNC\", &input[unc.len()..])
     } else {
-        format!(r"\??\{display}")
+        (r"\??\", input.as_slice())
     };
-    wide(&nt)
+    let mut units: Vec<u16> = prefix.encode_utf16().chain(rest.iter().copied()).collect();
+    if units.len().saturating_mul(2) > u16::MAX as usize {
+        return Err(fail("path is too long".into()));
+    }
+    units.push(0);
+    Ok(units)
 }
 
 enum NtOpenError {
@@ -232,21 +373,20 @@ fn nt_create(
     options: u32,
 ) -> Result<OwnedHandle, NtOpenError> {
     let byte_len = (name.len() - 1) * 2;
-    let mut unicode = UnicodeString {
-        length: byte_len as u16,
-        maximum_length: byte_len as u16,
-        buffer: name.as_mut_ptr(),
-    };
-    let mut attributes = ObjectAttributes {
-        length: std::mem::size_of::<ObjectAttributes>() as u32,
-        root_directory: root
-            .map(|h| h.as_raw_handle())
-            .unwrap_or(std::ptr::null_mut()),
-        object_name: &mut unicode,
-        attributes: OBJ_CASE_INSENSITIVE,
-        security_descriptor: std::ptr::null_mut(),
-        security_quality_of_service: std::ptr::null_mut(),
-    };
+    // SAFETY: zero is valid for all fields, including pointers. Initialize the
+    // backing storage before passing these C-layout structs to ntdll.
+    let mut unicode: UnicodeString = unsafe { std::mem::zeroed() };
+    unicode.length = byte_len as u16;
+    unicode.maximum_length = byte_len as u16;
+    unicode.buffer = name.as_mut_ptr();
+    // SAFETY: zero is valid for all fields.
+    let mut attributes: ObjectAttributes = unsafe { std::mem::zeroed() };
+    attributes.length = std::mem::size_of::<ObjectAttributes>() as u32;
+    attributes.root_directory = root
+        .map(|h| h.as_raw_handle())
+        .unwrap_or(std::ptr::null_mut());
+    attributes.object_name = &mut unicode;
+    attributes.attributes = OBJ_CASE_INSENSITIVE;
     let mut io = IoStatusBlock {
         status: 0,
         information: 0,
@@ -394,7 +534,7 @@ fn file_at(path: &str, write: bool) -> Result<std::fs::File, NativeError> {
         ensure_not_reparse(&file)?;
         return Ok(std::fs::File::from(file));
     }
-    let write_access = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+    let write_access = FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
     match nt_create(Some(&dir), name.clone(), write_access, FILE_OPEN, file_opts) {
         Ok(file) => {
             ensure_not_reparse(&file)?;
@@ -457,5 +597,48 @@ mod tests {
             assert!(relative_parts(path).is_err(), "{path}");
         }
         assert_eq!(relative_parts(r"notes\a.txt").unwrap(), ["notes", "a.txt"]);
+    }
+
+    #[test]
+    fn file_roundtrip_in_isolated_app_data() {
+        use crate::{native, Files};
+        if std::env::var_os("TEKTO_WINDOWS_FILES_CHILD").is_none() {
+            let dir =
+                std::env::temp_dir().join(format!("tekto-windows-files-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "windows::tests::file_roundtrip_in_isolated_app_data",
+                    "--exact",
+                ])
+                .env("LOCALAPPDATA", &dir)
+                .env("TEKTO_WINDOWS_FILES_CHILD", "1")
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "child did not run the expected test: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            return;
+        }
+        let host = native();
+        host.write_string("unicode.txt", "λ 漢字 😀").unwrap();
+        assert_eq!(host.read_to_string("unicode.txt").unwrap(), "λ 漢字 😀");
+        host.write_string("unicode.txt", "x").unwrap();
+        assert_eq!(host.read_to_string("unicode.txt").unwrap(), "x");
+        host.write_bytes("bytes", &[0, 128, 255]).unwrap();
+        assert_eq!(host.read_bytes("bytes").unwrap(), [0, 128, 255]);
+        assert!(host.read_to_string("bytes").is_err());
+        assert!(host.read_bytes("missing").is_err());
+        assert!(host.write_string("missing/child", "x").is_err());
+        assert!(host.write_string("../escape", "x").is_err());
     }
 }
