@@ -186,13 +186,22 @@ pub fn rgba_to_u32_softbuffer(rgba: &[u8]) -> Vec<u32> {
 }
 
 mod gpu_policy;
+#[cfg(any(
+    test,
+    all(
+        feature = "desktop",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    )
+))]
 mod pointer_route;
 pub use gpu_policy::{gpu_paint_allowed, wants_gpu_paint};
 
+#[cfg(any(test, all(feature = "desktop", target_os = "android")))]
 mod android_field;
 mod android_insets;
 pub use android_insets::{insets_from_physical, layout_with_insets, EdgeInsets, WindowInsets};
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "desktop", target_os = "android"))]
 mod android_overlay;
 #[cfg(all(
     feature = "desktop",
