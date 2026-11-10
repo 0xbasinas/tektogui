@@ -29,11 +29,16 @@ pub(crate) fn plain_text(text: &str) -> Result<(), NativeError> {
 }
 
 /// A missing `ndk-context` handle. The process has no activity yet.
-pub(crate) fn require_context(vm_present: bool, context_present: bool) -> Result<(), NativeError> {
+/// `capability` is `clipboard.get` or `clipboard.set`.
+pub(crate) fn require_context(
+    vm_present: bool,
+    context_present: bool,
+    capability: &'static str,
+) -> Result<(), NativeError> {
     if vm_present && context_present {
         Ok(())
     } else {
-        Err(not_ready())
+        Err(not_ready(capability))
     }
 }
 
@@ -59,7 +64,7 @@ pub(crate) fn allow_read(sdk: i32, has_focus: bool) -> Result<(), NativeError> {
 }
 
 /// Turn a focused read into text. `None` is an empty clipboard or a clip
-/// that is not text (`ClipData.Item.coerceToText` returned null).
+/// whose first item is not text (`ClipData.Item.getText` is null).
 pub(crate) fn plan_get(
     sdk: i32,
     has_focus: bool,
@@ -74,11 +79,35 @@ pub(crate) fn plan_set(text: &str) -> Result<(), NativeError> {
     plain_text(text)
 }
 
-fn not_ready() -> NativeError {
+fn not_ready(capability: &'static str) -> NativeError {
     NativeError::Unavailable {
-        capability: "clipboard.get",
+        capability,
         platform: "android",
         reason: "Android activity context is not ready",
+    }
+}
+
+/// First item of a primary clip. Host tests use this instead of JNI.
+///
+/// `Text` is `ClipData.Item.getText`. `Uri`, `Intent`, and `Image` are
+/// non-text items. `coerceToText` is not used: Android can turn those into
+/// a URI or intent string.
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ClipPayload {
+    Empty,
+    Text(String),
+    Uri,
+    Intent,
+    Image,
+}
+
+/// Text from a clip item. Non-text payloads are `None` (the read becomes `""`).
+#[cfg(test)]
+pub(crate) fn payload_text(payload: &ClipPayload) -> Option<String> {
+    match payload {
+        ClipPayload::Text(text) => Some(text.clone()),
+        ClipPayload::Empty | ClipPayload::Uri | ClipPayload::Intent | ClipPayload::Image => None,
     }
 }
 
@@ -104,26 +133,25 @@ fn background_read() -> NativeError {
 struct MemoryClipboard {
     sdk: i32,
     has_focus: bool,
-    /// `None` means no clip, or a clip that is not text.
-    text: Option<String>,
+    payload: ClipPayload,
 }
 
 #[cfg(test)]
 impl MemoryClipboard {
     fn get_text(&self) -> Result<String, NativeError> {
-        plan_get(self.sdk, self.has_focus, self.text.clone())
+        plan_get(self.sdk, self.has_focus, payload_text(&self.payload))
     }
 
     fn set_text(&mut self, text: &str) -> Result<(), NativeError> {
         plan_set(text)?;
-        self.text = Some(text.to_string());
+        self.payload = ClipPayload::Text(text.to_string());
         Ok(())
     }
 }
 
 #[cfg(target_os = "android")]
 mod jni_clip {
-    use super::{plan_get, plan_set, require_context, require_service};
+    use super::{not_ready, plan_get, plan_set, require_context, require_service};
     use crate::NativeError;
     use jni::objects::{JObject, JString, JValue};
     use jni::signature::{RuntimeFieldSignature, RuntimeMethodSignature};
@@ -184,51 +212,47 @@ mod jni_clip {
     }
 
     pub(crate) fn get_text() -> Result<String, NativeError> {
-        let (vm, context) = vm_and_context()?;
+        let (vm, context) = vm_and_context("clipboard.get")?;
         vm.attach_current_thread(|env| read_clip(env, context))
             .map_err(|step| map_step("clipboard.get", step))
     }
 
     pub(crate) fn set_text(text: &str) -> Result<(), NativeError> {
         plan_set(text)?;
-        let (vm, context) = vm_and_context()?;
+        let (vm, context) = vm_and_context("clipboard.set")?;
         vm.attach_current_thread(|env| write_clip(env, context, text))
             .map_err(|step| map_step("clipboard.set", step))
     }
 
-    fn vm_and_context() -> Result<(JavaVM, jobject), NativeError> {
+    fn vm_and_context(capability: &'static str) -> Result<(JavaVM, jobject), NativeError> {
         // `android_context` panics when `android-activity` has not run yet.
-        let ctx =
-            std::panic::catch_unwind(ndk_context::android_context).map_err(|_| not_ready_err())?;
+        let ctx = std::panic::catch_unwind(ndk_context::android_context)
+            .map_err(|_| not_ready(capability))?;
         let vm = ctx.vm();
         let context = ctx.context();
-        require_context(!vm.is_null(), !context.is_null())?;
+        require_context(!vm.is_null(), !context.is_null(), capability)?;
         // SAFETY: android-activity published this JavaVM for the process.
         // `from_raw` only wraps the pointer. Null was rejected above.
         let vm = unsafe { JavaVM::from_raw(vm.cast()) };
         Ok((vm, context.cast()))
     }
 
-    fn not_ready_err() -> NativeError {
-        super::not_ready()
-    }
-
     fn read_clip(env: &mut jni::Env<'_>, context_raw: jobject) -> Result<String, Step> {
         // SAFETY: the pointer is the global context ref from ndk-context.
         // `JObject` does not delete it on drop.
         let context = unsafe { JObject::from_raw(env, context_raw) };
-        require_context(true, !context.is_null())?;
+        require_context(true, !context.is_null(), "clipboard.get")?;
         let sdk = sdk_int(env)?;
         let has_focus = window_focus(env, &context)?;
         super::allow_read(sdk, has_focus)?;
         let manager = clipboard_manager(env, &context, "clipboard.get")?;
-        let text = primary_text(env, &context, &manager)?;
+        let text = primary_text(env, &manager)?;
         Ok(plan_get(sdk, has_focus, text)?)
     }
 
     fn write_clip(env: &mut jni::Env<'_>, context_raw: jobject, text: &str) -> Result<(), Step> {
         let context = unsafe { JObject::from_raw(env, context_raw) };
-        require_context(true, !context.is_null())?;
+        require_context(true, !context.is_null(), "clipboard.set")?;
         let manager = clipboard_manager(env, &context, "clipboard.set")?;
         let clip_class = env.find_class(JNIString::new("android/content/ClipData"))?;
         let label = env.new_string("text")?;
@@ -299,11 +323,7 @@ mod jni_clip {
         Ok(service)
     }
 
-    fn primary_text(
-        env: &mut jni::Env<'_>,
-        context: &JObject<'_>,
-        manager: &JObject<'_>,
-    ) -> Result<Option<String>, Step> {
+    fn primary_text(env: &mut jni::Env<'_>, manager: &JObject<'_>) -> Result<Option<String>, Step> {
         let has_sig = method_sig("()Z")?;
         let has_sig = has_sig.method_signature();
         let has = env
@@ -341,15 +361,12 @@ mod jni_clip {
         if item.is_null() {
             return Ok(None);
         }
-        let coerce_sig = method_sig("(Landroid/content/Context;)Ljava/lang/CharSequence;")?;
-        let coerce_sig = coerce_sig.method_signature();
+        // `getText` is null for a URI, intent, or image item. Do not call
+        // `coerceToText`: that can return the URI or an intent string.
+        let text_sig = method_sig("()Ljava/lang/CharSequence;")?;
+        let text_sig = text_sig.method_signature();
         let chars = env
-            .call_method(
-                &item,
-                JNIString::new("coerceToText"),
-                &coerce_sig,
-                &[JValue::Object(context)],
-            )?
+            .call_method(&item, JNIString::new("getText"), &text_sig, &[])?
             .l()?;
         if chars.is_null() {
             return Ok(None);
@@ -379,7 +396,8 @@ pub(crate) use jni_clip::{get_text, set_text};
 #[cfg(test)]
 mod tests {
     use super::{
-        allow_read, plan_get, plan_set, require_context, require_service, MemoryClipboard,
+        allow_read, payload_text, plan_get, plan_set, require_context, require_service,
+        ClipPayload, MemoryClipboard,
     };
     use crate::NativeError;
 
@@ -388,7 +406,7 @@ mod tests {
         let mut clip = MemoryClipboard {
             sdk: 34,
             has_focus: true,
-            text: None,
+            payload: ClipPayload::Empty,
         };
         assert_eq!(clip.get_text().expect("empty read"), "");
         clip.set_text("hello").expect("set");
@@ -414,7 +432,7 @@ mod tests {
         let mut clip = MemoryClipboard {
             sdk: 34,
             has_focus: false,
-            text: Some("secret".into()),
+            payload: ClipPayload::Text("secret".into()),
         };
         let err = clip.get_text().expect_err("background get");
         assert!(
@@ -428,7 +446,7 @@ mod tests {
             "{err}"
         );
         clip.set_text("still written").expect("background set");
-        assert_eq!(clip.text.as_deref(), Some("still written"));
+        assert_eq!(clip.payload, ClipPayload::Text("still written".into()));
         assert!(allow_read(28, false).is_ok());
         assert!(allow_read(29, true).is_ok());
         assert_eq!(
@@ -439,7 +457,7 @@ mod tests {
 
     #[test]
     fn android_clipboard_missing_context_and_service() {
-        let err = require_context(false, false).expect_err("no vm");
+        let err = require_context(false, false, "clipboard.get").expect_err("no vm");
         assert!(
             matches!(
                 err,
@@ -451,9 +469,22 @@ mod tests {
             ),
             "{err}"
         );
-        assert!(require_context(true, false).is_err());
-        assert!(require_context(false, true).is_err());
-        assert!(require_context(true, true).is_ok());
+        let err = require_context(false, false, "clipboard.set").expect_err("no vm on set");
+        assert!(
+            matches!(
+                err,
+                NativeError::Unavailable {
+                    capability: "clipboard.set",
+                    platform: "android",
+                    reason: "Android activity context is not ready",
+                }
+            ),
+            "{err}"
+        );
+        assert!(require_context(true, false, "clipboard.get").is_err());
+        assert!(require_context(false, true, "clipboard.set").is_err());
+        assert!(require_context(true, true, "clipboard.get").is_ok());
+        assert!(require_context(true, true, "clipboard.set").is_ok());
 
         let err = require_service(false, "clipboard.get").expect_err("no service");
         assert!(
@@ -492,11 +523,32 @@ mod tests {
         let mut clip = MemoryClipboard {
             sdk: 33,
             has_focus: true,
-            text: None,
+            payload: ClipPayload::Empty,
         };
         assert!(clip.set_text("a\0b").is_err());
-        assert!(clip.text.is_none());
+        assert_eq!(clip.payload, ClipPayload::Empty);
         assert_eq!(plan_get(33, true, None).expect("non-text"), "");
         assert!(plan_set("ok").is_ok());
+    }
+
+    #[test]
+    fn android_clipboard_non_text_clip_reads_as_empty() {
+        for payload in [ClipPayload::Uri, ClipPayload::Intent, ClipPayload::Image] {
+            assert_eq!(payload_text(&payload), None, "{payload:?}");
+            let clip = MemoryClipboard {
+                sdk: 34,
+                has_focus: true,
+                payload: payload.clone(),
+            };
+            assert_eq!(clip.get_text().expect("non-text read"), "", "{payload:?}");
+        }
+        assert_eq!(
+            payload_text(&ClipPayload::Text("plain".into())).as_deref(),
+            Some("plain")
+        );
+        assert_eq!(
+            plan_get(34, true, payload_text(&ClipPayload::Image)).expect("image"),
+            ""
+        );
     }
 }
