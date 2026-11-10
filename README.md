@@ -86,5 +86,6 @@ MIT. New direct dependencies stay MIT, Apache-2.0, BSD, or zlib. Roboto Regular 
 - [Architecture](docs/architecture.md)
 - [Getting started](docs/getting-started.md)
 - [Agent guide](docs/agent-guide.md)
+- [Toolkit gaps](docs/toolkit-gaps.md)
 - [Notes for coding agents](AGENTS.md)
 - [Roadmap](ROADMAP.md)
