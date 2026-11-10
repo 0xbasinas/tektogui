@@ -480,15 +480,39 @@ fn list_content_origin(
         return pad + list_pad;
     }
     let gap = finite_nonneg(scroll.layout.gap);
+    // Column children with an automatic width stretch to this content width.
+    // That is the width Taffy assigns, including for wrapping text.
+    let scroll_border = definite_length(scroll.layout.width).unwrap_or_else(|| {
+        scroll
+            .bounds
+            .width
+            .is_finite()
+            .then_some(scroll.bounds.width)
+            .filter(|width| *width > 0.0)
+            .unwrap_or(f32::NAN)
+    });
+    let child_width = if scroll_border.is_finite() {
+        (scroll_border - 2.0 * pad).max(0.0)
+    } else {
+        f32::NAN
+    };
     let mut y = pad;
     for child in &scroll.children {
         if *child == list_id {
             return y + list_pad;
         }
-        y += border_height(tree, text, *child, 0);
+        y += border_height(tree, text, *child, child_width, 0);
         y += gap;
     }
     pad + list_pad
+}
+
+fn definite_length(value: f32) -> Option<f32> {
+    if value.is_finite() && value >= 0.0 {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 fn finite_nonneg(value: f32) -> f32 {
@@ -500,7 +524,17 @@ fn finite_nonneg(value: f32) -> f32 {
 }
 
 /// Border-box height from style, before this layout pass writes bounds.
-fn border_height(tree: &Tree, text: &mut TextEngine, id: NodeId, depth: u8) -> f32 {
+///
+/// `available_width` is the border-box width a column parent assigns when this
+/// node's own width is automatic (Taffy stretch). Wrapping text uses that
+/// width. An unset style width is not treated as infinite.
+fn border_height(
+    tree: &Tree,
+    text: &mut TextEngine,
+    id: NodeId,
+    available_width: f32,
+    depth: u8,
+) -> f32 {
     if depth > 16 {
         return 0.0;
     }
@@ -510,15 +544,20 @@ fn border_height(tree: &Tree, text: &mut TextEngine, id: NodeId, depth: u8) -> f
     if node.layout.height.is_finite() && node.layout.height >= 0.0 {
         return node.layout.height;
     }
+    let border_width = definite_length(node.layout.width).unwrap_or(available_width);
     if matches!(
         node.kind,
         NodeKind::Text | NodeKind::Button | NodeKind::TextField | NodeKind::ListItem
     ) {
-        let width = node.layout.width;
-        return row_box_height(tree, text, id, width);
+        return row_box_height(tree, text, id, border_width);
     }
     let pad = finite_nonneg(node.layout.padding);
     let gap = finite_nonneg(node.layout.gap);
+    let inner = if border_width.is_finite() {
+        (border_width - 2.0 * pad).max(0.0)
+    } else {
+        f32::NAN
+    };
     if node.children.is_empty() {
         let previous = node.bounds.height;
         return if previous.is_finite() && previous > 0.0 {
@@ -529,10 +568,13 @@ fn border_height(tree: &Tree, text: &mut TextEngine, id: NodeId, depth: u8) -> f
     }
     let children = node.children.clone();
     let column = node.layout.column;
+    // A row sizes children on the main axis, so an automatic width stays
+    // max-content. A column stretches them to the inner width.
+    let child_available = if column { inner } else { f32::NAN };
     if column {
         let mut total = 0.0;
         for child in &children {
-            total += border_height(tree, text, *child, depth + 1);
+            total += border_height(tree, text, *child, child_available, depth + 1);
         }
         if children.len() > 1 {
             total += gap * (children.len() - 1) as f32;
@@ -541,7 +583,13 @@ fn border_height(tree: &Tree, text: &mut TextEngine, id: NodeId, depth: u8) -> f
     } else {
         let mut tallest = 0.0_f32;
         for child in &children {
-            tallest = tallest.max(border_height(tree, text, *child, depth + 1));
+            tallest = tallest.max(border_height(
+                tree,
+                text,
+                *child,
+                child_available,
+                depth + 1,
+            ));
         }
         tallest + 2.0 * pad
     }

@@ -1,7 +1,7 @@
 //! Long lists lay out a window of rows. Scroll extent stays the full stack.
 
 use tekto::{
-    layout_tree, list, list_item, paint_tree, scroll, window, Color, CpuRenderer, ListRow,
+    layout_tree, list, list_item, paint_tree, scroll, text, window, Color, CpuRenderer, ListRow,
     NodeKind, Renderer, LIST_OVERSCAN_PX,
 };
 
@@ -179,6 +179,67 @@ fn shared_scroll_shows_the_list_top_below_a_header() {
     let mut renderer = CpuRenderer::new(240, 400).unwrap();
     paint_tree(&mut renderer, &tree, Color::PAGE);
     assert!(renderer.to_png().unwrap().starts_with(b"\x89PNG"));
+}
+
+#[test]
+fn shared_scroll_keeps_rows_under_a_wrapping_header() {
+    let mut tree = tekto::Tree::new();
+    let root = window(&mut tree, "Wrap", 240.0, 400.0).unwrap();
+    tree.get_mut(root).unwrap().layout.padding = 0.0;
+    tree.get_mut(root).unwrap().layout.gap = 0.0;
+    let scroll_id = scroll(&mut tree, root, 240.0, VIEW_H).unwrap();
+    let header_text = "A long header with many words ".repeat(50);
+    let header = text(&mut tree, scroll_id, &header_text, 16.0, Color::INK).unwrap();
+    assert!(
+        !tree.get(header).unwrap().layout.width.is_finite(),
+        "the header width stays automatic"
+    );
+    let rows: Vec<ListRow> = (0..40)
+        .map(|index| ListRow {
+            label: leak_label(index),
+            height: ROW_H,
+        })
+        .collect();
+    let built = list(&mut tree, scroll_id, 240.0, f32::NAN, &rows).unwrap();
+    let ids = tree.get(built.list).unwrap().children.clone();
+
+    layout_tree(&mut tree, 240.0, 400.0);
+    let header_h = tree.get(header).unwrap().bounds.height;
+    assert!(
+        (header_h - 1120.0).abs() < 1.0,
+        "wrapping header height {header_h}, expected 1120"
+    );
+    let applied = tree.set_scroll_y(scroll_id, header_h).unwrap();
+    assert!(
+        (applied - header_h).abs() < 1.0,
+        "scroll landed at {applied}"
+    );
+    layout_tree(&mut tree, 240.0, 400.0);
+    layout_tree(&mut tree, 240.0, 400.0);
+
+    let shown = list_items(&tree, built.list);
+    assert!(
+        shown.contains(&ids[0]),
+        "first row detached, window {shown:?}"
+    );
+    assert!(
+        !shown.contains(&ids[20]),
+        "row 20 is inside the blank region the bad origin used to show"
+    );
+    let children = &tree.get(built.list).unwrap().children;
+    assert_eq!(
+        children.first().copied(),
+        Some(ids[0]),
+        "the viewport should start on a row, not a spacer: {children:?}"
+    );
+    let row = tree.get(ids[0]).unwrap().bounds;
+    let view = tree.get(scroll_id).unwrap().bounds;
+    assert!(
+        row.y < view.y + view.height && row.y + row.height > view.y,
+        "first row {:?} outside {:?}",
+        row,
+        view
+    );
 }
 
 #[test]
