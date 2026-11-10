@@ -34,7 +34,18 @@ Triggers: pull requests, pushes to `nightly` or `main`, and `workflow_dispatch`.
 
 `RUSTFLAGS=-D warnings`. Caches use Swatinem/rust-cache. Concurrency cancels older runs on the same ref.
 
-**Keep it light:** do not run Windows, Android, emulators, or (later) wasm on every PR. Put expensive jobs on nightly or `workflow_dispatch`. Timeouts are already 25–30 minutes.
+**Keep it light:** do not run Windows, Android, emulators, packaging, or (later) wasm on every PR. Put expensive jobs on nightly or `workflow_dispatch`. Timeouts are already 25–30 minutes.
+
+## Packaging (local, not CI)
+
+Notes ships as a small release binary. Do not enable `quickjs` or `gpu` for the default package. Do not commit `dist/` artifacts. No store signing and no MSI.
+
+```bash
+export CARGO_TARGET_DIR=/path/to/this/worktree/target
+./scripts/package-notes-linux.sh
+```
+
+That writes `dist/tektogui-notes-linux-x86_64.tar.gz`. Record the size in [docs/packaging.md](../../../docs/packaging.md) when it changes. Windows is a folder or zip assembled on a Windows machine (`notes.exe` plus `README.txt`). Do not claim a Windows package from a Linux check that only has the `x86_64-pc-windows-gnu` rustc target.
 
 ## Local check before you open the PR
 
