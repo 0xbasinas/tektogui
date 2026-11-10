@@ -49,7 +49,7 @@ Still in Month 1:
 
 ## Month 4 — web and more native
 
-- WASM build of the core
+- WASM build of the core (landed: `tekto-wasm` + `@tektogui/wasm` HostOp bridge; canvas paint is still open)
 - Web paint: CPU renderer to canvas, then WebGPU if the GPU backend is ready
 - TypeScript apps on the browser engine, same JSX API
 - File open/save dialogs on Windows (Linux uses zenity; see `docs/architecture.md`)

@@ -1,36 +1,53 @@
 ---
 name: web-build
-description: How the future Tekto web target should be built and how to keep today’s platform/JS layers ready for it. Use when touching wasm, web paint, or tekto-platform / tekto-js abstractions. There is no working WASM build or `tekto build --web` command yet.
+description: How to check the Tekto WASM core and the browser HostOp glue. Use when touching wasm, tekto-wasm, @tektogui/wasm, or the web platform path. Canvas paint is still a later issue.
 ---
 
 # Web build
 
-The web target is planned (Month 4, issues for WASM, canvas paint, WebGPU, and browser JS). It is **not implemented**. Do not invent a bundler command that does not exist. Do keep the abstractions ready.
+The Rust core builds for `wasm32-unknown-unknown`. TypeScript talks to it through the same `HostOp` JSON as desktop. The browser JS engine runs the app. QuickJS is not in this graph. The public app API has no HTML, CSS, or DOM types.
+
+Canvas blit and WebGPU paint are not in this crate (`#41`). `packages/wasm/smoke.html` only proves ops plus PNG bytes.
+
+## What builds
+
+- `crates/tekto-wasm` — tree, layout, text, CPU renderer (`tiny-skia`), `HostOp` / `apply_ops`. No `quickjs`, no `gpu`.
+- `packages/wasm` (`@tektogui/wasm`) — small JS glue: `connectWasm`, `applyOps`, `renderPng`, and `create` / `setText` / `setProp` / `append` / `remove` for `mount`.
+- `cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js` — the app facade without the desktop shell.
+
+No new crates were added for the ABI (no `wasm-bindgen`). Existing deps stay MIT / Apache-2.0 / BSD / zlib.
+
+## Check
+
+```bash
+rustup target add wasm32-unknown-unknown
+export CARGO_TARGET_DIR=/path/to/this/worktree/target
+
+# CI command (nightly push or workflow_dispatch, not every PR):
+cargo check -p tekto-wasm --target wasm32-unknown-unknown
+cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js
+
+# Module + Node smoke (skips if the wasm file is missing):
+cargo build -p tekto-wasm --target wasm32-unknown-unknown
+node --test packages/wasm/test.js
+```
+
+`RUSTFLAGS=-D warnings` is set in CI. Do not enable `quickjs` or `gpu` on these commands.
+
+## Optional browser smoke
+
+```bash
+cargo build -p tekto-wasm --target wasm32-unknown-unknown
+cp "$CARGO_TARGET_DIR/wasm32-unknown-unknown/debug/tekto_wasm.wasm" packages/wasm/tekto_wasm.wasm
+# from packages/wasm: python3 -m http.server 8080
+# open http://127.0.0.1:8080/smoke.html
+```
+
+Do not commit `tekto_wasm.wasm`. Do not add a canvas Notes window here.
 
 ## Design that must stay true
 
-- Rust core (tree, layout, text, CPU renderer, ops) builds to WASM later (`wasm32-unknown-unknown` or wasm-bindgen).
-- Paint: first blit the CPU renderer (tiny-skia) to a `<canvas>`; later WebGPU / WebGL2 behind the `gpu` feature. Fallback to canvas if WebGPU is missing.
-- TypeScript apps run in the **browser JS engine**, not QuickJS. `tekto-js` is an op protocol (`HostOp`, `Host::apply`). Desktop will embed QuickJS-ng behind `quickjs` (off by default). Web calls the same ops on the WASM module.
-- Public app API has **no** HTML, CSS, or DOM types. The platform paints our tree; apps never see the DOM.
-- `tekto-platform` already cfg-gates `desktop` out on `target_arch = "wasm32"`. `tekto-native` file read/write is stubbed on wasm (`Unsupported`).
-
-## Files to touch when you start the real work
-
-- `crates/tekto-platform` — a web backend next to `desktop.rs`
-- `crates/tekto-render` — canvas blit; GPU path only behind `gpu`
-- `crates/tekto-js` — do not enable `quickjs` on web
-- `packages/core`, `packages/jsx-runtime` — same JSX API as desktop
-- `.github/workflows/ci.yml` — wasm check only on nightly or `workflow_dispatch` (save Actions minutes)
-- This skill, **in the same PR**, with the exact commands you added
-
-## Temporary verify (today)
-
-```bash
-# There is no wasm job yet. At least keep desktop/default builds green
-# and avoid DOM types in public APIs:
-cargo check --workspace --all-targets
-npm test
-```
-
-When a wasm build exists, this section should list the exact `cargo check --target wasm32-unknown-unknown …` (or wasm-bindgen) command and how to open the Notes example in a browser.
+- Paint later: blit the CPU PNG (or RGBA) to a `<canvas>`, then WebGPU / WebGL2 behind `gpu`. Fall back to canvas if WebGPU is missing.
+- Desktop QuickJS stays behind `--features quickjs` (off by default, not on PR CI).
+- `tekto-platform` keeps the desktop shell cfg'd out on `target_arch = "wasm32"`.
+- Apps never see DOM types. The smoke page is not the app API.

@@ -1,0 +1,23 @@
+{
+  "name": "@tektogui/wasm",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Browser glue for the Tekto WASM core. Same HostOp JSON as desktop. No DOM types.",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js",
+      "default": "./src/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "smoke.html"
+  ],
+  "scripts": {
+    "test": "node --test test.js"
+  }
+}

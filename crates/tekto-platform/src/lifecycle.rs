@@ -17,6 +17,14 @@ static SURFACE_LIVE: AtomicBool = AtomicBool::new(false);
 static HELD_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// Monotonic source for [`SurfaceEpoch`]. Starts at 1 so 0 stays "none".
+///
+/// The desktop window is the only caller. On wasm (and other targets
+/// without that shell) the helpers stay in the crate so tests can still
+/// see them, but a lib check must not warn.
+#[cfg_attr(
+    any(target_arch = "wasm32", target_os = "ios", not(feature = "desktop")),
+    allow(dead_code)
+)]
 static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +74,10 @@ pub fn surface_is_live() -> bool {
 ///
 /// If a previous epoch was still held, it is retired. Callers must drop that
 /// buffer before presenting with the new epoch. The open count never exceeds 1.
+#[cfg_attr(
+    any(target_arch = "wasm32", target_os = "ios", not(feature = "desktop")),
+    allow(dead_code)
+)]
 pub(crate) fn begin_surface() -> SurfaceEpoch {
     let epoch = NEXT_EPOCH.fetch_add(1, Ordering::SeqCst);
     HELD_EPOCH.store(epoch, Ordering::SeqCst);
@@ -77,6 +89,10 @@ pub(crate) fn begin_surface() -> SurfaceEpoch {
 ///
 /// A second release, or a release of a retired epoch, does not clear a newer
 /// surface and does not underflow the open count.
+#[cfg_attr(
+    any(target_arch = "wasm32", target_os = "ios", not(feature = "desktop")),
+    allow(dead_code)
+)]
 pub(crate) fn end_surface(epoch: SurfaceEpoch) -> bool {
     let closed = HELD_EPOCH
         .compare_exchange(epoch.0, 0, Ordering::SeqCst, Ordering::SeqCst)
@@ -88,6 +104,10 @@ pub(crate) fn end_surface(epoch: SurfaceEpoch) -> bool {
 }
 
 /// True only for the epoch that currently owns the buffer.
+#[cfg_attr(
+    any(target_arch = "wasm32", target_os = "ios", not(feature = "desktop")),
+    allow(dead_code)
+)]
 pub(crate) fn may_present(epoch: SurfaceEpoch) -> bool {
     SURFACE_LIVE.load(Ordering::SeqCst) && HELD_EPOCH.load(Ordering::SeqCst) == epoch.0
 }

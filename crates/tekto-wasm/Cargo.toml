@@ -1,0 +1,22 @@
+[package]
+name = "tekto-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "WASM build of the Tekto core: tree, layout, text, CPU renderer, and HostOp"
+publish = false
+
+[lib]
+# rlib so host tests can call the op helpers. cdylib is the wasm32 module.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tekto-tree = { workspace = true }
+tekto-layout = { workspace = true }
+# CPU renderer only. Do not enable `gpu` here.
+tekto-render = { workspace = true }
+# HostOp protocol only. Do not enable `quickjs` on this crate.
+tekto-js = { workspace = true }
+serde_json = { workspace = true }

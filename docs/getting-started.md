@@ -135,4 +135,14 @@ A script can create nodes with `tekto.create` / `tekto.setText` / `tekto.append`
   ```
 
   SDK root is `~/Android/Sdk` (or `$ANDROID_HOME`). This repo uses NDK `27.1.12297006`. `android_main` starts the windowed Notes app; the surface is created on resume and dropped on suspend. Details: [examples/notes-android/README.md](../examples/notes-android/README.md) and [the android-build-and-run skill](../.agents/skills/android-build-and-run/SKILL.md).
-- Web: not built yet; the platform and JS layers are shaped so a WASM + canvas / WebGPU backend can plug in.
+- Web: the core builds to WASM. Canvas paint is not wired yet. Check and smoke:
+
+  ```bash
+  rustup target add wasm32-unknown-unknown
+  cargo check -p tekto-wasm --target wasm32-unknown-unknown
+  cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js
+  cargo build -p tekto-wasm --target wasm32-unknown-unknown
+  node --test packages/wasm/test.js
+  ```
+
+  Commands and the optional `packages/wasm/smoke.html` page are in [the web-build skill](../.agents/skills/web-build/SKILL.md). Do not enable `quickjs` or `gpu` for this target.

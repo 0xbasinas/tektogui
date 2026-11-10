@@ -5,7 +5,7 @@ description: Add a Rust crate to the tektogui workspace while keeping the crate 
 
 # Add a crate
 
-One crate does one job. Put new code in an existing crate if that crate already owns the job (`tekto-tree`, `tekto-layout`, `tekto-text`, `tekto-render`, `tekto-platform`, `tekto-a11y`, `tekto-mcp`, `tekto-js`, `tekto-native`, `tekto-widgets`, `tekto`, `tekto-cli`).
+One crate does one job. Put new code in an existing crate if that crate already owns the job (`tekto-tree`, `tekto-layout`, `tekto-text`, `tekto-render`, `tekto-platform`, `tekto-a11y`, `tekto-mcp`, `tekto-js`, `tekto-native`, `tekto-widgets`, `tekto`, `tekto-cli`, `tekto-wasm`). `tekto-wasm` is only the wasm32 cdylib. Do not depend on it from `tekto`.
 
 ## Files to touch
 

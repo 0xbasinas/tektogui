@@ -55,7 +55,7 @@ Apps never call tiny-skia or wgpu directly.
 
 - **Desktop (Windows, Linux, macOS):** winit window, softbuffer presents frames. Default paint is the CPU renderer. `--features gpu` paints with wgpu / Vello and still presents through softbuffer.
 - **Android:** `examples/notes-android` is a `NativeActivity` APK (`cargo-apk2`, `winit` + `android-activity`). `android_main` calls `tekto::run_android`. The window / softbuffer surface is created on `resumed` and dropped on `suspended`. The CPU core also still builds headless for host tests and for `cargo check --target aarch64-linux-android`.
-- **Web:** planned. The Rust core builds to WASM. Painting uses WebGPU / WebGL2 (GPU backend) or the CPU renderer to a `<canvas>`. TypeScript runs in the **browser JS engine**, not QuickJS. The public API stays the same; no DOM in app code.
+- **Web:** `crates/tekto-wasm` builds the core (tree, layout, text, CPU renderer, `HostOp`) for `wasm32-unknown-unknown`. `@tektogui/wasm` sends the same op JSON the desktop host uses. The browser JS engine runs the app, not QuickJS. There is no DOM type in that API. Blitting the PNG to a `<canvas>` (and WebGPU later) is still open. See [the web-build skill](../.agents/skills/web-build/SKILL.md).
 
 ## Agents
 
@@ -74,7 +74,7 @@ Hot reload (rebuild or reload TypeScript) and live patches (change a running nod
 
 Packages under `packages/` (`@tektogui/core`, `@tektogui/jsx-runtime`, `create-tektogui`) must work with **pnpm, npm, and bun**. We use a standard `workspaces` field. Do not use pnpm-only fields in published `package.json` files. `@tektogui/jsx-runtime` `mount` / `renderToOps` lower a general-purpose JSX tree to the same `HostOp` protocol QuickJS and the web target use. There are no Notes-only APIs in the runtime.
 
-`tekto-js` embeds QuickJS-ng (via `rquickjs`, both MIT) on desktop behind the `quickjs` feature. It is off by default because it is slow to compile. A JS script talks to the Rust tree through the `HostOp` protocol (`tekto.create` / `setText` / `setProp` / `append` / `remove`); the web target will call the same ops from the browser later. Do not enable `quickjs` on PR CI.
+`tekto-js` embeds QuickJS-ng (via `rquickjs`, both MIT) on desktop behind the `quickjs` feature. It is off by default because it is slow to compile. A JS script talks to the Rust tree through the `HostOp` protocol (`tekto.create` / `setText` / `setProp` / `append` / `remove`). The web glue (`@tektogui/wasm`) calls those same ops on the WASM module. Do not enable `quickjs` on PR CI or on the wasm build.
 
 ## Native plugins
 
