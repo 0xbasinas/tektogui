@@ -90,6 +90,10 @@ Prefer the CPU renderer, a fixed size (640×400 is what Notes uses), and the bun
 TEKTO_SHOT_DIR=/tmp/shots cargo test -p tekto --test headless_snapshot
 ```
 
+## Android clipboard
+
+`tekto::native().get_text` and `set_text` work on Android, and so do `NativeOp` `clipboardGetText` and `clipboardSetText`. The call uses `ClipboardManager`. On API 29+ the activity must have window focus for a read. A background read is `NativeError::Unavailable` (`the app is in the background`). `set_text` does not need focus. A NUL is `NativeError::Message`. Do not start an emulator to check this. Host tests cover the focus rule and a missing context. A live device check is still open.
+
 ## What not to do
 
 - Do not drive the app through a browser DOM. There is no DOM in the app API.

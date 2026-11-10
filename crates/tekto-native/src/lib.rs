@@ -3,7 +3,8 @@
 //! Each capability is a small trait so platforms can be filled in one
 //! at a time (Windows, Linux, Android, later macOS, iOS, and web).
 //! Text clipboard, notifications, and open/save dialogs are implemented on
-//! Linux and Windows. Android notifications use `NotificationManager`.
+//! Linux and Windows. Android text clipboard uses `ClipboardManager`.
+//! Android notifications use `NotificationManager`.
 //! Linux notifications use the freedesktop session bus. The system tray is
 //! behind the `tray` feature (StatusNotifierItem on Linux, `Shell_NotifyIconW`
 //! on Windows, no extra crate). Linux and Windows global shortcuts are behind
@@ -13,6 +14,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[cfg(any(target_os = "android", test))]
+mod android_clipboard;
 #[cfg(any(target_os = "android", test))]
 mod android_notify;
 #[cfg(target_os = "linux")]
@@ -342,7 +345,11 @@ impl Clipboard for StubNative {
         {
             windows::get_text()
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "android")]
+        {
+            android_clipboard::get_text()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
         {
             Err(unsupported("clipboard.get"))
         }
@@ -356,7 +363,11 @@ impl Clipboard for StubNative {
         {
             windows::set_text(text)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "android")]
+        {
+            android_clipboard::set_text(text)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
         {
             let _ = text;
             Err(unsupported("clipboard.set"))
