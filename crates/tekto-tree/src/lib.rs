@@ -197,11 +197,12 @@ impl Node {
     }
 
     pub fn display_name(&self) -> String {
-        if let Some(name) = &self.name {
-            return name.clone();
-        }
+        // Prefer visible text so live `ui.patch` of text shows up in the tree.
         if let Some(text) = &self.text {
             return text.clone();
+        }
+        if let Some(name) = &self.name {
+            return name.clone();
         }
         self.kind.as_str().to_string()
     }
@@ -338,6 +339,9 @@ impl Tree {
             message: format!("unknown node {id}"),
         })?;
         if let Some(text) = patch.text {
+            if node.name.as_deref() == node.text.as_deref() {
+                node.name = Some(text.clone());
+            }
             node.text = Some(text);
         }
         if let Some(name) = patch.name {
