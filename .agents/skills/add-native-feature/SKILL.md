@@ -5,15 +5,19 @@ description: Implement a tekto-native plugin (files, open/save dialogs, clipboar
 
 # Add a native feature
 
-`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Desktop Linux/Windows already do plain `std::fs` read/write; everything else returns `NativeError::Unsupported { capability, platform }`.
+`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Desktop Linux/Windows already do plain `std::fs` read/write. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Other clipboard platforms, dialogs, notifications, tray, and shortcuts return `NativeError::Unsupported { capability, platform }`.
 
-Fill **one platform at a time**. Keep the trait API the same for Rust and for TypeScript (TS will call it through `tekto-js` ops later; there is no TS binding yet).
+A present platform implementation that cannot reach the OS service (headless Linux, no `DISPLAY` and no `WAYLAND_DISPLAY`) returns `NativeError::Unavailable { capability, platform, reason }`, not `Unsupported`. Do not open displays `:1` or `:2`. The opt-in live check is `TEKTO_CLIPBOARD_LIVE=1`.
+
+JS calls clipboard through `NativeOp` (`clipboardGetText`, `clipboardSetText`) and `apply_native_op`. `tekto-js::apply_native_host_op` wraps that in `JsError`. It is not a scene-tree `HostOp` (get returns text, not a node id). There is still no QuickJS binding for it; do not enable the `quickjs` feature by default.
+
+Fill **one platform at a time**. Keep the trait API the same for Rust and for TypeScript.
 
 ## Files to touch
 
 - `crates/tekto-native/src/lib.rs` (and a new `src/<platform>.rs` if the impl grows)
 - `crates/tekto/src/lib.rs` — re-exports `native`, `Files`, `Clipboard`, and so on
-- `crates/tekto-js/src/lib.rs` — add a `HostOp` only if JS must call the feature; do not enable the `quickjs` feature by default
+- `crates/tekto-js/src/lib.rs` — re-export `NativeOp` / `apply_native_host_op` for plugin calls. Add a scene-tree `HostOp` only for tree mutations. Do not enable the `quickjs` feature by default
 - A unit test in `tekto-native` (success on the target platform, or a clear `Unsupported` error elsewhere)
 - This skill, if the trait names or error shape change
 
@@ -21,7 +25,7 @@ Fill **one platform at a time**. Keep the trait API the same for Rust and for Ty
 
 1. Use the existing trait methods. Add a method only if the current ones cannot express the feature.
 2. Implement it behind `cfg` (`target_os = "linux"`, `"windows"`, `"android"`, `"macos"`, `"ios"`, or `target_arch = "wasm32"` for web). Leave other platforms on the stub.
-3. Return `NativeError::Unsupported { capability, platform }` (via the same shape as `unsupported("clipboard.get")`) when the OS cannot do it (headless CI, no tray, no dialog). `Option` is for cancel (open/save dialogs already return `Result<Option<String>, NativeError>`).
+3. Return `NativeError::Unsupported { capability, platform }` (via `unsupported("clipboard.get")`) when that platform has no implementation yet. Return `NativeError::Unavailable { capability, platform, reason }` when the implementation exists but the session cannot use it (headless CI clipboard). `Option` is for cancel (open/save dialogs already return `Result<Option<String>, NativeError>`).
 4. Do not pull a heavy crate into the default graph. If a dialog/clipboard crate is large, feature-gate it and keep default builds compiling without it.
 5. License must be MIT, Apache-2.0, BSD, or zlib. Mention it in the PR.
 6. Tray and global shortcuts are desktop-only; do not fake them on Android, iOS, or web.

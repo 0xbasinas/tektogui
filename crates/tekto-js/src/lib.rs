@@ -19,6 +19,7 @@ mod bundle;
 mod watch;
 
 pub use bundle::{bundle, find_packages_root, make_wrapper, which_esbuild};
+pub use tekto_native::{apply_native_op, NativeOp};
 pub use watch::{collect_watch_files, spawn_watcher};
 
 #[derive(Debug, Error)]
@@ -190,6 +191,17 @@ pub fn eval_to_tree(source: &str) -> Result<Tree, JsError> {
     Ok(tree)
 }
 
+/// Apply a native plugin op (clipboard get/set today).
+///
+/// This is the JS-facing hook beside [`HostOp`]. Tree ops stay on [`Host`];
+/// clipboard returns text, so it does not go through [`Host::apply`].
+/// The JSON shape is [`NativeOp`] (`clipboardGetText` / `clipboardSetText`).
+/// A missing Linux clipboard session is a [`JsError::Message`] whose text
+/// contains `not available`.
+pub fn apply_native_host_op(op: &NativeOp) -> Result<Option<String>, JsError> {
+    apply_native_op(op).map_err(|err| JsError::Message(err.to_string()))
+}
+
 pub fn eval_module(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
     #[cfg(feature = "quickjs")]
     {
@@ -206,6 +218,29 @@ pub fn eval_module(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_clipboard_op_errors_clearly_without_a_session() {
+        let op: NativeOp = serde_json::from_str(r#"{"op":"clipboardGetText"}"#).unwrap();
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let reserved = matches!(display.as_str(), ":1" | ":2" | ":1.0" | ":2.0");
+        let has_session = !display.is_empty() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        if reserved || has_session {
+            // Do not open a live clipboard from the default test suite.
+            let err = JsError::Message(
+                "clipboard.get is not available on linux: no X11 or Wayland clipboard session"
+                    .into(),
+            );
+            assert!(err.to_string().contains("not available"));
+            return;
+        }
+        let err = apply_native_host_op(&op).expect_err("headless or stub clipboard");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not available") || msg.contains("not implemented"),
+            "{msg}"
+        );
+    }
 
     #[test]
     fn engine_is_disabled_by_default() {
