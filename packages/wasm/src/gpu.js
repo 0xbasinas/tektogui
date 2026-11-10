@@ -5,8 +5,11 @@
  * `paintPreferred`. Default (`gpu: false`) is always the CPU PNG blit,
  * even when the browser has WebGPU.
  *
- * WebGL2 is detected and then refused: the desktop `gpu` backend is Vello,
- * which needs compute shaders. WebGL2 has none, so paint stays on the CPU.
+ * WebGL2 is detected on a detached canvas and then refused: the desktop `gpu`
+ * backend is Vello, which needs compute shaders. WebGL2 has none, so paint
+ * stays on the CPU. The paint canvas is not probed. If a GPU context was
+ * already taken and then fails, the canvas is replaced so the CPU blit can
+ * acquire `"2d"`.
  */
 
 import { paintCanvas } from "./canvas.js";
@@ -44,7 +47,11 @@ export async function detectWebGpu(env) {
   }
 }
 
-/** `true` when `getContext("webgl2")` returns an object. */
+/**
+ * `true` when `getContext("webgl2")` returns an object.
+ * Pass a detached canvas. A successful call commits that canvas to WebGL2,
+ * and it can never take `"2d"` or `"webgpu"` afterwards.
+ */
 export function detectWebGl2(canvas) {
   if (!canvas || typeof canvas.getContext !== "function") return false;
   try {
@@ -52,6 +59,48 @@ export function detectWebGl2(canvas) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Canvas that is not in the document. Probing it cannot commit the paint canvas.
+ * `env.document` overrides the page document (tests). Returns null when no
+ * document exists, which means "no WebGL2" rather than touching the paint canvas.
+ */
+export function detachedCanvas(env) {
+  const doc =
+    (env && env.document) ||
+    (typeof globalThis.document !== "undefined" ? globalThis.document : undefined);
+  if (!doc || typeof doc.createElement !== "function") return null;
+  const canvas = doc.createElement("canvas");
+  if (!canvas || typeof canvas.getContext !== "function") return null;
+  canvas.width = 1;
+  canvas.height = 1;
+  return canvas;
+}
+
+/**
+ * Swap `canvas` for a fresh element in the same parent.
+ * A canvas that already has a WebGPU or WebGL context cannot take `"2d"`.
+ * Returns the new canvas, or null when there is no parent to replace into.
+ */
+export function replacePaintCanvas(canvas) {
+  const doc = canvas && canvas.ownerDocument;
+  const parent = canvas && canvas.parentNode;
+  if (!doc || !parent || typeof doc.createElement !== "function" || typeof parent.replaceChild !== "function") {
+    return null;
+  }
+  const next = doc.createElement("canvas");
+  if (!next) return null;
+  if (canvas.id) {
+    next.id = canvas.id;
+    canvas.id = "";
+  }
+  if (canvas.className) next.className = canvas.className;
+  if (canvas.style && next.style && canvas.style.cssText) next.style.cssText = canvas.style.cssText;
+  next.width = canvas.width;
+  next.height = canvas.height;
+  parent.replaceChild(next, canvas);
+  return next;
 }
 
 /**
@@ -67,37 +116,62 @@ export function detectWebGl2(canvas) {
 export async function paintPreferred(host, canvas, options = {}) {
   const width = options.width ?? canvas.width;
   const height = options.height ?? canvas.height;
-  const detected =
-    options.detect ??
-    {
-      webgpu: await detectWebGpu(options.env ?? globalNavigator()),
-      webgl2: detectWebGl2(canvas),
-    };
+  const env = options.env ?? globalNavigator();
+  let webgpu = false;
+  let webgl2 = false;
+  if (options.detect) {
+    webgpu = options.detect.webgpu === true;
+    webgl2 = options.detect.webgl2 === true;
+  } else if (options.gpu === true) {
+    // WebGL2 only matters when WebGPU is missing. Never probe the paint canvas:
+    // getContext commits that element to one context type.
+    webgpu = await detectWebGpu(env);
+    if (!webgpu) webgl2 = detectWebGl2(detachedCanvas(env));
+  }
   const choice = choosePaintBackend({
     gpuFlag: options.gpu === true,
-    webgpu: detected.webgpu === true,
-    webgl2: detected.webgl2 === true,
+    webgpu,
+    webgl2,
   });
 
   if (choice.backend === "webgpu" && host && typeof host.paintWebGpu === "function") {
     try {
       await host.paintWebGpu(canvas, width, height);
-      return { backend: "webgpu", reason: "", used: "webgpu" };
+      return { backend: "webgpu", reason: "", used: "webgpu", surface: canvas };
     } catch (err) {
-      const png = await paintCanvas(host, canvas, width, height);
+      const painted = await paintCpu(host, canvas, width, height);
       return {
         backend: "cpu",
         reason: "webgpu-failed",
         error: String(err && err.message ? err.message : err),
         used: "cpu",
-        png,
+        png: painted.png,
+        surface: painted.surface,
       };
     }
   }
 
-  const png = await paintCanvas(host, canvas, width, height);
+  const painted = await paintCpu(host, canvas, width, height);
   const reason = choice.backend === "webgpu" ? "no-paint-export" : choice.reason;
-  return { backend: "cpu", reason, used: "cpu", png };
+  return { backend: "cpu", reason, used: "cpu", png: painted.png, surface: painted.surface };
+}
+
+/** CPU blit. If this canvas is already committed to another context, replace it. */
+async function paintCpu(host, canvas, width, height) {
+  try {
+    const png = await paintCanvas(host, canvas, width, height);
+    return { png, surface: canvas };
+  } catch (err) {
+    if (!isMissing2d(err)) throw err;
+    const next = replacePaintCanvas(canvas);
+    if (!next) throw err;
+    const png = await paintCanvas(host, next, width, height);
+    return { png, surface: next };
+  }
+}
+
+function isMissing2d(err) {
+  return Boolean(err && typeof err.message === "string" && err.message.includes("canvas 2d context"));
 }
 
 function globalNavigator() {

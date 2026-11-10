@@ -23,6 +23,8 @@ export interface PaintResult {
   used: "webgpu" | "cpu";
   png?: Uint8Array;
   error?: string;
+  /** Canvas that received the frame. A failed GPU context is replaced in place. */
+  surface?: ProbeCanvas;
 }
 
 export function choosePaintBackend(probe: PaintProbe): PaintChoice;
@@ -30,6 +32,15 @@ export function choosePaintBackend(probe: PaintProbe): PaintChoice;
 export function detectWebGpu(env: { gpu?: { requestAdapter?: () => Promise<unknown> } } | null | undefined): Promise<boolean>;
 
 export function detectWebGl2(canvas: { getContext?: (kind: string) => unknown } | null | undefined): boolean;
+
+export function detachedCanvas(env?: { document?: { createElement: (tag: string) => ProbeCanvas } } | null): ProbeCanvas | null;
+
+export function replacePaintCanvas(canvas: ProbeCanvas & {
+  ownerDocument?: { createElement: (tag: string) => ProbeCanvas };
+  parentNode?: { replaceChild: (next: ProbeCanvas, prev: ProbeCanvas) => void };
+  id?: string;
+  className?: string;
+}): ProbeCanvas | null;
 
 export function paintPreferred(
   host: Pick<TektoWasmHost, "renderPng"> & {
@@ -40,7 +51,10 @@ export function paintPreferred(
     gpu?: boolean;
     width?: number;
     height?: number;
-    env?: { gpu?: { requestAdapter?: () => Promise<unknown> } };
+    env?: {
+      gpu?: { requestAdapter?: () => Promise<unknown> };
+      document?: { createElement: (tag: string) => ProbeCanvas };
+    };
     detect?: { webgpu?: boolean; webgl2?: boolean };
   },
 ): Promise<PaintResult>;

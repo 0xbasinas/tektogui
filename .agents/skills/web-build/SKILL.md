@@ -7,7 +7,7 @@ description: How to check the Tekto WASM core, the browser HostOp glue, the CPU 
 
 The Rust core builds for `wasm32-unknown-unknown`. TypeScript talks to it through the same `HostOp` JSON as desktop. The browser JS engine runs the app. QuickJS is not in this graph. The public app API (`@tektogui/core`, `@tektogui/jsx-runtime`, `@tektogui/wasm` entry) has no HTML, CSS, or DOM types.
 
-CPU paint is the default. `@tektogui/wasm/canvas` (`paintCanvas`, `resizeCanvas`, `blitPng`) decodes the tiny-skia PNG and calls `putImageData`. `@tektogui/wasm/gpu` (`paintPreferred`, `choosePaintBackend`, `detectWebGpu`) is host glue too. Both take a structural canvas, not a DOM type in the app API. WebGPU is off unless the page passes `gpu: true` and the wasm file was built with `--features gpu`. Otherwise paint falls back to the CPU blit. WebGL2 is detected and still uses that blit: Vello needs compute shaders.
+CPU paint is the default. `@tektogui/wasm/canvas` (`paintCanvas`, `resizeCanvas`, `blitPng`) decodes the tiny-skia PNG and calls `putImageData`. `@tektogui/wasm/gpu` (`paintPreferred`, `choosePaintBackend`, `detectWebGpu`) is host glue too. Both take a structural canvas, not a DOM type in the app API. WebGPU is off unless the page passes `gpu: true` and the wasm file was built with `--features gpu`. Otherwise paint falls back to the CPU blit. WebGL2 is detected on a detached canvas and still uses that blit: Vello needs compute shaders. The paint canvas is not probed. If WebGPU takes a context and then fails, `paintPreferred` replaces that canvas so `getContext("2d")` can succeed. `PaintResult.surface` is the element that was painted.
 
 ## What builds
 
@@ -41,7 +41,7 @@ node --test packages/wasm/test.js
 
 `RUSTFLAGS=-D warnings` is set in CI. Do not enable `quickjs` or `gpu` on these commands.
 
-`node --test packages/wasm/test.js` also stubs WebGPU and WebGL2. No browser and no GPU. The flag-off path, a null adapter, WebGL2, a missing `paintWebGpu` export, and a thrown WebGPU paint all end on the CPU blit.
+`node --test packages/wasm/test.js` also stubs WebGPU and WebGL2. No browser and no GPU. The flag-off path, a null adapter, WebGL2, a missing `paintWebGpu` export, and a thrown WebGPU paint all end on the CPU blit. One stub allows only one context type per canvas. Probes use `document.createElement`, not the paint canvas. A GPU context that then throws is replaced before the blit.
 
 Optional WebGPU wasm module (not CI, not the default file):
 
