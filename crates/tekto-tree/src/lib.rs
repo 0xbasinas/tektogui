@@ -215,12 +215,20 @@ pub struct Node {
     pub bounds: Rect,
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
-    /// Character index in `text` (Unicode scalar values). Used by text fields.
+    /// Character index in the committed `text` (Unicode scalar values).
+    /// Used by text fields. A preedit string, if any, is inserted here for display.
     #[serde(default)]
     pub caret: usize,
     /// Caret x inside the content box, in logical pixels. Layout fills this in.
     #[serde(default)]
     pub caret_x: f32,
+    /// Uncommitted IME composition, inserted at `caret` for display and AccessKit.
+    /// Empty when the field is not composing. Not part of the committed value.
+    #[serde(default)]
+    pub preedit: String,
+    /// Byte range inside `preedit` (winit). `None` hides the caret while composing.
+    #[serde(default)]
+    pub preedit_cursor: Option<(usize, usize)>,
     /// Vertical offset of a [`NodeKind::Scroll`] container, in logical pixels.
     /// Zero shows the top of the content. Layout clamps this to the content.
     #[serde(default)]
@@ -261,6 +269,8 @@ impl Node {
             children: Vec::new(),
             caret: 0,
             caret_x: 0.0,
+            preedit: String::new(),
+            preedit_cursor: None,
             scroll_y: 0.0,
             scroll_extent: 0.0,
             list_viewport: f32::NAN,
@@ -270,23 +280,83 @@ impl Node {
     pub fn display_name(&self) -> String {
         // Prefer visible text so live `ui.patch` of text shows up in the tree.
         // An empty text field keeps its label (`name`) so the tree stays readable.
-        if let Some(text) = &self.text {
-            if !(self.kind == NodeKind::TextField && text.is_empty()) {
-                return text.clone();
+        if self.kind == NodeKind::TextField {
+            let shown = self.composed_text();
+            if !shown.is_empty() {
+                return shown;
             }
+        } else if let Some(text) = &self.text {
+            return text.clone();
         }
         if let Some(name) = &self.name {
             return name.clone();
         }
         self.kind.as_str().to_string()
     }
+
+    /// Committed value with the IME preedit inserted at the caret.
+    ///
+    /// Non-fields return `text`. An empty text field with no preedit returns `""`.
+    pub fn composed_text(&self) -> String {
+        if self.kind != NodeKind::TextField || self.preedit.is_empty() {
+            return self.text.clone().unwrap_or_default();
+        }
+        let committed = self.text.clone().unwrap_or_default();
+        let mut chars: Vec<char> = committed.chars().collect();
+        let caret = self.caret.min(chars.len());
+        let mut out: String = chars.drain(..caret).collect();
+        out.push_str(&self.preedit);
+        out.extend(chars);
+        out
+    }
+
+    /// Caret in [`composed_text`], in Unicode scalar values.
+    ///
+    /// `None` means the input method asked to hide the caret (winit preedit cursor).
+    pub fn composed_caret(&self) -> Option<usize> {
+        let committed_len = self.text.as_deref().unwrap_or("").chars().count();
+        let caret = self.caret.min(committed_len);
+        if self.kind != NodeKind::TextField || self.preedit.is_empty() {
+            return Some(caret);
+        }
+        let (_, end) = self.preedit_cursor?;
+        let end = clamp_char_boundary(&self.preedit, end);
+        Some(caret + self.preedit[..end].chars().count())
+    }
 }
 
-/// One desktop key applied to a focused text field. Not an IME event.
+fn clamp_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    let mut index = index;
+    while index > 0 && !s.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+/// One desktop key applied to a focused text field.
+///
+/// IME composition uses [`ImeEvent`], not this enum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldKey {
     Insert(char),
     Backspace,
+}
+
+/// One winit input-method event, without a winit dependency.
+///
+/// `Preedit` `cursor` is a byte range in `text`, matching `winit::event::Ime`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImeEvent {
+    Enabled,
+    Disabled,
+    Preedit {
+        text: String,
+        cursor: Option<(usize, usize)>,
+    },
+    Commit(String),
 }
 
 /// Partial update used by live edits and by MCP `ui.patch`.
@@ -474,6 +544,8 @@ impl Tree {
         self.last_click = Some(id);
         if let Some(node) = self.nodes.get_mut(&id) {
             if node.kind == NodeKind::TextField {
+                node.preedit.clear();
+                node.preedit_cursor = None;
                 node.caret = node.text.as_deref().unwrap_or("").chars().count();
             }
         }
@@ -482,11 +554,15 @@ impl Tree {
 
     /// Insert plain text at the caret of a text field and focus it.
     ///
-    /// Control characters are skipped. This is not an IME: there is no
-    /// composition string, marked text, or candidate window.
+    /// Control characters are skipped. An in-progress preedit is dropped
+    /// (not committed). Composition goes through [`Tree::apply_ime`].
     pub fn insert_text(&mut self, id: NodeId, text: &str) -> Result<(), TreeError> {
         self.ensure_field(id)?;
         self.focus = Some(id);
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.preedit.clear();
+            node.preedit_cursor = None;
+        }
         for ch in text.chars().filter(|c| !c.is_control()) {
             self.apply_on_field(id, FieldKey::Insert(ch))?;
         }
@@ -503,8 +579,65 @@ impl Tree {
         if self.get(id).is_some_and(|n| n.kind != NodeKind::TextField) {
             return Ok(false);
         }
+        // The input method owns the keys while a composition is on screen.
+        if self.get(id).is_some_and(|n| !n.preedit.is_empty()) {
+            return Ok(false);
+        }
         self.apply_on_field(id, key)?;
         Ok(true)
+    }
+
+    /// Apply one IME event to the focused text field.
+    ///
+    /// Returns `Ok(false)` when nothing is focused, focus is not a text field,
+    /// or the event does not change the field (`Enabled`, or a repeated preedit).
+    /// `Preedit` replaces the composition string. `Commit` inserts into the
+    /// committed value and clears the preedit. `Disabled` drops an unfinished
+    /// preedit without inserting it.
+    pub fn apply_ime(&mut self, event: ImeEvent) -> Result<bool, TreeError> {
+        let Some(id) = self.focus else {
+            return Ok(false);
+        };
+        if self.get(id).is_some_and(|n| n.kind != NodeKind::TextField) {
+            return Ok(false);
+        }
+        self.ensure_field(id)?;
+        match event {
+            ImeEvent::Enabled => Ok(false),
+            ImeEvent::Disabled => {
+                let node = self.nodes.get_mut(&id).expect("field");
+                if node.preedit.is_empty() && node.preedit_cursor.is_none() {
+                    return Ok(false);
+                }
+                node.preedit.clear();
+                node.preedit_cursor = None;
+                Ok(true)
+            }
+            ImeEvent::Preedit { text, cursor } => {
+                let cursor = sanitize_preedit_cursor(&text, cursor);
+                let node = self.nodes.get_mut(&id).expect("field");
+                if node.preedit == text && node.preedit_cursor == cursor {
+                    return Ok(false);
+                }
+                node.preedit = text;
+                node.preedit_cursor = cursor;
+                Ok(true)
+            }
+            ImeEvent::Commit(text) => {
+                let node = self.nodes.get_mut(&id).expect("field");
+                let had_preedit = !node.preedit.is_empty() || node.preedit_cursor.is_some();
+                node.preedit.clear();
+                node.preedit_cursor = None;
+                let plain: String = text.chars().filter(|c| !c.is_control()).collect();
+                if plain.is_empty() {
+                    return Ok(had_preedit);
+                }
+                for ch in plain.chars() {
+                    self.apply_on_field(id, FieldKey::Insert(ch))?;
+                }
+                Ok(true)
+            }
+        }
     }
 
     fn ensure_field(&self, id: NodeId) -> Result<(), TreeError> {
@@ -629,6 +762,10 @@ impl Tree {
             let len = text.chars().count();
             if node.caret > len {
                 node.caret = len;
+            }
+            if node.kind == NodeKind::TextField {
+                node.preedit.clear();
+                node.preedit_cursor = None;
             }
             node.text = Some(text);
         }
@@ -758,6 +895,17 @@ impl Tree {
         for child in &node.children {
             self.collect_dump(out, *child);
         }
+    }
+}
+
+fn sanitize_preedit_cursor(text: &str, cursor: Option<(usize, usize)>) -> Option<(usize, usize)> {
+    let (start, end) = cursor?;
+    let start = clamp_char_boundary(text, start);
+    let end = clamp_char_boundary(text, end);
+    if start <= end {
+        Some((start, end))
+    } else {
+        Some((end, start))
     }
 }
 
@@ -897,6 +1045,86 @@ mod tests {
         let other = tree.add(NodeKind::Text, Some(root)).unwrap();
         tree.set_focus(other).unwrap();
         assert!(!tree.apply_field_key(FieldKey::Insert('x')).unwrap());
+    }
+
+    #[test]
+    fn text_field_ime_preedit_then_commit_accent_and_cjk() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        tree.get_mut(field).unwrap().name = Some("Title".into());
+        tree.get_mut(field).unwrap().text = Some("Hi".into());
+        tree.get_mut(field).unwrap().caret = 2;
+        tree.set_focus(field).unwrap();
+
+        assert!(!tree.apply_ime(ImeEvent::Enabled).unwrap());
+        assert!(tree
+            .apply_ime(ImeEvent::Preedit {
+                text: "`".into(),
+                cursor: Some((0, 0)),
+            })
+            .unwrap());
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hi"));
+        assert_eq!(tree.get(field).unwrap().composed_text(), "Hi`");
+        assert_eq!(tree.get(field).unwrap().composed_caret(), Some(2));
+        assert!(!tree.apply_field_key(FieldKey::Backspace).unwrap());
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hi"));
+
+        assert!(tree
+            .apply_ime(ImeEvent::Preedit {
+                text: String::new(),
+                cursor: None,
+            })
+            .unwrap());
+        assert!(tree.apply_ime(ImeEvent::Commit("é".into())).unwrap());
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hié"));
+        assert!(tree.get(field).unwrap().preedit.is_empty());
+        assert_eq!(tree.get(field).unwrap().composed_text(), "Hié");
+        assert_eq!(tree.get(field).unwrap().name.as_deref(), Some("Title"));
+
+        // Caret sits between "H" and "ié" so a composition is not only at the end.
+        tree.get_mut(field).unwrap().caret = 1;
+        assert!(tree
+            .apply_ime(ImeEvent::Preedit {
+                text: "a b".into(),
+                cursor: Some((3, 3)),
+            })
+            .unwrap());
+        assert_eq!(tree.get(field).unwrap().composed_text(), "Ha bié");
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hié"));
+        assert!(tree
+            .apply_ime(ImeEvent::Preedit {
+                text: "啊b".into(),
+                cursor: Some((3, 3)),
+            })
+            .unwrap());
+        // "啊" is three UTF-8 bytes; the cursor sits after it.
+        assert_eq!(tree.get(field).unwrap().composed_caret(), Some(2));
+        assert!(tree
+            .apply_ime(ImeEvent::Preedit {
+                text: String::new(),
+                cursor: None,
+            })
+            .unwrap());
+        assert!(tree.apply_ime(ImeEvent::Commit("啊不".into())).unwrap());
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("H啊不ié"));
+        assert_eq!(tree.get(field).unwrap().composed_text(), "H啊不ié");
+
+        tree.get_mut(field).unwrap().caret = 0;
+        assert!(tree
+            .apply_ime(ImeEvent::Preedit {
+                text: "x".into(),
+                cursor: None,
+            })
+            .unwrap());
+        assert_eq!(tree.get(field).unwrap().composed_caret(), None);
+        assert!(tree.apply_ime(ImeEvent::Disabled).unwrap());
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("H啊不ié"));
+        assert!(tree.get(field).unwrap().preedit.is_empty());
+
+        let other = tree.add(NodeKind::Button, Some(root)).unwrap();
+        tree.set_focus(other).unwrap();
+        assert!(!tree.apply_ime(ImeEvent::Commit("nope".into())).unwrap());
     }
 
     #[test]

@@ -66,7 +66,7 @@ Apps never call tiny-skia or wgpu directly.
 
 Dev-mode tools (first slice): `ui.tree`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`. Record / replay and write-back to source files are planned.
 
-`NodeKind::TextField` is a single-line field. The scene `text` is the value agents read and patch; `name` is the label. AccessKit maps it to `Role::TextInput` on the same id. Desktop key input covers printable characters and Backspace when the field is focused. Full IME is not in this slice: no preedit, marked text, candidate window, or Android soft keyboard (`WindowEvent::Ime` is ignored). That work is Month 3.
+`NodeKind::TextField` is a single-line field. The scene `text` is the committed value agents read and patch; `name` is the label. AccessKit maps it to `Role::TextInput` on the same id. Its value is the committed text with the current IME preedit inserted at the caret, so a composition shows up before commit. Desktop input is printable keys, Backspace, and winit `WindowEvent::Ime` (preedit and commit) on the shared Linux/Windows window path. IME is enabled only while a text field is focused. We pass the caret rectangle to the OS (`set_ime_cursor_area`) and do not draw a candidate window. Still open: selection and marked-range highlight, arrow keys, copy and paste, a real Windows IME session (the event path is compiled, not run here), and the Android soft keyboard.
 
 Hot reload (rebuild or reload TypeScript) and live patches (change a running node) are both intended in dev mode.
 
