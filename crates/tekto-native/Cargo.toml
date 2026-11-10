@@ -8,6 +8,11 @@ rust-version.workspace = true
 description = "Plugin-style native APIs (files, clipboard, notifications, tray, shortcuts) for Rust and TypeScript"
 publish = false
 
+[features]
+# Linux StatusNotifierItem tray. Off by default so apps that do not show a
+# tray do not compile this client. No extra crate (MIT in-tree D-Bus only).
+tray = []
+
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }

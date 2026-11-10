@@ -53,7 +53,7 @@ Still in Month 1:
 - Web paint: CPU renderer to canvas, then WebGPU if the GPU backend is ready
 - TypeScript apps on the browser engine, same JSX API
 - File open/save dialogs on Windows (Linux uses zenity; see `docs/architecture.md`)
-- System tray and global shortcuts on desktop
+- Global shortcuts on desktop (Linux tray is the optional `tray` feature; Windows tray is still open)
 - Better list virtualization and scroll feel
 
 ## Month 5 — mobile polish and plugins
