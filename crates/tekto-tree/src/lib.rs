@@ -1126,13 +1126,19 @@ impl Tree {
             return;
         };
         let indent = "  ".repeat(depth);
-        let name = node.display_name();
+        let label = if node.kind == NodeKind::TextField {
+            let name = node.name.as_deref().map(pretty_field_string);
+            let value = pretty_field_string(node.text.as_deref().unwrap_or_default());
+            format!("name={} value={value}", name.as_deref().unwrap_or("null"))
+        } else {
+            format!("\"{}\"", escape_quotes(&node.display_name()))
+        };
         let b = node.bounds;
         out.push_str(&format!(
-            "{indent}- {}#{} \"{}\" [{:.0},{:.0} {:.0}x{:.0}]\n",
+            "{indent}- {}#{} {} [{:.0},{:.0} {:.0}x{:.0}]\n",
             node.kind.as_str(),
             node.id,
-            escape_quotes(&name),
+            label,
             b.x,
             b.y,
             b.width,
@@ -1221,6 +1227,19 @@ fn escape_quotes(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+// Bound both fields before escaping, without cutting a UTF-8 character in half.
+fn pretty_field_string(s: &str) -> String {
+    const LIMIT: usize = 120;
+    let mut chars = s.chars();
+    let prefix: String = chars.by_ref().take(LIMIT).collect();
+    let suffix = if chars.next().is_some() {
+        " (truncated)"
+    } else {
+        ""
+    };
+    format!("{prefix:?}{suffix}")
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeDump {
     pub root: Option<u64>,
@@ -1247,6 +1266,50 @@ pub struct NodeDump {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pretty_text_fields_show_name_and_committed_value() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        let node = tree.get_mut(field).unwrap();
+        node.name = Some("Title".into());
+        node.text = Some(String::new());
+        assert!(tree
+            .to_pretty_text()
+            .contains("text_field#2 name=\"Title\" value=\"\""));
+
+        let node = tree.get_mut(field).unwrap();
+        node.text = Some("a\"\\\n\tb".into());
+        node.preedit = "composing".into();
+        assert!(tree
+            .to_pretty_text()
+            .contains(r#"text_field#2 name="Title" value="a\"\\\n\tb""#));
+        assert_eq!(
+            tree.node_dump(field).unwrap().text.as_deref(),
+            Some("a\"\\\n\tb")
+        );
+
+        let node = tree.get_mut(field).unwrap();
+        node.name = None;
+        node.text = Some("é".repeat(121));
+        let pretty = tree.to_pretty_text();
+        assert!(pretty.contains(&format!(
+            "text_field#2 name=null value=\"{}\" (truncated)",
+            "é".repeat(120)
+        )));
+        tree.get_mut(field).unwrap().text = Some("é".repeat(120));
+        assert!(!tree.to_pretty_text().contains("(truncated)"));
+        let node = tree.get_mut(field).unwrap();
+        node.name = Some("n".repeat(121));
+        node.text = None;
+        assert!(tree.to_pretty_text().contains(&format!(
+            "name=\"{}\" (truncated) value=\"\"",
+            "n".repeat(120)
+        )));
+        tree.get_mut(field).unwrap().name = Some(String::new());
+        assert!(tree.to_pretty_text().contains("name=\"\" value=\"\""));
+    }
 
     #[test]
     fn ids_are_stable_and_never_reused() {
