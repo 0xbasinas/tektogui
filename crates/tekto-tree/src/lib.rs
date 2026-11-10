@@ -175,6 +175,13 @@ pub struct LayoutStyle {
     /// If true, pack children on the main axis (vertical when `column`).
     #[serde(default)]
     pub justify_center: bool,
+    /// When finite, layout keeps this x after a position transition.
+    /// `NaN` means the flex position.
+    #[serde(default = "nan_f32", skip_serializing_if = "is_nan_f32")]
+    pub x: f32,
+    /// When finite, layout keeps this y after a position transition.
+    #[serde(default = "nan_f32", skip_serializing_if = "is_nan_f32")]
+    pub y: f32,
 }
 
 impl Default for LayoutStyle {
@@ -186,6 +193,8 @@ impl Default for LayoutStyle {
             gap: 0.0,
             column: true,
             justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
         }
     }
 }

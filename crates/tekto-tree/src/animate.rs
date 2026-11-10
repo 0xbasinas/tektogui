@@ -4,6 +4,12 @@
 //! millisecond clock the desktop loop or a headless test owns. Layout
 //! writes bounds on its own; call `advance` after layout so a running
 //! position or size tween is what gets painted.
+//!
+//! A new tween starts on the first `advance` after it is requested, so a
+//! stale clock from an idle gap does not finish it immediately. Later
+//! `transition` calls on the same node merge channels. When a position or
+//! size channel finishes (including a snap), the target is written into
+//! [`crate::LayoutStyle`] so the next layout keeps it.
 
 use crate::{NodeId, Rect, Tree, TreeError};
 
@@ -39,7 +45,7 @@ pub fn ease_smoothstep(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChannelKind {
     Opacity,
     X,
@@ -53,13 +59,14 @@ struct Channel {
     kind: ChannelKind,
     from: f32,
     to: f32,
+    /// `None` until the first [`Tree::advance`] after this channel was requested.
+    start_ms: Option<f64>,
+    duration_ms: f64,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveTransition {
     node: NodeId,
-    start_ms: f64,
-    duration_ms: f64,
     channels: Vec<Channel>,
 }
 
@@ -99,7 +106,11 @@ impl Tree {
         !self.transitions.is_empty()
     }
 
-    /// Start or replace the transition on `id`. Samples current style as the start.
+    /// Start or merge a transition on `id`. Samples current style as the start.
+    ///
+    /// Channels named in `spec` replace the same channel on this node. Other
+    /// running channels stay. The clock for a new channel is the next
+    /// [`Tree::advance`], not the last one, so an idle gap cannot skip the tween.
     pub fn transition(&mut self, id: NodeId, spec: StyleTransition) -> Result<(), TreeError> {
         if !spec.any_prop() {
             return Err(TreeError {
@@ -135,23 +146,24 @@ impl Tree {
         let duration = spec.duration_ms.unwrap_or(DEFAULT_TRANSITION_MS);
         if self.reduced_motion || !duration.is_finite() || duration <= 0.0 {
             apply_channels(self, id, &channels, 1.0);
-            self.transitions.retain(|t| t.node != id);
+            commit_layout_targets(self, id, &channels);
+            self.drop_channel_kinds(id, &channels);
             return Ok(());
         }
-        self.transitions.retain(|t| t.node != id);
-        self.transitions.push(ActiveTransition {
-            node: id,
-            start_ms: self.time_ms,
-            duration_ms: duration as f64,
-            channels,
-        });
+        let duration_ms = duration as f64;
+        for channel in &mut channels {
+            channel.duration_ms = duration_ms;
+            channel.start_ms = None;
+        }
+        self.merge_channels(id, channels);
         Ok(())
     }
 
     /// Move the clock to `time_ms` and write interpolated style.
     ///
     /// Returns true while any transition is still running. Time may jump
-    /// forward. A clock earlier than a transition's start holds the start values.
+    /// forward. A channel's start is the first advance after it was requested.
+    /// A clock earlier than that start holds the start values.
     pub fn advance(&mut self, time_ms: f64) -> bool {
         if time_ms.is_finite() {
             self.time_ms = time_ms;
@@ -163,17 +175,45 @@ impl Tree {
         let now = self.time_ms;
         let mut still = Vec::new();
         let pending = std::mem::take(&mut self.transitions);
-        for anim in pending {
-            let dur = anim.duration_ms;
-            let raw = if dur <= 0.0 {
-                1.0
-            } else {
-                ((now - anim.start_ms) / dur) as f32
-            };
-            let done = raw >= 1.0;
-            let eased = ease_smoothstep(raw);
-            apply_channels(self, anim.node, &anim.channels, eased);
-            if !done && self.nodes.contains_key(&anim.node) {
+        for mut anim in pending {
+            if !self.nodes.contains_key(&anim.node) {
+                continue;
+            }
+            let mut keep = Vec::new();
+            let mut done_channels = Vec::new();
+            for channel in &mut anim.channels {
+                if channel.start_ms.is_none() {
+                    channel.start_ms = Some(now);
+                }
+                let start = channel.start_ms.unwrap_or(now);
+                let dur = channel.duration_ms;
+                let raw = if dur <= 0.0 || now + f64::EPSILON < start {
+                    if now + f64::EPSILON < start {
+                        0.0
+                    } else {
+                        1.0
+                    }
+                } else {
+                    ((now - start) / dur) as f32
+                };
+                let done = raw >= 1.0;
+                apply_channels(
+                    self,
+                    anim.node,
+                    std::slice::from_ref(channel),
+                    ease_smoothstep(raw),
+                );
+                if done {
+                    done_channels.push(*channel);
+                } else {
+                    keep.push(*channel);
+                }
+            }
+            if !done_channels.is_empty() {
+                commit_layout_targets(self, anim.node, &done_channels);
+            }
+            if !keep.is_empty() && self.nodes.contains_key(&anim.node) {
+                anim.channels = keep;
                 still.push(anim);
             }
         }
@@ -189,7 +229,32 @@ impl Tree {
         let pending = std::mem::take(&mut self.transitions);
         for anim in pending {
             apply_channels(self, anim.node, &anim.channels, 1.0);
+            commit_layout_targets(self, anim.node, &anim.channels);
         }
+    }
+
+    fn merge_channels(&mut self, id: NodeId, channels: Vec<Channel>) {
+        if channels.is_empty() {
+            return;
+        }
+        if let Some(existing) = self.transitions.iter_mut().find(|t| t.node == id) {
+            for channel in channels {
+                existing.channels.retain(|old| old.kind != channel.kind);
+                existing.channels.push(channel);
+            }
+            return;
+        }
+        self.transitions
+            .push(ActiveTransition { node: id, channels });
+    }
+
+    fn drop_channel_kinds(&mut self, id: NodeId, channels: &[Channel]) {
+        if let Some(existing) = self.transitions.iter_mut().find(|t| t.node == id) {
+            existing
+                .channels
+                .retain(|old| !channels.iter().any(|channel| channel.kind == old.kind));
+        }
+        self.transitions.retain(|t| !t.channels.is_empty());
     }
 }
 
@@ -201,7 +266,29 @@ fn push_channel(out: &mut Vec<Channel>, kind: ChannelKind, to: Option<f32>, from
         return;
     }
     let from = if from.is_finite() { from } else { to };
-    out.push(Channel { kind, from, to });
+    out.push(Channel {
+        kind,
+        from,
+        to,
+        start_ms: None,
+        duration_ms: DEFAULT_TRANSITION_MS as f64,
+    });
+}
+
+/// Finished position and size stay in layout so the next layout pass keeps them.
+fn commit_layout_targets(tree: &mut Tree, id: NodeId, channels: &[Channel]) {
+    let Some(node) = tree.nodes.get_mut(&id) else {
+        return;
+    };
+    for channel in channels {
+        match channel.kind {
+            ChannelKind::Opacity => {}
+            ChannelKind::X => node.layout.x = channel.to,
+            ChannelKind::Y => node.layout.y = channel.to,
+            ChannelKind::Width => node.layout.width = channel.to,
+            ChannelKind::Height => node.layout.height = channel.to,
+        }
+    }
 }
 
 fn apply_channels(tree: &mut Tree, id: NodeId, channels: &[Channel], eased: f32) {
@@ -313,5 +400,63 @@ mod tests {
             assert!((0.0..=1.0).contains(&e), "{e}");
         }
         assert!((ease_smoothstep(0.5) - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn transition_after_idle_gap_starts_on_the_next_advance() {
+        let mut tree = Tree::new();
+        let id = box_node(&mut tree);
+        assert!(!tree.advance(0.0));
+        assert!(!tree.advance(5_000.0));
+        tree.transition(
+            id,
+            StyleTransition {
+                opacity: Some(0.0),
+                duration_ms: Some(100.0),
+                ..StyleTransition::default()
+            },
+        )
+        .unwrap();
+        // The next tick is the start, even though the clock is already past the duration.
+        assert!(tree.advance(5_000.0));
+        assert!((tree.get(id).unwrap().opacity - 1.0).abs() < 0.01);
+        assert!(tree.advance(5_050.0));
+        let mid = tree.get(id).unwrap().opacity;
+        assert!(mid > 0.3 && mid < 0.7, "{mid}");
+        assert!(!tree.advance(5_100.0));
+        assert!(tree.get(id).unwrap().opacity < 0.01);
+    }
+
+    #[test]
+    fn later_transition_merges_channels_on_the_same_node() {
+        let mut tree = Tree::new();
+        let id = box_node(&mut tree);
+        tree.transition(
+            id,
+            StyleTransition {
+                opacity: Some(0.0),
+                duration_ms: Some(100.0),
+                ..StyleTransition::default()
+            },
+        )
+        .unwrap();
+        tree.transition(
+            id,
+            StyleTransition {
+                x: Some(50.0),
+                duration_ms: Some(100.0),
+                ..StyleTransition::default()
+            },
+        )
+        .unwrap();
+        assert!(tree.advance(0.0));
+        assert!(tree.advance(50.0));
+        let mid = tree.get(id).unwrap();
+        assert!(mid.opacity > 0.3 && mid.opacity < 0.7, "{}", mid.opacity);
+        assert!(
+            mid.bounds.x > 20.0 && mid.bounds.x < 40.0,
+            "{}",
+            mid.bounds.x
+        );
     }
 }

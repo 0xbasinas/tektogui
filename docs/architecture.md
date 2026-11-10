@@ -101,7 +101,9 @@ Default widgets use a warm off-white page, charcoal ink, 24px page padding, 16px
 
 A node can tween opacity, x, y, width, and height. Call `Tree::transition` with a `StyleTransition`. The default is 180 ms and a smoothstep curve (no bounce, no overshoot). `Tree::advance(time_ms)` writes the in-between values. The desktop loop does that after layout, about every 16 ms, while a tween is running. Headless tests pass their own clock.
 
-Layout still owns bounds. Advance runs after layout so a running tween is what you see. When the tween ends, the next layout wins again. Set the layout size as well if the end size should stick.
+A new channel starts on the first `advance` after `transition`, not on the last clock sample. The desktop loop stops ticking while nothing is moving, then advances with elapsed wall time. Anchoring at request time would skip a tween that starts after a long idle.
+
+Several channels can run on one node. A later `transition` replaces only the props it names. Opacity stays on the node. When a position or size channel finishes, including a zero-duration snap or reduced motion, the target is stored on `LayoutStyle` (`x`, `y`, `width`, `height`). The next layout keeps those values. `x` and `y` are `NaN` until a transition sets them.
 
 Opacity multiplies the node and its children. `0` skips that subtree.
 
@@ -109,6 +111,6 @@ Each tick is a full CPU paint. There are no dirty rectangles. `animation_frames_
 
 `TEKTO_REDUCE_MOTION=1` (or `true` / `yes` / `on`) snaps tweens to the end. The desktop loop reads that when the window starts. AccessKit does not expose a reduced-motion flag, and this crate does not read GTK, GNOME, or Windows animation settings. That OS check is a follow-up.
 
-From JavaScript, `transitionOp(id, { opacity, x, y, width, height, durationMs })` in `@tektogui/core` builds a `HostOp`. QuickJS also has `tekto.transition(id, key, value, durationMs)` for one prop at a time. The host starts the tween; it does not advance time.
+From JavaScript, `transitionOp(id, { opacity, x, y, width, height, durationMs })` in `@tektogui/core` builds a `HostOp`. QuickJS `tekto.transition` takes that same props object, or `(id, key, value, durationMs)` for one prop. Each call merges. The host starts the tween; it does not advance time.
 
 On Linux, `Files` and `NativeOp` provide text and byte reads and writes under `$XDG_DATA_HOME/tekto` (or `$HOME/.local/share/tekto`). Paths must be relative, contain no traversal or symlinks, and intermediate directories must already exist. File dialogs and access outside this directory are not yet supported. `filesReadBytes` returns a JSON array encoded in the existing string result; `filesWriteBytes` accepts a `bytes` array.

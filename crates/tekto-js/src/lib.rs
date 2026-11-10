@@ -241,9 +241,11 @@ fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), J
 /// When the `quickjs` feature is on, the script sees a global `tekto`
 /// object: `create`, `setText`, `setProp`, `append`, `remove`, and
 /// `transition(id, key, value, durationMs)` for one of `opacity`, `x`,
-/// `y`, `width`, `height`. Those call the same [`HostOp`] protocol the
-/// web target will use. `transition` starts a tween; the host loop
-/// advances time with [`tekto_tree::Tree::advance`].
+/// `y`, `width`, `height`, or `transition(id, { opacity, x, y, width,
+/// height, durationMs })` for several at once. A later call merges.
+/// Those call the same [`HostOp`] protocol the web target will use.
+/// `transition` starts a tween; the host loop advances time with
+/// [`tekto_tree::Tree::advance`].
 ///
 /// Without the feature this returns [`JsError::EngineDisabled`].
 pub fn eval_to_tree(source: &str) -> Result<Tree, JsError> {
@@ -457,6 +459,7 @@ mod tests {
             }],
         )
         .unwrap();
+        assert!(tree.advance(0.0));
         assert!(tree.advance(50.0));
         let mid = tree.get(id).unwrap();
         assert!(mid.opacity > 0.2 && mid.opacity < 0.8);
@@ -464,6 +467,82 @@ mod tests {
         assert!(!tree.advance(100.0));
         assert!(tree.get(id).unwrap().opacity < 0.01);
         assert!((tree.get(id).unwrap().bounds.x - 40.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn consecutive_transition_ops_keep_both_properties() {
+        let mut tree = Tree::new();
+        let id = tree.add(NodeKind::Rect, None).unwrap();
+        tree.get_mut(id).unwrap().bounds = tekto_tree::Rect::new(0.0, 0.0, 20.0, 10.0);
+        tree.get_mut(id).unwrap().opacity = 1.0;
+        apply_ops(
+            &mut tree,
+            &[
+                HostOp::Transition {
+                    id: id.raw(),
+                    opacity: Some("0".into()),
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
+                    duration_ms: Some(100),
+                },
+                HostOp::Transition {
+                    id: id.raw(),
+                    opacity: None,
+                    x: Some("40".into()),
+                    y: None,
+                    width: None,
+                    height: None,
+                    duration_ms: Some(100),
+                },
+            ],
+        )
+        .unwrap();
+        assert!(tree.advance(0.0));
+        assert!(tree.advance(50.0));
+        let mid = tree.get(id).unwrap();
+        assert!(
+            mid.opacity > 0.2 && mid.opacity < 0.8,
+            "opacity {}",
+            mid.opacity
+        );
+        assert!(
+            mid.bounds.x > 10.0 && mid.bounds.x < 30.0,
+            "x {}",
+            mid.bounds.x
+        );
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn js_transition_object_and_follow_up_call_both_run() {
+        let mut host = TreeHost::new();
+        eval_module(
+            r#"
+            const box = tekto.create("rect");
+            tekto.transition(box, { opacity: 0, x: 40, durationMs: 100 });
+            tekto.transition(box, "y", 16, 100);
+            "#,
+            &mut host,
+        )
+        .expect("eval");
+        let mut tree = host.tree.borrow().clone();
+        let id = NodeId::from_raw(1);
+        assert!(tree.advance(0.0));
+        assert!(tree.advance(50.0));
+        let mid = tree.get(id).unwrap();
+        assert!(mid.opacity > 0.2 && mid.opacity < 0.8, "{}", mid.opacity);
+        assert!(
+            mid.bounds.x > 10.0 && mid.bounds.x < 30.0,
+            "{}",
+            mid.bounds.x
+        );
+        assert!(
+            mid.bounds.y > 4.0 && mid.bounds.y < 12.0,
+            "{}",
+            mid.bounds.y
+        );
     }
 
     #[cfg(feature = "quickjs")]
