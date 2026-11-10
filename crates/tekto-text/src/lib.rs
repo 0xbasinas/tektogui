@@ -12,6 +12,9 @@ pub const ROBOTO_REGULAR: &[u8] = include_bytes!("../fonts/Roboto-Regular.ttf");
 
 const FAMILY_NAME: &str = "Roboto";
 
+/// Default line-height relative to font size. Settled, not tight.
+pub const LINE_HEIGHT: f32 = 1.4;
+
 fn roboto_blob() -> Blob<u8> {
     Blob::new(Arc::new(ROBOTO_REGULAR.to_vec()))
 }
@@ -60,7 +63,7 @@ impl TextEngine {
             .ranged_builder(&mut self.font_cx, text, 1.0, true);
         builder.push_default(StyleProperty::Brush(color));
         builder.push_default(StyleProperty::FontSize(font_size));
-        builder.push_default(LineHeight::FontSizeRelative(1.35));
+        builder.push_default(LineHeight::FontSizeRelative(LINE_HEIGHT));
         builder.push_default(FontFamily::named(FAMILY_NAME));
         let mut layout: Layout<[u8; 4]> = builder.build(text);
         layout.break_all_lines(max_width);

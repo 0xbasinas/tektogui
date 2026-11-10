@@ -5,12 +5,16 @@ use tekto_tree::{Color, LayoutStyle, NodeId, NodeKind, Tree, TreeError};
 
 /// Space used around the window content.
 pub const PAGE_PADDING: f32 = 24.0;
-/// Space between stacked children.
-pub const STACK_GAP: f32 = 16.0;
+/// Space between stacked children (body sits comfortably under the banner).
+pub const STACK_GAP: f32 = 20.0;
 /// Default body text size.
 pub const BODY_SIZE: f32 = 20.0;
 /// Default title text size.
 pub const TITLE_SIZE: f32 = 22.0;
+/// Quiet header band. Title is padded and vertically centered inside it.
+pub const BANNER_HEIGHT: f32 = 64.0;
+/// Inset for title text inside the banner.
+pub const BANNER_PADDING: f32 = 20.0;
 
 pub struct WidgetError(pub TreeError);
 
@@ -51,6 +55,7 @@ pub fn window(
             padding: PAGE_PADDING,
             gap: STACK_GAP,
             column: true,
+            justify_center: false,
         };
     }
     Ok(id)
@@ -67,7 +72,14 @@ pub fn banner(
     if let Some(n) = tree.get_mut(id) {
         n.name = Some("banner".into());
         n.fill = Some(Color::BANNER);
-        n.layout = LayoutStyle::sized(width, height);
+        n.layout = LayoutStyle {
+            width,
+            height,
+            padding: BANNER_PADDING,
+            gap: 0.0,
+            column: true,
+            justify_center: true,
+        };
     }
     Ok(id)
 }
@@ -97,7 +109,7 @@ pub fn title_on_banner(
     tree: &mut Tree,
     banner: NodeId,
     content: &str,
-    width: f32,
+    _width: f32,
 ) -> Result<NodeId, WidgetError> {
     let id = tree.add(NodeKind::Text, Some(banner))?;
     if let Some(n) = tree.get_mut(id) {
@@ -105,13 +117,8 @@ pub fn title_on_banner(
         n.name = Some(content.into());
         n.color = Some(Color::ON_BANNER);
         n.font_size = TITLE_SIZE;
-        n.layout = LayoutStyle {
-            width,
-            height: 48.0,
-            padding: 14.0,
-            gap: 0.0,
-            column: true,
-        };
+        // Let Taffy measure the line box; the banner pads and centers it.
+        n.layout = LayoutStyle::default();
     }
     Ok(id)
 }
@@ -121,7 +128,7 @@ pub fn notes_tree(width: f32, height: f32) -> Result<Tree, WidgetError> {
     let mut tree = Tree::new();
     let root = window(&mut tree, "Notes", width, height)?;
     let banner_w = (width - PAGE_PADDING * 2.0).max(80.0);
-    let b = banner(&mut tree, root, banner_w, 64.0)?;
+    let b = banner(&mut tree, root, banner_w, BANNER_HEIGHT)?;
     title_on_banner(&mut tree, b, "Notes", banner_w)?;
     text(&mut tree, root, "Hello from Tekto", BODY_SIZE, Color::INK)?;
     Ok(tree)

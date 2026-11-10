@@ -131,6 +131,9 @@ pub struct LayoutStyle {
     pub padding: f32,
     pub gap: f32,
     pub column: bool,
+    /// If true, pack children on the main axis (vertical when `column`).
+    #[serde(default)]
+    pub justify_center: bool,
 }
 
 impl Default for LayoutStyle {
@@ -141,6 +144,7 @@ impl Default for LayoutStyle {
             padding: 0.0,
             gap: 0.0,
             column: true,
+            justify_center: false,
         }
     }
 }

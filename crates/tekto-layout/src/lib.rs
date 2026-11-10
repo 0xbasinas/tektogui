@@ -6,8 +6,8 @@
 use std::cell::RefCell;
 use taffy::compute_leaf_layout;
 use taffy::prelude::{
-    AvailableSpace, Dimension, Display, FlexDirection, LengthPercentage, Rect, Size, Style,
-    TaffyTree,
+    AvailableSpace, Dimension, Display, FlexDirection, JustifyContent, LengthPercentage, Rect,
+    Size, Style, TaffyTree,
 };
 use tekto_text::TextEngine;
 use tekto_tree::{NodeId, NodeKind, Tree};
@@ -126,6 +126,11 @@ fn style_for(tree: &Tree, id: NodeId, is_root: bool) -> Style {
             width: LengthPercentage::length(ls.gap),
             height: LengthPercentage::length(ls.gap),
         },
+        justify_content: if ls.justify_center {
+            JustifyContent::CENTER
+        } else {
+            JustifyContent::START
+        },
         ..Style::DEFAULT
     }
 }
@@ -206,6 +211,7 @@ mod tests {
             padding: 10.0,
             gap: 8.0,
             column: true,
+            justify_center: false,
         };
         let a = tree.add(NodeKind::Rect, Some(root)).unwrap();
         tree.get_mut(a).unwrap().layout = LayoutStyle::sized(180.0, 40.0);
@@ -228,6 +234,7 @@ mod tests {
             padding: 0.0,
             gap: 0.0,
             column: true,
+            justify_center: false,
         };
         let t = tree.add(NodeKind::Text, Some(root)).unwrap();
         {
