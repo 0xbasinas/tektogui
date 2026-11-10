@@ -10,4 +10,5 @@ publish = false
 
 [dependencies]
 tekto-tree = { workspace = true }
+tekto-text = { workspace = true }
 taffy = { workspace = true }

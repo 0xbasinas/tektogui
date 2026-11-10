@@ -1,30 +1,94 @@
 //! Layout pass: map the scene tree to Taffy, then write bounds back.
+//!
+//! Text nodes are measured with Parley (via `tekto-text`) so width/height
+//! come from real glyph layout, not a font-size guess.
 
+use std::cell::RefCell;
+use taffy::compute_leaf_layout;
 use taffy::prelude::{
     AvailableSpace, Dimension, Display, FlexDirection, LengthPercentage, Rect, Size, Style,
     TaffyTree,
 };
+use tekto_text::TextEngine;
 use tekto_tree::{NodeId, NodeKind, Tree};
 
-/// Compute bounds for every node, starting at `origin` in a viewport of
+thread_local! {
+    static TEXT: RefCell<TextEngine> = RefCell::new(TextEngine::new());
+}
+
+/// Compute bounds for every node in a viewport of
 /// `viewport_width` x `viewport_height` logical pixels.
 pub fn layout_tree(tree: &mut Tree, viewport_width: f32, viewport_height: f32) {
+    TEXT.with(|engine| {
+        layout_tree_with_text(
+            tree,
+            viewport_width,
+            viewport_height,
+            &mut engine.borrow_mut(),
+        )
+    });
+}
+
+/// Like [`layout_tree`], but uses a caller-provided text engine (useful in tests).
+pub fn layout_tree_with_text(
+    tree: &mut Tree,
+    viewport_width: f32,
+    viewport_height: f32,
+    text: &mut TextEngine,
+) {
     let Some(root) = tree.root() else {
         return;
     };
-    let mut taffy: TaffyTree<()> = TaffyTree::new();
+    let mut taffy: TaffyTree<NodeId> = TaffyTree::new();
     let mut map: Vec<(NodeId, taffy::NodeId)> = Vec::new();
-    // We store taffy NodeId in a side table keyed by tekto NodeId via a hashmap.
     let taffy_root = build(&mut taffy, tree, root, &mut map);
-    let _ = taffy.compute_layout(
+    let _ = taffy.compute_layout_with_measure(
         taffy_root,
         Size {
             width: AvailableSpace::Definite(viewport_width),
             height: AvailableSpace::Definite(viewport_height),
         },
+        |inputs, _tid, ctx, style| {
+            compute_leaf_layout(
+                inputs,
+                style,
+                |_, _| 0.0,
+                |known, avail| {
+                    let Some(id) = ctx.copied() else {
+                        return Size::ZERO;
+                    };
+                    measure_text(tree, text, id, known, avail)
+                },
+            )
+        },
     );
     write_bounds(&taffy, tree, root, 0.0, 0.0, &map);
-    let _ = map;
+}
+
+fn measure_text(
+    tree: &Tree,
+    text: &mut TextEngine,
+    id: NodeId,
+    known: Size<Option<f32>>,
+    avail: Size<AvailableSpace>,
+) -> Size<f32> {
+    let Some(node) = tree.get(id) else {
+        return Size::ZERO;
+    };
+    if !matches!(node.kind, NodeKind::Text) {
+        return Size::ZERO;
+    }
+    let content = node.text.as_deref().unwrap_or("");
+    let max_width = known.width.or_else(|| match avail.width {
+        AvailableSpace::Definite(w) => Some(w.max(0.0)),
+        AvailableSpace::MinContent => Some(0.0),
+        AvailableSpace::MaxContent => None,
+    });
+    let (w, h) = text.measure(content, node.font_size, max_width);
+    Size {
+        width: known.width.unwrap_or(w),
+        height: known.height.unwrap_or(h.max(1.0)),
+    }
 }
 
 fn style_for(tree: &Tree, id: NodeId, is_root: bool) -> Style {
@@ -44,10 +108,8 @@ fn style_for(tree: &Tree, id: NodeId, is_root: bool) -> Style {
             Dimension::length(ls.height)
         } else if is_root {
             Dimension::percent(1.0)
-        } else if matches!(node.kind, NodeKind::Text) {
-            // Approximate line box until text measurement is wired into Taffy.
-            Dimension::length((node.font_size * 1.4).max(16.0))
         } else {
+            // Text height comes from the Parley measure function.
             Dimension::auto()
         },
     };
@@ -78,29 +140,36 @@ fn length(value: f32) -> Rect<LengthPercentage> {
 }
 
 fn build(
-    taffy: &mut TaffyTree<()>,
+    taffy: &mut TaffyTree<NodeId>,
     tree: &Tree,
     id: NodeId,
     map: &mut Vec<(NodeId, taffy::NodeId)>,
 ) -> taffy::NodeId {
     let is_root = tree.root() == Some(id);
     let style = style_for(tree, id, is_root);
-    let children: Vec<taffy::NodeId> = tree
-        .get(id)
-        .map(|n| {
-            n.children
-                .iter()
-                .map(|c| build(taffy, tree, *c, map))
-                .collect()
-        })
-        .unwrap_or_default();
-    let tid = taffy.new_with_children(style, &children).expect("taffy");
+    let child_ids: Vec<NodeId> = tree.get(id).map(|n| n.children.clone()).unwrap_or_default();
+    let tid = if child_ids.is_empty() {
+        let is_text = tree
+            .get(id)
+            .is_some_and(|n| matches!(n.kind, NodeKind::Text));
+        if is_text {
+            taffy.new_leaf_with_context(style, id).expect("taffy")
+        } else {
+            taffy.new_leaf(style).expect("taffy")
+        }
+    } else {
+        let children: Vec<taffy::NodeId> = child_ids
+            .iter()
+            .map(|c| build(taffy, tree, *c, map))
+            .collect();
+        taffy.new_with_children(style, &children).expect("taffy")
+    };
     map.push((id, tid));
     tid
 }
 
 fn write_bounds(
-    taffy: &TaffyTree<()>,
+    taffy: &TaffyTree<NodeId>,
     tree: &mut Tree,
     id: NodeId,
     parent_x: f32,
@@ -147,5 +216,47 @@ mod tests {
         let rb = tree.get(b).unwrap().bounds;
         assert!(rb.y >= ra.y + ra.height);
         assert_eq!(ra.x, rb.x);
+    }
+
+    #[test]
+    fn text_height_comes_from_parley_not_a_guess() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        tree.get_mut(root).unwrap().layout = LayoutStyle {
+            width: 400.0,
+            height: 200.0,
+            padding: 0.0,
+            gap: 0.0,
+            column: true,
+        };
+        let t = tree.add(NodeKind::Text, Some(root)).unwrap();
+        {
+            let n = tree.get_mut(t).unwrap();
+            n.text = Some("Hello from Tekto".into());
+            n.font_size = 20.0;
+            // No explicit height — measure must provide one.
+        }
+        layout_tree(&mut tree, 400.0, 200.0);
+        let b = tree.get(t).unwrap().bounds;
+        assert!(b.width > 10.0, "width was {}", b.width);
+        assert!(b.height > 16.0, "height was {}", b.height);
+        // A one-line 20px string should be much shorter than the old 1.4 guess * many lines.
+        assert!(b.height < 50.0, "height was {}", b.height);
+
+        // Wrapping should make a long string taller than a short one.
+        let long = tree.add(NodeKind::Text, Some(root)).unwrap();
+        {
+            let n = tree.get_mut(long).unwrap();
+            n.text = Some("word ".repeat(40).trim().to_string());
+            n.font_size = 20.0;
+            n.layout.width = 200.0;
+        }
+        layout_tree(&mut tree, 400.0, 400.0);
+        let short_h = tree.get(t).unwrap().bounds.height;
+        let long_h = tree.get(long).unwrap().bounds.height;
+        assert!(
+            long_h > short_h + 10.0,
+            "expected wrapped text to be taller: short={short_h} long={long_h}"
+        );
     }
 }
