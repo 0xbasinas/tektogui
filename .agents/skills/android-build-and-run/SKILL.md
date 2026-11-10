@@ -151,7 +151,24 @@ Judge QuickJS cost on the `.so` / release size delta, not the raw debug APK (deb
 
 `android_main` in `examples/notes-android` calls `tekto::run_android` (or `run_android_with_session` when the `quickjs` feature is on, so `POST /reload` has a hook). That builds the winit event loop with `with_android_app`.
 
-winit turns `InitWindow` into `ApplicationHandler::resumed` and `TerminateWindow` into `suspended`. `resumed` creates the winit window and the softbuffer CPU surface and records one [`SurfaceEpoch`](../../../crates/tekto-platform/src/lifecycle.rs). `suspended` retires that epoch, drops the softbuffer surface, then drops the window. A redraw after suspend returns without `buffer_mut` / `present`. A second `resumed` drops any held surface first so a replaced `ANativeWindow` cannot leak or be locked. IME is later.
+winit turns `InitWindow` into `ApplicationHandler::resumed` and `TerminateWindow` into `suspended`. `resumed` creates the winit window and the softbuffer CPU surface and records one [`SurfaceEpoch`](../../../crates/tekto-platform/src/lifecycle.rs). `suspended` retires that epoch, drops the softbuffer surface, then drops the window. A redraw after suspend returns without `buffer_mut` / `present`. A second `resumed` drops any held surface first so a replaced `ANativeWindow` cannot leak or be locked.
+
+## Text input
+
+Chosen path: a native `EditText` overlay, not winit IME. winit's Android `set_ime_allowed` only shows or hides the soft keyboard. It does not emit `WindowEvent::Ime`. android-activity's `NativeActivity` text-input state is a no-op.
+
+`examples/notes-android/java/com/tektogui/ime/FieldOverlay.java` is compiled by cargo-apk2 (`java_sources = "java"`). When a `text_field` is focused, Rust polls `FieldOverlay.text` / `caret` and writes them with `Tree::set_focused_field_value`. AccessKit and MCP read that `text`. An agent `text` patch is pushed back into the `EditText`. The activity uses `adjustResize`.
+
+Limits: single-line only. The candidate window is the Android IME's. Tekto does not keep a preedit on this path. The overlay string is the committed value. If the class is missing, the app falls back to key events. A live type-into-field check needs a free emulator or device. Do not start the emulator next to a heavy build.
+
+Host checks (no emulator):
+
+```bash
+cargo test -p tekto-platform --lib android_field
+cargo test -p tekto-tree --lib android_overlay_value
+cargo test -p tekto-a11y --lib android_overlay_value
+cargo check -p notes-android --target aarch64-linux-android
+```
 
 Host-only proof (no emulator):
 

@@ -806,6 +806,34 @@ impl Tree {
         Ok(true)
     }
 
+    /// Replace the focused field's committed value. Used by the Android overlay.
+    ///
+    /// Control characters are dropped. A preedit is cleared and not committed.
+    /// Returns `Ok(false)` when focus is not a text field or nothing changed.
+    pub fn set_focused_field_value(&mut self, text: &str, caret: usize) -> Result<bool, TreeError> {
+        let Some(id) = self.focus else {
+            return Ok(false);
+        };
+        if self.get(id).is_none_or(|n| n.kind != NodeKind::TextField) {
+            return Ok(false);
+        }
+        let plain: String = text.chars().filter(|c| !c.is_control()).collect();
+        let caret = caret.min(plain.chars().count());
+        let node = self.nodes.get_mut(&id).expect("field");
+        if node.text.as_deref().unwrap_or("") == plain
+            && node.caret == caret
+            && node.preedit.is_empty()
+            && node.preedit_cursor.is_none()
+        {
+            return Ok(false);
+        }
+        node.preedit.clear();
+        node.preedit_cursor = None;
+        node.text = Some(plain);
+        node.caret = caret;
+        Ok(true)
+    }
+
     /// Apply one IME event to the focused text field.
     ///
     /// Returns `Ok(false)` when nothing is focused, focus is not a text field,
@@ -1264,6 +1292,31 @@ mod tests {
         let other = tree.add(NodeKind::Text, Some(root)).unwrap();
         tree.set_focus(other).unwrap();
         assert!(!tree.apply_field_key(FieldKey::Insert('x')).unwrap());
+    }
+
+    #[test]
+    fn android_overlay_value_replaces_the_focused_field() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        tree.get_mut(field).unwrap().name = Some("Title".into());
+        tree.get_mut(field).unwrap().text = Some("Hi".into());
+        tree.get_mut(field).unwrap().caret = 2;
+        tree.set_focus(field).unwrap();
+        tree.apply_ime(ImeEvent::Preedit {
+            text: "x".into(),
+            cursor: None,
+        })
+        .unwrap();
+        assert!(tree.set_focused_field_value("Hi你\n", 3).unwrap());
+        let node = tree.get(field).unwrap();
+        assert_eq!(node.text.as_deref(), Some("Hi你"));
+        assert_eq!(node.name.as_deref(), Some("Title"));
+        assert!(node.preedit.is_empty());
+        assert_eq!(node.caret, 3);
+        assert!(!tree.set_focused_field_value("Hi你", 3).unwrap());
+        tree.set_focus(root).unwrap();
+        assert!(!tree.set_focused_field_value("nope", 0).unwrap());
     }
 
     #[test]

@@ -3151,6 +3151,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "accesskit_winit",
+ "jni",
  "softbuffer",
  "tekto-a11y",
  "tekto-layout",

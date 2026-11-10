@@ -195,4 +195,20 @@ mod tests {
         assert_eq!(node.value.as_deref(), Some("Hi你"));
         assert_eq!(scene.get(field).unwrap().text.as_deref(), Some("Hi你"));
     }
+
+    #[test]
+    fn android_overlay_value_is_the_accesskit_value() {
+        let mut scene = SceneTree::new();
+        let w = scene.add(K::Window, None).unwrap();
+        let field = scene.add(K::TextField, Some(w)).unwrap();
+        scene.get_mut(field).unwrap().name = Some("Title".into());
+        scene.get_mut(field).unwrap().text = Some("".into());
+        scene.set_focus(field).unwrap();
+        assert!(scene.set_focused_field_value("Milk", 4).unwrap());
+        let dump = dump(&scene).expect("dump");
+        let node = dump.nodes.iter().find(|n| n.id == field.raw()).unwrap();
+        assert_eq!(node.role, "TextInput");
+        assert_eq!(node.label.as_deref(), Some("Title"));
+        assert_eq!(node.value.as_deref(), Some("Milk"));
+    }
 }
