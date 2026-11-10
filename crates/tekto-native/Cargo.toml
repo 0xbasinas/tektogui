@@ -46,6 +46,8 @@ arboard = { version = "3.7.0", default-features = false }
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "0.22.4", default-features = false }
 ndk-context = "0.1.1"
+# MIT OR Apache-2.0; openat confines private file access.
+libc = "0.2"
 
 [dev-dependencies]
 serde_json = { workspace = true }
