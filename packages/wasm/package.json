@@ -16,6 +16,11 @@
       "types": "./src/canvas.d.ts",
       "import": "./src/canvas.js",
       "default": "./src/canvas.js"
+    },
+    "./patch": {
+      "types": "./src/patch.d.ts",
+      "import": "./src/patch.js",
+      "default": "./src/patch.js"
     }
   },
   "files": [

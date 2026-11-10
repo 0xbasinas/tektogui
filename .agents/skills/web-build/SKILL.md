@@ -14,6 +14,7 @@ CPU paint is in. `@tektogui/wasm/canvas` (`paintCanvas`, `resizeCanvas`, `blitPn
 - `crates/tekto-wasm` — tree, layout, text, CPU renderer (`tiny-skia`), `HostOp` / `apply_ops`. No `quickjs`, no `gpu`.
 - `packages/wasm` (`@tektogui/wasm`) — `connectWasm`, `applyOps`, `renderPng`, and `create` / `setText` / `setProp` / `append` / `remove` for `mount`. No DOM.
 - `packages/wasm/src/canvas.js` (`@tektogui/wasm/canvas`) — blit and basic resize. No new crates.
+- `packages/wasm/dev.js` — one-command host page for a TSX entry (default Notes). `applyUiPatch` (`@tektogui/wasm/patch`) is the live patch hook. No new crates and no npm packages.
 - `cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js` — the app facade without the desktop shell.
 
 No new crates were added for the ABI (no `wasm-bindgen`). Direct deps added for this path stay MIT / Apache-2.0 / BSD / zlib. The text stack (Parley / ICU) already pulls Unicode License v3 crates into both the default host tree and `tekto-wasm`: `icu_segmenter`, `icu_normalizer`, `icu_provider`, `zerovec`, `writeable`, `yoke`, `tinystr`, and the other `icu_*` data crates, plus `unicode-ident` (`(MIT OR Apache-2.0) AND Unicode-3.0`). Unicode-3.0 is permissive. It is not MIT, Apache-2.0, BSD, or zlib, and it is not GPL or LGPL. Do not add a new direct dependency outside MIT / Apache-2.0 / BSD / zlib. Do not rip out the text stack to drop these transitives. The canvas path adds no npm packages.
@@ -33,11 +34,23 @@ cargo build -p tekto-wasm --target wasm32-unknown-unknown
 node --test packages/wasm/test.js
 ```
 
-`node --test packages/wasm/test.js` mounts the Notes JSX tree, compares `renderPng(640, 400)` to `crates/tekto/tests/snapshots/notes-headless.png`, blits those pixels onto a fake canvas, and resizes to 393×240. No display. Do not use displays :1 or :2.
+`node --test packages/wasm/test.js` mounts the Notes JSX tree, compares `renderPng(640, 400)` to `crates/tekto/tests/snapshots/notes-headless.png`, blits those pixels onto a fake canvas, and resizes to 393×240. `node --test packages/wasm/tsx-test.js` bundles `examples/notes/src/app.tsx` with esbuild (MIT binary on `PATH`) and mounts that same sketch on the wasm host. It also starts the web dev server and checks `POST /patch`. No display. Do not use displays :1 or :2. Both tests skip when the wasm file or esbuild is missing.
 
 `RUSTFLAGS=-D warnings` is set in CI. Do not enable `quickjs` or `gpu` on these commands.
 
-## Optional browser smoke
+## One-command dev
+
+```bash
+node packages/wasm/dev.js
+```
+
+That command builds `tekto-wasm` if `target/wasm32-unknown-unknown/debug/tekto_wasm.wasm` is missing, bundles `examples/notes/src/app.tsx`, and serves `http://127.0.0.1:8080/`. Saving the TSX rebuilds with esbuild and reloads the page. The browser JS engine runs the app. QuickJS stays off.
+
+Another entry: `node packages/wasm/dev.js path/to/app.tsx`. `PORT` picks the listen port. `TEKTO_WASM` picks the wasm file.
+
+Live `ui.patch` uses the same JSON as desktop `POST /patch` (`id` plus `text`, `name`, `fill`, `color`, `fontSize`, `padding`, `gap`). The page applies it with `applyUiPatch` from `@tektogui/wasm/patch` and repaints. The wasm core does not return a node dump, so this response is `{ ok, delivered }`. Set `TEKTO_DEV_URL` to the desktop dev server (`http://127.0.0.1:<port>`) to forward the same body there. That keeps source writeback on the desktop server. The open page still updates from the web server event stream.
+
+## Optional static smoke
 
 ```bash
 cargo build -p tekto-wasm --target wasm32-unknown-unknown

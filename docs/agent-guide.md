@@ -63,7 +63,9 @@ When the old text or a simple style literal (`"#rrggbb"`, `fontSize={N}`) appear
 
 ## Hot reload TypeScript
 
-Rebuilds only the JS bundle and swaps it into the running QuickJS runtime. The Rust core stays up. Needs `esbuild` on `PATH` and a CLI built with `--features quickjs` (do not enable that feature on PR CI).
+On the web, hot reload is the esbuild loop from `node packages/wasm/dev.js` (no QuickJS). `POST /patch` on that server pushes the same `ui.patch` JSON to the open page (`applyUiPatch`). Set `TEKTO_DEV_URL` to this desktop dev server if you also want source writeback.
+
+Desktop reload rebuilds only the JS bundle and swaps it into the running QuickJS runtime. The Rust core stays up. Needs `esbuild` on `PATH` and a CLI built with `--features quickjs` (do not enable that feature on PR CI).
 
 ```bash
 cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx --headless --out /tmp/notes-js.png

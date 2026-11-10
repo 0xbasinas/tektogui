@@ -145,4 +145,12 @@ A script can create nodes with `tekto.create` / `tekto.setText` / `tekto.append`
   node --test packages/wasm/test.js
   ```
 
+  One command serves the Notes TSX sketch in the browser (esbuild on `PATH`, no QuickJS):
+
+  ```bash
+  node packages/wasm/dev.js
+  ```
+
+  Open the printed URL. Saving `examples/notes/src/app.tsx` reloads the page. `POST /patch` on that server is live `ui.patch`. Set `TEKTO_DEV_URL` to a desktop dev server to forward writeback. A Node check of the same sketch is `node --test packages/wasm/tsx-test.js`.
+
   Commands and the optional `packages/wasm/smoke.html` page are in [the web-build skill](../.agents/skills/web-build/SKILL.md). Do not enable `quickjs` or `gpu` for this target.
