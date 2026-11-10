@@ -165,6 +165,7 @@ pub fn start_handle(
         pending_js: Mutex::new(None),
         apply_js: Mutex::new(None),
         last_writeback: Mutex::new(None),
+        history: Mutex::new(None),
     });
     let ep = tekto_mcp::start_dev_server(handle.clone())?;
     Ok((handle, ep, viewport))

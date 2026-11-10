@@ -16,6 +16,7 @@ members = [
     "crates/tekto-wasm",
     "examples/notes",
     "examples/notes-android",
+    "examples/time-travel",
 ]
 
 [workspace.package]
