@@ -22,6 +22,19 @@ fn notes_headless_snapshot() {
     assert!(pretty.contains("window#1"), "{pretty}");
     assert!(pretty.contains("Hello from Tekto"), "{pretty}");
 
+    // A click in the body text should hit that node (logical pixels, after layout).
+    let body = tree
+        .ids()
+        .find(|id| tree.get(*id).and_then(|n| n.text.as_deref()) == Some("Hello from Tekto"))
+        .expect("body text");
+    let b = tree.get(body).unwrap().bounds;
+    let hit = tree
+        .click_at(b.x + b.width / 2.0, b.y + b.height / 2.0)
+        .expect("hit body");
+    assert_eq!(hit, body);
+    assert_eq!(tree.last_click, Some(body));
+    assert_eq!(tree.focus, Some(body));
+
     let update = accesskit_tree_update(&tree).expect("accesskit");
     assert!(update.nodes.len() >= 3);
     let root = tree.root().expect("root");

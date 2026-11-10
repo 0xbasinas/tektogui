@@ -238,6 +238,8 @@ pub struct Tree {
     nodes: HashMap<NodeId, Node>,
     /// Keyboard / AccessKit focus. Defaults to the root once it exists.
     pub focus: Option<NodeId>,
+    /// Last node that was clicked, if any.
+    pub last_click: Option<NodeId>,
 }
 
 impl Default for Tree {
@@ -253,6 +255,7 @@ impl Tree {
             root: None,
             nodes: HashMap::new(),
             focus: None,
+            last_click: None,
         }
     }
 
@@ -314,6 +317,20 @@ impl Tree {
         }
         self.focus = Some(id);
         Ok(())
+    }
+
+    /// Record a click on a known node: updates `last_click` and focus.
+    pub fn click(&mut self, id: NodeId) -> Result<(), TreeError> {
+        self.set_focus(id)?;
+        self.last_click = Some(id);
+        Ok(())
+    }
+
+    /// Hit-test `(x, y)` in logical pixels, then [`click`] the node.
+    pub fn click_at(&mut self, x: f32, y: f32) -> Option<NodeId> {
+        let id = self.hit(x, y)?;
+        self.click(id).ok()?;
+        Some(id)
     }
 
     pub fn patch(&mut self, id: NodeId, patch: NodePatch) -> Result<(), TreeError> {
@@ -399,6 +416,8 @@ impl Tree {
         }
         TreeDump {
             root: self.root.map(|id| id.raw()),
+            focus: self.focus.map(|id| id.raw()),
+            last_click: self.last_click.map(|id| id.raw()),
             nodes,
         }
     }
@@ -431,6 +450,8 @@ fn escape_quotes(s: &str) -> String {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeDump {
     pub root: Option<u64>,
+    pub focus: Option<u64>,
+    pub last_click: Option<u64>,
     pub nodes: Vec<NodeDump>,
 }
 
@@ -475,5 +496,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(tree.get(t).unwrap().text.as_deref(), Some("Hi"));
+    }
+
+    #[test]
+    fn click_at_hits_frontmost_child_and_sets_focus() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        tree.get_mut(root).unwrap().bounds = Rect::new(0.0, 0.0, 200.0, 200.0);
+        let back = tree.add(NodeKind::Rect, Some(root)).unwrap();
+        tree.get_mut(back).unwrap().bounds = Rect::new(0.0, 0.0, 200.0, 80.0);
+        let front = tree.add(NodeKind::Text, Some(root)).unwrap();
+        tree.get_mut(front).unwrap().bounds = Rect::new(10.0, 10.0, 40.0, 20.0);
+        // Front child is hit first (search last-child first).
+        let hit = tree.click_at(20.0, 15.0).expect("hit");
+        assert_eq!(hit, front);
+        assert_eq!(tree.focus, Some(front));
+        assert_eq!(tree.last_click, Some(front));
+        // A point only on the back rect.
+        let hit = tree.click_at(150.0, 40.0).expect("back");
+        assert_eq!(hit, back);
+        let dump = tree.to_dump();
+        assert_eq!(dump.last_click, Some(back.raw()));
+        assert_eq!(dump.focus, Some(back.raw()));
     }
 }

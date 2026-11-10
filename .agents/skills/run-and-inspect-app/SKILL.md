@@ -27,7 +27,7 @@ The process prints a URL like `Tekto dev server at http://127.0.0.1:PORT`. The e
 
 ## CLI (needs a running dev server, except screenshot)
 
-There is **no** `tekto type` subcommand. `tekto patch` takes a positional id, not `--id`. Colors are `#rrggbb` or `#rrggbbaa`.
+`tekto click <id>` records a click (focus + `last_click`, and a `clicked #id` log). A real left-click in the window does the same, using logical pixels (`physical / scale_factor`) and the tree hit test. There is **no** `tekto type` subcommand. `tekto patch` takes a positional id, not `--id`. Colors are `#rrggbb` or `#rrggbbaa`.
 
 ```bash
 cargo run -p tekto-cli -- tree
