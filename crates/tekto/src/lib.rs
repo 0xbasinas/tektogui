@@ -19,7 +19,8 @@ pub use tekto_platform::{
 pub use tekto_render::{paint_tree, render_tree_png, CpuRenderer, RenderError, Renderer};
 pub use tekto_tree::{Color, LayoutStyle, Node, NodeId, NodeKind, NodePatch, Rect, Tree, TreeDump};
 pub use tekto_widgets::{
-    banner, notes_tree, text, title_on_banner, window, BODY_SIZE, PAGE_PADDING, TITLE_SIZE,
+    banner, notes_tree, text, title_on_banner, window, BANNER_HEIGHT, BANNER_PADDING, BODY_SIZE,
+    PAGE_PADDING, STACK_GAP, TITLE_SIZE,
 };
 
 /// Layout, paint with the CPU renderer, and write a PNG if `out` is set.

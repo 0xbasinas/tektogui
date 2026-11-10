@@ -35,7 +35,7 @@ let png = render_headless_to_file(&tree, 640, 400, Some(&path)).unwrap();
 assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
 ```
 
-The existing snapshot test writes to `$TEKTO_SHOT_DIR` if set, otherwise `target/tektogui-shots/notes-headless.png` (resolved from the `tekto` crate dir). It checks that a PNG exists and is a reasonable size; it does **not** yet compare pixels (see issue “Headless snapshot comparison”).
+The existing snapshot test writes a copy to `$TEKTO_SHOT_DIR` if set, otherwise `target/tektogui-shots/notes-headless.png`, and compares PNG bytes to the blessed file `crates/tekto/tests/snapshots/notes-headless.png`. CI fails if the pixels change.
 
 ## Commands
 
@@ -43,6 +43,10 @@ The existing snapshot test writes to `$TEKTO_SHOT_DIR` if set, otherwise `target
 cargo test --workspace --all-targets
 TEKTO_SHOT_DIR=/tmp/tekto-shots cargo test -p tekto --test headless_snapshot -- --nocapture
 # Look at /tmp/tekto-shots/notes-headless.png
+
+# After an intentional typography or paint change, bless the new reference:
+TEKTO_BLESS=1 cargo test -p tekto --test headless_snapshot
+# Then commit crates/tekto/tests/snapshots/notes-headless.png
 
 # JS unit tests (signals / JSX factory only; they do not paint):
 npm test
