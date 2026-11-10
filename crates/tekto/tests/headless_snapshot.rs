@@ -200,3 +200,31 @@ fn notes_phone_size_stays_inside_the_window() {
     assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
     compare_png(&png, &reference_phone_png());
 }
+
+#[test]
+fn button_is_visible_and_clickable() {
+    let mut tree = tekto::Tree::new();
+    let root = tekto::window(&mut tree, "Example", 320.0, 160.0).unwrap();
+    let button = tekto::button(&mut tree, root, "Save").unwrap();
+    layout_tree(&mut tree, 320.0, 160.0);
+    let bounds = tree.get(button).unwrap().bounds;
+    assert!(bounds.width > 24.0 && bounds.height > 24.0);
+    assert!(tree
+        .to_pretty_text()
+        .contains(&format!("button#{}", button.raw())));
+    assert_eq!(
+        tree.click_at(
+            bounds.x + bounds.width / 2.0,
+            bounds.y + bounds.height / 2.0
+        ),
+        Some(button)
+    );
+    assert_eq!(tree.to_dump().last_click, Some(button.raw()));
+    let dump = accesskit_dump(&tree).unwrap();
+    assert!(dump
+        .nodes
+        .iter()
+        .any(|n| n.id == button.raw() && n.role == "Button" && n.label.as_deref() == Some("Save")));
+    let png = render_headless_to_file(&tree, 320, 160, None).unwrap();
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+}
