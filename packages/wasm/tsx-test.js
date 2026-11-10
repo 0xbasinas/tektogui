@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
@@ -114,5 +114,50 @@ test("web dev server serves the bundle and pushes ui.patch", async (t) => {
     assert.equal(missing.status, 400);
   } finally {
     await server.close();
+  }
+});
+
+test("web dev server rebuilds the bundle when the TSX entry changes", async (t) => {
+  if (!haveEsbuild()) {
+    t.skip("esbuild is not on PATH");
+    return;
+  }
+  const dir = mkdtempSync(resolve(tmpdir(), "tekto-watch-"));
+  const tsx = resolve(dir, "app.tsx");
+  const before = "watch-token-before";
+  const after = "watch-token-after";
+  writeFileSync(
+    tsx,
+    `export function App() {\n  return <text>${before}</text>;\n}\n`,
+  );
+  const server = await startDevServer({
+    entry: tsx,
+    wasmPath,
+    port: 0,
+    watch: true,
+  });
+  try {
+    const first = await fetch(new URL("/app.js", server.url));
+    assert.equal(first.status, 200);
+    assert.match(await first.text(), new RegExp(before));
+
+    writeFileSync(
+      tsx,
+      `export function App() {\n  return <text>${after}</text>;\n}\n`,
+    );
+
+    const deadline = Date.now() + 5000;
+    let js = "";
+    while (Date.now() < deadline) {
+      const next = await fetch(new URL("/app.js", server.url));
+      js = await next.text();
+      if (js.includes(after)) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.match(js, new RegExp(after));
+    assert.doesNotMatch(js, new RegExp(before));
+  } finally {
+    await server.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

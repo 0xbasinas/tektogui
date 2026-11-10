@@ -82,5 +82,7 @@ export function esbuildWatchArgs(entry, outfile) {
   const scratch = resolve(dirname(outfile), "entry.js");
   mkdirSync(dirname(outfile), { recursive: true });
   writeFileSync(scratch, wrapperSource(abs));
-  return esbuildArgs(scratch, outfile).concat(["--watch"]);
+  // `--watch` alone exits when stdin closes. The dev server does not keep
+  // stdin open, so use `--watch=forever` (esbuild stays up until killed).
+  return esbuildArgs(scratch, outfile).concat(["--watch=forever"]);
 }
