@@ -117,7 +117,9 @@ pub fn start_handle(
 }
 
 pub fn rgba_to_u32_softbuffer(rgba: &[u8]) -> Vec<u32> {
-    rgba.as_chunks::<4>().0.iter()
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
         .map(|p| {
             let r = p[0] as u32;
             let g = p[1] as u32;
