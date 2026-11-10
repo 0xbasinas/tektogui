@@ -61,17 +61,18 @@ Still in Month 1:
 - Android text input uses a native `EditText` overlay (`FieldOverlay`), not winit IME. A live type-into-field check still needs a free emulator or device
 - Safe areas and keyboard insets: layout pads recorded safe-area insets and scrolls a focused field above the IME (host tests; a live portrait check is still open)
 - Android GPU paint compiles behind `notes-android` feature `gpu`, but the default stays CPU (`TEKTO_ANDROID_GPU=1` to try it). Drivers were not proven here. A lost surface skips present.
-- Android notifications post through `NotificationManager` (`notificationsShow`). A live post still needs a device. Android clipboard get/set uses `ClipboardManager` (`clipboardGetText` / `clipboardSetText`). A read while the activity is in the background is `Unavailable` on API 29+. A live device clipboard check is still open. Files on Android are still open.
+- Android notifications post through `NotificationManager` (`notificationsShow`). A live post still needs a device. Android clipboard get/set uses `ClipboardManager` (`clipboardGetText` / `clipboardSetText`). A read while the activity is in the background is `Unavailable` on API 29+. A live device clipboard check is still open.
+- [x] Android app-private file reads and writes ([#56](https://github.com/0xbasinas/tektogui/issues/56)); shared-document picking and the Storage Access Framework remain unsupported.
 - Animation and scroll feel on touch (1:1 tracking, fling, finger cancels the coast; no bounce)
-- macOS catch-up if we have a Mac
+- [ ] macOS catch-up if we have a Mac ([#58](https://github.com/0xbasinas/tektogui/issues/58); runtime checks and other plugins remain open)
 
 ## Month 6 — a real side app
 
 - Time-travel for opted-in stores (landed: `Store::recording`, `examples/time-travel`, MCP `app.states` / `app.restore`. Off unless the app opts in)
 - `app.components` schemas for agents (shipped: `components.json` + MCP tool)
-- iOS hello (needs a Mac)
-- One real example app people can use
+- [ ] iOS hello (needs a Mac)
+- [x] One real example app people can use: the Rust Notebook ([#63](https://github.com/0xbasinas/tektogui/issues/63))
 - CI: headless replay + screenshots; documented store signing (replay and PNG compare run in the Linux test step; signing requirements are in `docs/signing.md`; we still do not sign)
-- Honest list of what is still weaker than Flutter or a native toolkit
+- [x] Honest list of what is still weaker than Flutter or a native toolkit ([#65](https://github.com/0xbasinas/tektogui/issues/65); see [toolkit gaps](docs/toolkit-gaps.md))
 
 Web, GPU, iOS, and perfect IME may slip. If they do, we cut scope rather than rush a wrapper around someone else's engine.
