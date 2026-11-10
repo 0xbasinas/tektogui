@@ -5,8 +5,9 @@
 //! Text clipboard and notifications are implemented on Linux and Windows.
 //! Linux notifications use the freedesktop session bus. The Linux system
 //! tray is behind the `tray` feature (StatusNotifierItem on the session
-//! bus, no extra crate). The API is stable for apps and for the JS
-//! [`NativeOp`] hook.
+//! bus, no extra crate). Linux global shortcuts are behind the `shortcuts`
+//! feature (an X11 key grab). Windows shortcuts stay unsupported. The API
+//! is stable for apps and for the JS [`NativeOp`] hook.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -17,6 +18,8 @@ mod linux;
 mod linux_dialog;
 #[cfg(target_os = "linux")]
 mod linux_notify;
+#[cfg(all(target_os = "linux", feature = "shortcuts"))]
+mod linux_shortcuts;
 #[cfg(all(target_os = "linux", feature = "tray"))]
 mod linux_tray;
 #[cfg(target_os = "windows")]
@@ -92,6 +95,17 @@ pub enum NativeOp {
     },
     /// `Some(id)` is the oldest menu click. `None` means the queue is empty.
     TrayTakeClick,
+    /// Register an accelerator under a stable application id.
+    ShortcutsRegister {
+        accelerator: String,
+        id: String,
+    },
+    /// Remove a registered accelerator by id.
+    ShortcutsUnregister {
+        id: String,
+    },
+    /// Return the oldest activated shortcut id, if any.
+    ShortcutsTakeActivation,
 }
 
 /// One tray menu row. `id` is what a click reports. `label` is the visible text.
@@ -130,6 +144,11 @@ pub fn apply_native_op(op: &NativeOp) -> Result<Option<String>, NativeError> {
         NativeOp::TrayHide => host.hide_icon().map(|()| None),
         NativeOp::TraySetLabel { label } => host.set_label(label).map(|()| None),
         NativeOp::TrayTakeClick => host.take_click(),
+        NativeOp::ShortcutsRegister { accelerator, id } => {
+            host.register(accelerator, id).map(|()| None)
+        }
+        NativeOp::ShortcutsUnregister { id } => host.unregister(id).map(|()| None),
+        NativeOp::ShortcutsTakeActivation => host.take_activation(),
     }
 }
 
@@ -215,7 +234,16 @@ pub trait SystemTray {
 }
 
 pub trait GlobalShortcuts {
+    /// Bind `accelerator` (for example `Ctrl+K` or `Ctrl+Shift+F1`) to `id`.
+    /// On Linux this needs the `shortcuts` feature and an X11 display.
     fn register(&self, accelerator: &str, id: &str) -> Result<(), NativeError>;
+    /// Drop the binding for `id`. A missing id is success.
+    fn unregister(&self, id: &str) -> Result<(), NativeError>;
+    /// Oldest shortcut id that fired, if any.
+    fn take_activation(&self) -> Result<Option<String>, NativeError>;
+    /// Called on the shortcut thread when a chord fires. It must return
+    /// quickly and must not call `register` or `unregister`.
+    fn set_on_activation(&self, on_activation: Option<fn(&str)>) -> Result<(), NativeError>;
 }
 
 /// Default stub used until a platform plugin is filled in.
@@ -397,8 +425,48 @@ impl SystemTray for StubNative {
 }
 
 impl GlobalShortcuts for StubNative {
-    fn register(&self, _accelerator: &str, _id: &str) -> Result<(), NativeError> {
-        Err(unsupported("shortcuts.register"))
+    fn register(&self, accelerator: &str, id: &str) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        {
+            linux_shortcuts::register(accelerator, id)
+        }
+        #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+        {
+            let _ = (accelerator, id);
+            Err(unsupported("shortcuts.register"))
+        }
+    }
+    fn unregister(&self, id: &str) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        {
+            linux_shortcuts::unregister(id)
+        }
+        #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+        {
+            let _ = id;
+            Err(unsupported("shortcuts.unregister"))
+        }
+    }
+    fn take_activation(&self) -> Result<Option<String>, NativeError> {
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        {
+            linux_shortcuts::take_activation()
+        }
+        #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+        {
+            Err(unsupported("shortcuts.take_activation"))
+        }
+    }
+    fn set_on_activation(&self, on_activation: Option<fn(&str)>) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        {
+            linux_shortcuts::set_on_activation(on_activation)
+        }
+        #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+        {
+            let _ = on_activation;
+            Err(unsupported("shortcuts.on_activation"))
+        }
     }
 }
 
@@ -408,6 +476,181 @@ pub fn native() -> StubNative {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shortcut_ops_round_trip() {
+        use super::*;
+        let op: NativeOp = serde_json::from_str(
+            r#"{"op":"shortcutsRegister","accelerator":"Ctrl+K","id":"search"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<NativeOp>(&serde_json::to_string(&op).unwrap()).unwrap(),
+            op
+        );
+        let op: NativeOp =
+            serde_json::from_str(r#"{"op":"shortcutsUnregister","id":"search"}"#).unwrap();
+        assert_eq!(
+            op,
+            NativeOp::ShortcutsUnregister {
+                id: "search".into()
+            }
+        );
+        let op: NativeOp = serde_json::from_str(r#"{"op":"shortcutsTakeActivation"}"#).unwrap();
+        assert_eq!(op, NativeOp::ShortcutsTakeActivation);
+    }
+
+    /// Without the `shortcuts` feature, and on Windows (issue #49), the calls
+    /// stay `Unsupported`.
+    #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+    #[test]
+    fn shortcut_ops_report_unsupported() {
+        use super::*;
+        let op: NativeOp = serde_json::from_str(
+            r#"{"op":"shortcutsRegister","accelerator":"Ctrl+K","id":"search"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            apply_native_op(&op),
+            Err(NativeError::Unsupported {
+                capability: "shortcuts.register",
+                ..
+            })
+        ));
+        let op: NativeOp =
+            serde_json::from_str(r#"{"op":"shortcutsUnregister","id":"search"}"#).unwrap();
+        assert!(matches!(
+            apply_native_op(&op),
+            Err(NativeError::Unsupported {
+                capability: "shortcuts.unregister",
+                ..
+            })
+        ));
+        let op: NativeOp = serde_json::from_str(r#"{"op":"shortcutsTakeActivation"}"#).unwrap();
+        assert!(matches!(
+            apply_native_op(&op),
+            Err(NativeError::Unsupported {
+                capability: "shortcuts.take_activation",
+                ..
+            })
+        ));
+        let err = native().set_on_activation(None).expect_err("no shortcuts");
+        assert!(matches!(
+            err,
+            NativeError::Unsupported {
+                capability: "shortcuts.on_activation",
+                ..
+            }
+        ));
+    }
+
+    #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+    fn assert_headless_shortcut_error() {
+        let err = native()
+            .register("Ctrl+K", "search")
+            .expect_err("no display");
+        assert!(
+            matches!(
+                err,
+                NativeError::Unavailable {
+                    capability: "shortcuts.register",
+                    reason: "no X11 display",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        let via = apply_native_op(&NativeOp::ShortcutsRegister {
+            accelerator: "Ctrl+K".into(),
+            id: "search".into(),
+        })
+        .expect_err("op");
+        assert!(
+            matches!(
+                via,
+                NativeError::Unavailable {
+                    capability: "shortcuts.register",
+                    ..
+                }
+            ),
+            "{via}"
+        );
+        native()
+            .unregister("search")
+            .expect("unregister without a grab");
+        assert_eq!(native().take_activation().unwrap(), None);
+    }
+
+    #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+    fn assert_wayland_only_error() {
+        let err = native()
+            .register("Ctrl+K", "search")
+            .expect_err("wayland only");
+        let msg = err.to_string();
+        assert!(
+            matches!(err, NativeError::Unavailable { .. }) && msg.contains("Wayland"),
+            "{msg}"
+        );
+    }
+
+    /// Default run never grabs a key and never opens displays `:1` or `:2`.
+    /// The child with no `DISPLAY` must return [`NativeError::Unavailable`].
+    /// Set `TEKTO_SHORTCUTS_LIVE=1` to grab and release `Ctrl+Shift+F24`.
+    #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+    #[test]
+    fn shortcuts_missing_display_or_opt_in() {
+        let bad = native().register("Nope", "search").expect_err("bad chord");
+        assert!(matches!(bad, NativeError::Message(_)), "{bad}");
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let reserved = matches!(display.as_str(), ":1" | ":2" | ":1.0" | ":2.0");
+        assert!(
+            !reserved || std::env::var_os("TEKTO_SHORTCUTS_LIVE").is_none(),
+            "refusing shortcuts on reserved display {display}"
+        );
+        if std::env::var_os("TEKTO_SHORTCUTS_HEADLESS_CHILD").is_some() {
+            assert_headless_shortcut_error();
+            return;
+        }
+        if std::env::var_os("TEKTO_SHORTCUTS_WAYLAND_CHILD").is_some() {
+            assert_wayland_only_error();
+            return;
+        }
+        if std::env::var_os("TEKTO_SHORTCUTS_LIVE").is_some()
+            && !linux_shortcuts::skip_live_shortcuts()
+        {
+            native()
+                .register("Ctrl+Shift+F24", "probe")
+                .expect("live grab");
+            native().unregister("probe").expect("live ungrab");
+            return;
+        }
+        let exe = std::env::current_exe().expect("test exe");
+        let headless = std::process::Command::new(&exe)
+            .args(["tests::shortcuts_missing_display_or_opt_in", "--exact"])
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env("TEKTO_SHORTCUTS_HEADLESS_CHILD", "1")
+            .output()
+            .expect("spawn headless shortcut test");
+        let stdout = String::from_utf8_lossy(&headless.stdout);
+        let stderr = String::from_utf8_lossy(&headless.stderr);
+        assert!(
+            headless.status.success() && stdout.contains("1 passed"),
+            "headless shortcut child failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        let wayland = std::process::Command::new(&exe)
+            .args(["tests::shortcuts_missing_display_or_opt_in", "--exact"])
+            .env_remove("DISPLAY")
+            .env("WAYLAND_DISPLAY", "wayland-0")
+            .env("TEKTO_SHORTCUTS_WAYLAND_CHILD", "1")
+            .output()
+            .expect("spawn wayland shortcut test");
+        let stdout = String::from_utf8_lossy(&wayland.stdout);
+        let stderr = String::from_utf8_lossy(&wayland.stderr);
+        assert!(
+            wayland.status.success() && stdout.contains("1 passed"),
+            "wayland shortcut child failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+    }
     use super::*;
 
     #[cfg(target_os = "linux")]

@@ -15,8 +15,8 @@ pub use tekto_mcp::{
     SharedTreeHandle, ANDROID_DEV_PORT,
 };
 pub use tekto_native::{
-    apply_native_op, current_platform, native, Clipboard, Files, NativeError, NativeOp,
-    Notifications, SystemTray, TrayMenuItem,
+    apply_native_op, current_platform, native, Clipboard, Files, GlobalShortcuts, NativeError,
+    NativeOp, Notifications, SystemTray, TrayMenuItem,
 };
 pub use tekto_platform::lifecycle::{
     handle_lifecycle, on_resumed, on_suspended, surface_is_live, AppLifecycle,

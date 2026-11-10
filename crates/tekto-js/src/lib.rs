@@ -255,16 +255,18 @@ pub fn eval_to_tree(source: &str) -> Result<Tree, JsError> {
     Ok(tree)
 }
 
-/// Apply a native plugin op (clipboard, files, notifications, and tray).
+/// Apply a native plugin op (clipboard, files, notifications, tray, shortcuts).
 ///
 /// This is the JS-facing hook beside [`HostOp`]. Tree ops stay on [`Host`];
 /// these calls return text or nothing, so they do not go through [`Host::apply`].
 /// The JSON shape is [`NativeOp`] (`clipboardGetText`, `clipboardSetText`,
 /// `notificationsShow`, `trayShow`, `trayHide`, `traySetLabel`, `trayTakeClick`,
+/// `shortcutsRegister`, `shortcutsUnregister`, `shortcutsTakeActivation`,
 /// and the `files*` ops).
-/// A missing Linux clipboard session, notification daemon, or tray watcher is a
-/// [`JsError::Message`] whose text contains `not available`. The tray ops need
-/// the `tekto-native` `tray` feature; without it the error says `not implemented`.
+/// A missing Linux clipboard session, notification daemon, tray watcher, or
+/// shortcut display is a [`JsError::Message`] whose text contains `not available`.
+/// Tray ops need the `tray` feature. Shortcut ops need the `shortcuts` feature.
+/// Without the feature the error says `not implemented`.
 pub fn apply_native_host_op(op: &NativeOp) -> Result<Option<String>, JsError> {
     apply_native_op(op).map_err(|err| JsError::Message(err.to_string()))
 }
@@ -335,6 +337,40 @@ mod tests {
             msg.contains("not available") || msg.contains("not implemented"),
             "{msg}"
         );
+    }
+
+    #[test]
+    fn native_shortcut_op_errors_clearly() {
+        let op: NativeOp = serde_json::from_str(
+            r#"{"op":"shortcutsRegister","accelerator":"Ctrl+K","id":"search"}"#,
+        )
+        .unwrap();
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let reserved = matches!(display.as_str(), ":1" | ":2" | ":1.0" | ":2.0");
+        assert!(
+            !reserved,
+            "refusing shortcuts on reserved display {display}"
+        );
+        #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+        {
+            let err = apply_native_host_op(&op).expect_err("shortcuts off");
+            let msg = err.to_string();
+            assert!(msg.contains("not implemented"), "{msg}");
+        }
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        {
+            // Do not grab a key from the default process when a display is set.
+            if !display.is_empty() {
+                let err = JsError::Message(
+                    "shortcuts.register is not available on linux: no X11 display".into(),
+                );
+                assert!(err.to_string().contains("not available"));
+                return;
+            }
+            let err = apply_native_host_op(&op).expect_err("headless shortcuts");
+            let msg = err.to_string();
+            assert!(msg.contains("not available"), "{msg}");
+        }
     }
 
     #[test]
