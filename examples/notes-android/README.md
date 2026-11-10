@@ -53,6 +53,10 @@ adb emu kill   # stop only this emulator
 
 The dev server on the device listens on `127.0.0.1:8474`. After `adb forward`, host `tekto tree` / `tekto screenshot` / `tekto patch` work the same as on desktop.
 
+## Notifications
+
+`tekto::native().show(title, body)` (and `NativeOp` `notificationsShow`) posts a status-bar notification on Android. The manifest above declares `android.permission.POST_NOTIFICATIONS`. This APK's `target_sdk_version` is 30, so that permission is granted at install. An app that raises the target to 33 or higher must still declare it. The plugin then asks the user at runtime and returns `NativeError::Unavailable` (`POST_NOTIFICATIONS was denied`) until they allow it. Turning notifications off for the app is the same error kind, with reason `notifications are disabled for this app`. A live post was not run here. It needs a device or an emulator.
+
 ## JS hot reload (`tekto dev --js --android`)
 
 The default APK stays lean (no QuickJS) so nightly Android CI does not compile rquickjs for two ABIs. To reload TSX over `adb forward`, the CLI builds with `-F quickjs`:

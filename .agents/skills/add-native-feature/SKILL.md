@@ -5,7 +5,7 @@ description: Implement a tekto-native plugin (files, open/save dialogs, clipboar
 
 # Add a native feature
 
-`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs use `GetOpenFileNameW` and `GetSaveFileNameW` in `src/windows_dialog.rs` (no extra crate). The system tray is the `tray` feature: `src/linux_tray.rs` on Linux and `src/windows_tray.rs` on Windows (no extra crate). Global shortcuts are the `shortcuts` feature: `src/linux_shortcuts.rs` (`x11rb` 0.13.2, MIT OR Apache-2.0) and `src/windows_shortcuts.rs` (`RegisterHotKey`, no extra crate). A live Windows hotkey check is still issue #49. Other platforms return `NativeError::Unsupported { capability, platform }`. Without `tray` or `shortcuts`, those methods also return `Unsupported`.
+`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Android notifications use `NotificationManager` in `src/android_notify.rs` (`jni` and `ndk-context`, both MIT OR Apache-2.0, Android-only). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs use `GetOpenFileNameW` and `GetSaveFileNameW` in `src/windows_dialog.rs` (no extra crate). The system tray is the `tray` feature: `src/linux_tray.rs` on Linux and `src/windows_tray.rs` on Windows (no extra crate). Global shortcuts are the `shortcuts` feature: `src/linux_shortcuts.rs` (`x11rb` 0.13.2, MIT OR Apache-2.0) and `src/windows_shortcuts.rs` (`RegisterHotKey`, no extra crate). A live Windows hotkey check is still issue #49. Other platforms return `NativeError::Unsupported { capability, platform }`. Without `tray` or `shortcuts`, those methods also return `Unsupported`.
 
 Windows code is compile-checked on Linux with `cargo check --target x86_64-pc-windows-gnu -p tekto-native` (no linker, no Windows runtime). Clipboard, files, notifications, and file dialogs still need a Windows machine. Do not treat that check as a runtime test. A toast was not shown on the Linux host that added the notification path, and a file dialog was not opened on the host that added the dialog path.
 
@@ -32,7 +32,7 @@ Dialog ops (Linux and Windows; other platforms return `Unsupported` for `files.o
 - `{"op":"filesOpenDialog"}` — `Ok(Some(absolute path))`, or `Ok(None)` on cancel
 - `{"op":"filesSaveDialog"}` — same result shape. Save asks the user to confirm overwrite.
 
-Notification op (Linux and Windows; other platforms return `Unsupported` for `notifications.show`):
+Notification op (Linux, Windows, and Android; other platforms return `Unsupported` for `notifications.show`):
 
 - `{"op":"notificationsShow","title":"...","body":"..."}` — returns `None`. Title and body are plain text.
 
@@ -130,6 +130,31 @@ cargo check --target x86_64-pc-windows-gnu -p tekto-native
 ```
 
 That command does not link or run on Windows. Icon lifetime, session failures, and whether a balloon is visible still need a Windows machine. Issue #37 stays open until that runtime check exists.
+
+## Android notifications
+
+`Notifications::show` on Android posts one status-bar notification through `NotificationManager` (`src/android_notify.rs`). No GPL library. Android-only dependencies are `jni` 0.22.4 and `ndk-context` 0.1.1, both MIT OR Apache-2.0. `jni` uses default features off, so it does not launch a JVM. The activity or application context is the handle `android-activity` stores in `ndk-context` before `android_main`. If that handle is missing, the error is `NativeError::Unavailable` with reason `Android activity context is not ready`.
+
+The call creates the channel `tekto` on API 26+, then `Notification.Builder` with title, body, and `android.R.drawable.ic_dialog_info`. The notification id is `1`, so a later show replaces the previous one. A NUL in the title or body is `NativeError::Message`.
+
+Manifest, for every APK that calls this (cargo-apk2 metadata):
+
+```toml
+[[package.metadata.android.uses_permission]]
+name = "android.permission.POST_NOTIFICATIONS"
+```
+
+`POST_NOTIFICATIONS` is a runtime permission on API 33+ when `targetSdkVersion` is 33 or higher. Below that target the system grants it at install. The plugin calls `checkSelfPermission`. If it is not granted and the context is an `Activity`, it calls `requestPermissions` so the system dialog can appear, then returns `NativeError::Unavailable` with reason `POST_NOTIFICATIONS was denied`. The grant arrives later. Call `show` again after the user allows it. If notifications are turned off for the app, the reason is `notifications are disabled for this app`. A `SecurityException` from `notify` uses the same denial error. Other JNI failures are `NativeError::Message`. None of these panic.
+
+`examples/notes-android` declares `POST_NOTIFICATIONS`. Its `target_sdk_version` is still 30, so the runtime dialog is not required until that target is raised.
+
+Host tests cover the denial and disabled decisions (`allow_post`) without a device. Compile-check:
+
+```bash
+cargo check -p tekto-native --target aarch64-linux-android
+```
+
+That does not install an APK and does not post a notification. A live notice still needs a device or an emulator. Do not start an emulator for this check.
 
 ## Linux file sandbox
 
