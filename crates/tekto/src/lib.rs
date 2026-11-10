@@ -10,12 +10,14 @@ pub use tekto_a11y::{
 pub use tekto_layout::layout_tree;
 pub use tekto_mcp::{
     endpoint_path, read_endpoint, run_stdio_mcp, start_dev_server, AppHandle, DevEndpoint,
-    SharedTreeHandle,
+    SharedTreeHandle, ANDROID_DEV_PORT,
 };
 pub use tekto_native::{current_platform, native, Clipboard, Files, NativeError, Notifications};
 pub use tekto_platform::lifecycle::{
     handle_lifecycle, on_resumed, on_suspended, surface_is_live, AppLifecycle,
 };
+#[cfg(all(feature = "desktop", target_os = "android"))]
+pub use tekto_platform::{run_android, AndroidApp};
 pub use tekto_platform::{
     run_headless, run_windowed, start_handle, AppRuntime, PlatformError, Viewport, WindowOptions,
 };

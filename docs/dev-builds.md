@@ -27,7 +27,7 @@ Off by default (opt in only when you need them):
 - `js` — QuickJS-ng, slow to compile
 - `a11y-os` — `accesskit_winit`, which pulls zbus / AT-SPI on Linux
 
-Android compile uses `--no-default-features --features cpu` so the desktop/winit shell is not pulled in.
+The `tekto` crate still Android-checks with `--no-default-features --features cpu` so the desktop/winit shell is not in that graph. The Notes APK (`examples/notes-android`) enables `cpu` + `desktop` only for `target_os = "android"` and is packaged with `cargo apk2` / `tekto build --target android`. Do not add APK packaging or an emulator to PR CI.
 
 Nothing unexpected showed up in the default graph that we should gate or drop in Month 1.
 

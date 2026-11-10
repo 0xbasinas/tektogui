@@ -122,6 +122,10 @@ impl AppHandle for SharedTreeHandle {
     }
 }
 
+/// Default port for the Android dev server, so the host can `adb forward`
+/// without reading a file from the device.
+pub const ANDROID_DEV_PORT: u16 = 8474;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DevEndpoint {
     pub port: u16,
@@ -149,7 +153,8 @@ pub fn write_endpoint(ep: &DevEndpoint) -> Result<(), McpError> {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    std::fs::write(path, serde_json::to_vec_pretty(ep)?)?;
+    std::fs::write(&path, serde_json::to_vec_pretty(ep)?)
+        .map_err(|e| McpError::msg(format!("could not write {}: {e}", path.display())))?;
     Ok(())
 }
 
@@ -168,16 +173,33 @@ pub fn clear_endpoint() {
     let _ = std::fs::remove_file(endpoint_path());
 }
 
-/// Start a localhost HTTP server on an ephemeral port.
+fn listen_addr() -> (String, u16) {
+    let host = std::env::var("TEKTO_DEV_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let port = std::env::var("TEKTO_DEV_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(if cfg!(target_os = "android") {
+            ANDROID_DEV_PORT
+        } else {
+            0
+        });
+    (host, port)
+}
+
+/// Start a localhost HTTP server on an ephemeral port
+/// (or `TEKTO_DEV_PORT` / [`ANDROID_DEV_PORT`] on Android).
 pub fn start_dev_server(handle: Arc<dyn AppHandle>) -> Result<DevEndpoint, McpError> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let (host, port) = listen_addr();
+    let listener = TcpListener::bind((host.as_str(), port))
+        .map_err(|e| McpError::msg(format!("could not bind dev server on {host}:{port}: {e}")))?;
     listener.set_nonblocking(false)?;
     let port = listener.local_addr()?.port();
-    let ep = DevEndpoint {
-        port,
-        host: "127.0.0.1".into(),
-    };
-    write_endpoint(&ep)?;
+    let ep = DevEndpoint { port, host };
+    // On Android the host talks over `adb forward`; a local endpoint file
+    // may not be writable and is not required.
+    if let Err(e) = write_endpoint(&ep) {
+        eprintln!("Tekto: {e} (dev server is still listening)");
+    }
     let running = Arc::new(AtomicBool::new(true));
     thread::Builder::new()
         .name("tekto-dev".into())

@@ -11,7 +11,8 @@ publish = false
 [features]
 default = ["cpu"]
 cpu = ["tekto-render/cpu"]
-# Desktop window (Windows / Linux / macOS). Off for Android and wasm checks.
+# Windowed shell (Windows / Linux / macOS, and Android via NativeActivity).
+# Off for wasm checks and for lean CPU-only Android compiles of `tekto`.
 desktop = ["dep:winit", "dep:softbuffer", "cpu"]
 # Publish the AccessKit tree to the OS (AT-SPI, UIA, …). Off by default so
 # everyday dev and CI builds stay lean; accesskit_winit pulls accesskit_unix
@@ -31,3 +32,9 @@ thiserror = { workspace = true }
 winit = { workspace = true, optional = true }
 softbuffer = { workspace = true, optional = true }
 accesskit_winit = { workspace = true, optional = true, default-features = false, features = ["rwh_06", "accesskit_unix", "async-io"] }
+
+# Android window: NativeActivity via android-activity (pulled by winit).
+# This must not appear in the default Linux/Windows crate graph.
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { workspace = true, optional = true, features = ["android-native-activity"] }
+softbuffer = { workspace = true, optional = true }
