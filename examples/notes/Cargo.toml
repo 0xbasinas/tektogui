@@ -1,0 +1,9 @@
+[package]
+name = "notes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tekto = { workspace = true }

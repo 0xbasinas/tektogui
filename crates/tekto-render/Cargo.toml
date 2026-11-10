@@ -1,0 +1,23 @@
+[package]
+name = "tekto-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Tekto renderer trait, tiny-skia CPU backend, and a GPU stub"
+publish = false
+
+[features]
+default = ["cpu"]
+cpu = ["dep:tiny-skia", "dep:skrifa", "dep:tekto-text", "dep:parley"]
+# GPU (wgpu / Vello) is not a default dep. It is heavy to compile. See issues.
+gpu = []
+
+[dependencies]
+tekto-tree = { workspace = true }
+thiserror = { workspace = true }
+tiny-skia = { workspace = true, optional = true }
+skrifa = { workspace = true, optional = true }
+tekto-text = { workspace = true, optional = true }
+parley = { workspace = true, optional = true }

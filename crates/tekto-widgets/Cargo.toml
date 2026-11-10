@@ -1,0 +1,12 @@
+[package]
+name = "tekto-widgets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Built-in Tekto widgets with a plain, quiet default look"
+publish = false
+
+[dependencies]
+tekto-tree = { workspace = true }

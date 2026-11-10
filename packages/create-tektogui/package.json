@@ -1,0 +1,13 @@
+{
+  "name": "create-tektogui",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Create a new Tekto app",
+  "bin": {
+    "create-tektogui": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ]
+}

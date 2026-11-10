@@ -1,0 +1,106 @@
+//! Renderer trait, a tiny-skia CPU backend, and a reserved GPU slot.
+//!
+//! The CPU backend is the default. It is also the path used for headless
+//! screenshots, tests, and (later) a canvas2d-style web fallback.
+//! The GPU backend (wgpu / Vello, and WebGPU on the web) is a feature
+//! and is not pulled in until we need it, so everyday builds stay fast.
+
+use tekto_tree::{Color, Rect, Tree};
+
+#[derive(Debug, thiserror::Error)]
+pub enum RenderError {
+    #[error("{0}")]
+    Message(String),
+    #[error("gpu backend is not enabled (build with the gpu feature later)")]
+    GpuDisabled,
+}
+
+impl RenderError {
+    pub fn msg(msg: impl Into<String>) -> Self {
+        RenderError::Message(msg.into())
+    }
+}
+
+/// Backend-agnostic draw API.
+pub trait Renderer {
+    fn resize(&mut self, width: u32, height: u32) -> Result<(), RenderError>;
+    fn begin_frame(&mut self, clear: Color);
+    fn fill_rect(&mut self, rect: Rect, color: Color);
+    fn draw_text(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        size: f32,
+        color: Color,
+        max_width: Option<f32>,
+    );
+    /// Encode the current frame as PNG bytes.
+    fn to_png(&self) -> Result<Vec<u8>, RenderError>;
+    fn width(&self) -> u32;
+    fn height(&self) -> u32;
+    /// Tight, packed RGBA8 pixels (row-major) for presenting to a window.
+    fn rgba8(&self) -> Result<Vec<u8>, RenderError>;
+}
+
+/// Paint a whole tree with the default look.
+pub fn paint_tree<R: Renderer>(renderer: &mut R, tree: &Tree, clear: Color) {
+    renderer.begin_frame(clear);
+    if let Some(root) = tree.root() {
+        paint_node(renderer, tree, root);
+    }
+}
+
+fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId) {
+    let Some(node) = tree.get(id) else {
+        return;
+    };
+    if let Some(fill) = node.fill {
+        renderer.fill_rect(node.bounds, fill);
+    }
+    if let Some(text) = &node.text {
+        let color = node.color.unwrap_or(Color::INK);
+        let max_w = if node.bounds.width > 0.0 {
+            Some(node.bounds.width)
+        } else {
+            None
+        };
+        renderer.draw_text(
+            text,
+            node.bounds.x,
+            node.bounds.y,
+            node.font_size,
+            color,
+            max_w,
+        );
+    }
+    for child in &node.children {
+        paint_node(renderer, tree, *child);
+    }
+}
+
+#[cfg(feature = "cpu")]
+mod cpu;
+#[cfg(feature = "cpu")]
+pub use cpu::CpuRenderer;
+
+/// Placeholder for the wgpu / Vello backend.
+pub struct GpuRenderer;
+
+impl GpuRenderer {
+    pub fn new(_width: u32, _height: u32) -> Result<Self, RenderError> {
+        Err(RenderError::GpuDisabled)
+    }
+}
+
+#[cfg(feature = "cpu")]
+pub fn render_tree_png(
+    tree: &Tree,
+    width: u32,
+    height: u32,
+    clear: Color,
+) -> Result<Vec<u8>, RenderError> {
+    let mut renderer = CpuRenderer::new(width, height)?;
+    paint_tree(&mut renderer, tree, clear);
+    renderer.to_png()
+}

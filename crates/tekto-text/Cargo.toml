@@ -1,0 +1,12 @@
+[package]
+name = "tekto-text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Parley text layout for Tekto, with a bundled Roboto font"
+publish = false
+
+[dependencies]
+parley = { workspace = true }

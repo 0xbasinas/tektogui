@@ -1,0 +1,27 @@
+[package]
+name = "tekto-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Windowing and event-loop backends for Tekto (winit on desktop, stubs for Android and web)"
+publish = false
+
+[features]
+default = ["cpu"]
+cpu = ["tekto-render/cpu"]
+# Desktop window (Windows / Linux / macOS). Off for Android and wasm checks.
+desktop = ["dep:winit", "dep:softbuffer", "cpu"]
+
+[dependencies]
+tekto-tree = { workspace = true }
+tekto-layout = { workspace = true }
+tekto-render = { workspace = true }
+tekto-a11y = { workspace = true }
+tekto-mcp = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(all(not(target_os = "android"), not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
+winit = { workspace = true, optional = true }
+softbuffer = { workspace = true, optional = true }
