@@ -1,6 +1,6 @@
 ---
 name: run-and-inspect-app
-description: Run a Tekto app in dev mode and inspect it with the CLI or MCP (tree, click, type, screenshot, live patch). Use when checking a running UI, debugging a widget, or trying a live edit. There is no `tekto type` CLI; typing is MCP or POST /type only.
+description: Run a Tekto app in dev mode and inspect it with the CLI, the browser inspector, or MCP (tree, click, type, screenshot, live patch). Use when checking a running UI, debugging a widget, or trying a live edit. There is no `tekto type` CLI; typing is MCP or POST /type only.
 ---
 
 # Run and inspect an app
@@ -30,6 +30,7 @@ The process prints a URL like `Tekto dev server at http://127.0.0.1:PORT`. The e
 `tekto click <id>` records a click (focus + `last_click`, and a `clicked #id` log). A real left-click in the window does the same, using logical pixels (`physical / scale_factor`) and the tree hit test. There is **no** `tekto type` subcommand. `tekto patch` takes a positional id, not `--id`. Colors are `#rrggbb` or `#rrggbbaa`.
 
 ```bash
+cargo run -p tekto-cli -- inspect   # prints http://127.0.0.1:PORT/inspector
 cargo run -p tekto-cli -- tree
 cargo run -p tekto-cli -- click 1
 cargo run -p tekto-cli -- screenshot /tmp/shot.png
@@ -38,10 +39,27 @@ cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0" --font-size
 # If no server is running, `screenshot` falls back to a headless Notes PNG.
 ```
 
+## Browser inspector
+
+`tekto inspect` reads the same endpoint file as `tekto tree` and prints `GET /inspector`. Open that URL in a browser. The page is served by the dev server (`crates/tekto-mcp/src/inspector.html`). It is not an MCP tool.
+
+The page loads `GET /tree` and shows the live tree. Click a node. Check only the properties you want to change (text, name, fill, color, font size, padding, gap). Text and name may be empty. Then press **Apply patch**. That sends `POST /patch` with `{ "id": <selected>, ...fields }` and refreshes the tree. The status box shows the JSON result (`node` and `writeback`) or the error text.
+
+Press **Refresh tree** after a change made elsewhere (CLI, MCP, or a hot reload). If the selected id is gone, the page clears the selection.
+
+Same patch from the shell, once you know the id from the tree:
+
+```bash
+curl -s -X POST http://127.0.0.1:PORT/patch \
+  -H 'Content-Type: application/json' \
+  -d '{"id":4,"name":"Inspector test"}'
+```
+
 `tree` should include `window#1` and `Hello from Tekto` (unless you patched the text). A button built with `tekto::button` shows up as `button#N` with the label as its name. `tekto click N` (or a left-click on its bounds) sets `last_click` to that id. `GET /accesskit` reports role `Button` and the label. JSX `<button>` only creates the kind and text; fill, color, font size, and padding stay unset until you patch them or set the props. A `tekto::text_field` shows up as `text_field#N`. Its value is node `text` (patchable); its label is `name`. AccessKit role is `TextInput`. Focused desktop keys (printable characters and Backspace) edit the value. `POST /type` does the same for plain characters. Full IME is not implemented.
 
 ## HTTP and MCP
 
+- `GET /inspector` — HTML page (see Browser inspector). `GET /health` returns `{"ok":true}`.
 - `GET /tree`, `GET /tree.txt`, `GET /accesskit`, `GET /screenshot`, `GET /state`, `GET /logs`
 - `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb","fontSize":20,"padding":24,"gap":20}` — response is `{ "ok": true, "node": { ... }, "writeback": { ... } }` or an error
 - `POST /click` `{"id":1}`

@@ -53,6 +53,8 @@ enum Command {
     Test,
     /// Dump the live scene tree from the dev server.
     Tree,
+    /// Print the URL of the live inspector.
+    Inspect,
     /// Click a node by id (talks to the dev server).
     Click { id: u64 },
     /// Take a PNG screenshot from the dev server, or render headless if none is running.
@@ -181,6 +183,10 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             let ep = read_endpoint()?;
             let (_, body) = http_get(&format!("{}/tree.txt", ep.base_url()))?;
             print!("{}", String::from_utf8_lossy(&body));
+        }
+        Command::Inspect => {
+            let ep = read_endpoint()?;
+            println!("{}/inspector", ep.base_url());
         }
         Command::Click { id } => {
             let ep = read_endpoint()?;

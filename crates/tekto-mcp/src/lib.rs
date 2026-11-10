@@ -420,6 +420,11 @@ fn dispatch(
 ) -> Result<(&'static str, &'static str, Vec<u8>), McpError> {
     match (method, path) {
         ("GET", "/health") => ok_json(json!({"ok": true})),
+        ("GET", "/inspector") => Ok((
+            "200 OK",
+            "text/html; charset=utf-8",
+            include_bytes!("inspector.html").to_vec(),
+        )),
         ("GET", "/tree") => {
             let tree = handle.tree();
             ok_json(json!({
