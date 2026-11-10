@@ -267,6 +267,7 @@ pub fn eval_to_tree(source: &str) -> Result<Tree, JsError> {
 /// and the `files*` ops).
 /// A missing Linux clipboard session, notification daemon, tray watcher, or
 /// shortcut display is a [`JsError::Message`] whose text contains `not available`.
+/// A Windows tray whose shell rejects the icon does the same.
 /// Tray ops need the `tray` feature. Shortcut ops need the `shortcuts` feature.
 /// Without the feature the error says `not implemented`.
 pub fn apply_native_host_op(op: &NativeOp) -> Result<Option<String>, JsError> {
