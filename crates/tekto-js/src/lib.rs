@@ -344,6 +344,7 @@ mod tests {
 
     #[test]
     fn native_shortcut_op_errors_clearly() {
+        #[cfg(not(all(target_os = "windows", feature = "shortcuts")))]
         let op: NativeOp = serde_json::from_str(
             r#"{"op":"shortcutsRegister","accelerator":"Ctrl+K","id":"search"}"#,
         )
@@ -354,11 +355,31 @@ mod tests {
             !reserved,
             "refusing shortcuts on reserved display {display}"
         );
-        #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "shortcuts"),
+            all(target_os = "windows", feature = "shortcuts")
+        )))]
         {
             let err = apply_native_host_op(&op).expect_err("shortcuts off");
             let msg = err.to_string();
             assert!(msg.contains("not implemented"), "{msg}");
+        }
+        #[cfg(all(target_os = "windows", feature = "shortcuts"))]
+        {
+            // Do not call RegisterHotKey from this host. A bad chord is a
+            // message and does not start the hotkey thread.
+            let bad: NativeOp = serde_json::from_str(
+                r#"{"op":"shortcutsRegister","accelerator":"Nope","id":"search"}"#,
+            )
+            .unwrap();
+            let err = apply_native_host_op(&bad).expect_err("bad chord");
+            let msg = err.to_string();
+            assert!(msg.contains("accelerator"), "{msg}");
+            let err = apply_native_host_op(&NativeOp::ShortcutsUnregister {
+                id: "search".into(),
+            })
+            .expect("unregister with nothing bound");
+            assert!(err.is_none(), "{err:?}");
         }
         #[cfg(all(target_os = "linux", feature = "shortcuts"))]
         {
@@ -637,8 +658,9 @@ mod tests {
     /// JS can register, unregister, and poll shortcut activations.
     ///
     /// With `shortcuts` on Linux this runs in a child with no display, so
-    /// register is `Unavailable` and nothing is grabbed. Other builds get
-    /// `Unsupported` (`not implemented`). Neither path panics.
+    /// register is `Unavailable` and nothing is grabbed. With `shortcuts` on
+    /// Windows only a bad chord is checked, so `RegisterHotKey` is not called.
+    /// Other builds get `Unsupported` (`not implemented`). Neither path panics.
     #[cfg(feature = "quickjs")]
     #[test]
     fn js_apply_native_op_reaches_shortcut_ops() {

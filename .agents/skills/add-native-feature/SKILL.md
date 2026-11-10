@@ -5,7 +5,7 @@ description: Implement a tekto-native plugin (files, open/save dialogs, clipboar
 
 # Add a native feature
 
-`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs use `GetOpenFileNameW` and `GetSaveFileNameW` in `src/windows_dialog.rs` (no extra crate). The system tray is the `tray` feature: `src/linux_tray.rs` on Linux and `src/windows_tray.rs` on Windows (no extra crate). Linux global shortcuts are the `shortcuts` feature in `src/linux_shortcuts.rs` (`x11rb` 0.13.2, MIT OR Apache-2.0). Windows shortcuts stay `Unsupported` (issue #49). Other platforms return `NativeError::Unsupported { capability, platform }`. Without `tray` or `shortcuts`, those methods also return `Unsupported`.
+`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs use `GetOpenFileNameW` and `GetSaveFileNameW` in `src/windows_dialog.rs` (no extra crate). The system tray is the `tray` feature: `src/linux_tray.rs` on Linux and `src/windows_tray.rs` on Windows (no extra crate). Global shortcuts are the `shortcuts` feature: `src/linux_shortcuts.rs` (`x11rb` 0.13.2, MIT OR Apache-2.0) and `src/windows_shortcuts.rs` (`RegisterHotKey`, no extra crate). A live Windows hotkey check is still issue #49. Other platforms return `NativeError::Unsupported { capability, platform }`. Without `tray` or `shortcuts`, those methods also return `Unsupported`.
 
 Windows code is compile-checked on Linux with `cargo check --target x86_64-pc-windows-gnu -p tekto-native` (no linker, no Windows runtime). Clipboard, files, notifications, and file dialogs still need a Windows machine. Do not treat that check as a runtime test. A toast was not shown on the Linux host that added the notification path, and a file dialog was not opened on the host that added the dialog path.
 
@@ -43,7 +43,7 @@ Tray ops (Linux and Windows, and only when the `tray` feature is on; otherwise `
 - `{"op":"traySetLabel","label":"Notes"}` — returns `None`
 - `{"op":"trayTakeClick"}` — `Some(id)` for the oldest menu click, or `None` when the queue is empty
 
-Shortcut ops (Linux, and only when the `shortcuts` feature is on; otherwise `Unsupported` for `shortcuts.register`, `shortcuts.unregister`, `shortcuts.take_activation`, and `shortcuts.on_activation`. Windows is issue #49):
+Shortcut ops (Linux and Windows, and only when the `shortcuts` feature is on; otherwise `Unsupported` for `shortcuts.register`, `shortcuts.unregister`, `shortcuts.take_activation`, and `shortcuts.on_activation`):
 
 - `{"op":"shortcutsRegister","accelerator":"Ctrl+K","id":"search"}` — returns `None`
 - `{"op":"shortcutsUnregister","id":"search"}` — returns `None`. A missing id is success.
@@ -67,6 +67,30 @@ Permission and compositor limits:
 - Displays `:1` and `:2` are reserved. The client refuses them with `refusing reserved display :1 or :2` and does not connect. Do not point tests at those displays.
 
 `TEKTO_SHORTCUTS_LIVE=1` grabs `Ctrl+Shift+F24` and releases it. Do not set it when `DISPLAY` is `:1` or `:2`. Run the feature tests with `cargo test -p tekto-native --features shortcuts` and `cargo test -p tekto-js --features shortcuts`. Do not add `shortcuts` to default PR CI.
+
+## Windows global shortcuts
+
+`GlobalShortcuts` on Windows is the same `shortcuts` feature and the same methods (`register`, `unregister`, `take_activation`, `set_on_activation`). The implementation is `src/windows_shortcuts.rs`. No extra crate. It calls `RegisterHotKey` and `UnregisterHotKey` (`user32`) with a null window, on a thread that pumps `GetMessageW`. `WM_HOTKEY` queues the id for `take_activation` and calls `set_on_activation` on that thread, including when the app window is in the background. The hook must return quickly. It must not call `register` or `unregister` (those wait on the same thread).
+
+Chord text matches Linux: `Ctrl+K`, `Alt+F4`, `Ctrl+Shift+Space`, `Win+K` (`Super` / `Meta` / `Win` / `Mod4` are `MOD_WIN`). The key is a letter, a digit, F1–F24, or Space, Tab, Enter, Escape, or an arrow. `MOD_NOREPEAT` is always set, so a held key fires once. A bad chord or id is `NativeError::Message` and does not start the thread. The same id may replace its chord. A second id on the same virtual key and modifiers is `shortcuts.register: chord is already registered`. A missing unregister is success.
+
+OS limits:
+
+- The hotkey belongs to the interactive session and window station of the registering thread. A service in session 0 does not see the signed-in user's keys. If the thread or its message queue cannot start, the reason is `Windows hotkey thread is unavailable`.
+- Another process in that session already owns the chord: `NativeError::Unavailable`, reason `Windows hotkey is already registered`.
+- Windows reserves some chords. `Ctrl+Alt+Delete` cannot be registered. `Win+L` and other shell `Win` chords often fail too. Those, and any other denial, use reason `Windows hotkey registration was denied`.
+- An elevated (high integrity) process and a normal process do not share registrations. The higher integrity owner keeps the chord. This API cannot unregister a hotkey it did not register.
+- Headless and non-Windows builds do not call this API. Without the feature the calls return `Unsupported`. Do not open displays `:1` or `:2` on the Linux path.
+
+There is no Windows runtime test. Compile-check only:
+
+```bash
+cargo check -p tekto-native --target x86_64-pc-windows-gnu --features shortcuts
+cargo check -p tekto --target x86_64-pc-windows-gnu --features shortcuts
+cargo check -p tekto-js --target x86_64-pc-windows-gnu --features shortcuts
+```
+
+Those commands do not link or run on Windows. Register, unregister, and a callback while the app is in the background still need a Windows machine. Issue #49 stays open until that runtime check exists.
 
 ## Linux tray
 
