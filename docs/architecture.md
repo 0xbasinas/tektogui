@@ -78,6 +78,8 @@ Packages under `packages/` (`@tektogui/core`, `@tektogui/jsx-runtime`, `create-t
 
 `tekto-native` is a small plugin API: files (read/write, open/save dialogs), clipboard, notifications, system tray, global shortcuts. The same API is meant to be called from Rust and from TypeScript. Each feature is filled per platform; stubs return a clear error.
 
+Linux text clipboard is implemented with `arboard` (MIT OR Apache-2.0): `Clipboard::get_text` / `set_text` on `native()`, and the same calls through `NativeOp` (`clipboardGetText`, `clipboardSetText`) via `apply_native_op` / `tekto-js::apply_native_host_op`. X11 is used by default; Wayland is used when `WAYLAND_DISPLAY` is set. If there is no clipboard session the call returns `NativeError::Unavailable` (no panic). Windows and Android stay stubs. An empty clipboard reads as an empty string. A live round-trip test is off unless `TEKTO_CLIPBOARD_LIVE=1`.
+
 ## Compile times
 
 - Default features: CPU renderer + desktop shell only.
