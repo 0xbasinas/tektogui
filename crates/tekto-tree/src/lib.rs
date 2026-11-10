@@ -50,7 +50,9 @@ pub enum NodeKind {
     TextField,
     /// Vertical clip of overflowing children. `scroll_y` shifts them up.
     Scroll,
-    /// Vertical collection of [`NodeKind::ListItem`] rows. Not virtualized.
+    /// Vertical collection of [`NodeKind::ListItem`] rows.
+    /// Layout keeps only the visible rows plus [`LIST_OVERSCAN_PX`] when the
+    /// list sits in a scroll viewport.
     List,
     /// One row in a [`NodeKind::List`]. Height is per row.
     ListItem,
@@ -59,6 +61,10 @@ pub enum NodeKind {
 /// Logical pixels one mouse-wheel notch moves a scroll container.
 /// A notch is a short step, not a page.
 pub const SCROLL_WHEEL_LINE: f32 = 48.0;
+
+/// Extra logical pixels laid out above and below a list viewport.
+/// Layout keeps this band of rows so a small scroll does not pop the edges.
+pub const LIST_OVERSCAN_PX: f32 = 64.0;
 
 impl NodeKind {
     pub fn as_str(self) -> &'static str {
@@ -259,6 +265,16 @@ pub struct Node {
     /// reads it when deciding whether to insert a scroll parent.
     #[serde(default = "nan_f32", skip_serializing_if = "is_nan_f32")]
     pub list_viewport: f32,
+    /// Every list row in order, including rows layout has detached.
+    /// Empty until the first layout of a list. Not an accessibility child list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub list_slots: Vec<NodeId>,
+    /// Spacer above the virtual window. `0` means there is no spacer yet.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub list_pad_top: u64,
+    /// Spacer below the virtual window. `0` means there is no spacer yet.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub list_pad_bottom: u64,
     /// Paint multiplier for this node and its children. 1 is solid, 0 is hidden.
     #[serde(default = "default_opacity")]
     pub opacity: f32,
@@ -274,6 +290,10 @@ fn nan_f32() -> f32 {
 
 fn is_nan_f32(value: &f32) -> bool {
     value.is_nan()
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 impl Node {
@@ -297,6 +317,9 @@ impl Node {
             scroll_y: 0.0,
             scroll_extent: 0.0,
             list_viewport: f32::NAN,
+            list_slots: Vec::new(),
+            list_pad_top: 0,
+            list_pad_bottom: 0,
             opacity: 1.0,
         }
     }

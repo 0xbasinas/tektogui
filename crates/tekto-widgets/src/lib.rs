@@ -203,7 +203,11 @@ pub struct ListIds {
 /// A vertical list of variable-height rows.
 ///
 /// Each row is a [`NodeKind::ListItem`] with a stable scene id. The list node
-/// is [`NodeKind::List`]. Rows are not virtualized.
+/// is [`NodeKind::List`]. Layout lays out and paints only the rows that
+/// intersect the viewport plus [`tekto_tree::LIST_OVERSCAN_PX`]. Rows outside
+/// that window stay in the tree (same ids) but are not children until scrolled
+/// back. A top and bottom spacer keeps the scroll height equal to every row,
+/// so a jump in `scroll_y` stays on the same content.
 ///
 /// When `viewport_height` is finite and the stacked rows are taller than that
 /// viewport, the list is parented under [`scroll`]. A shorter list, or a
