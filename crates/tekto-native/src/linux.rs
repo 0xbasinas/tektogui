@@ -2,30 +2,48 @@
 //!
 //! A missing session (headless CI, no display) is [`NativeError::Unavailable`],
 //! not a panic. Other platforms do not compile this module.
+//!
+//! The clipboard handle is kept for the life of the process. On X11, dropping
+//! the last `arboard::Clipboard` destroys its selection window after asking a
+//! clipboard manager to take the data. With no manager (a typical bare X
+//! session) that drop loses the text as soon as `set_text` returns.
+
+use std::sync::Mutex;
 
 use arboard::{Clipboard, Error as ArboardError};
 
 use crate::{current_platform, NativeError};
 
 pub(crate) fn get_text() -> Result<String, NativeError> {
-    let mut clipboard = open("clipboard.get")?;
-    match clipboard.get_text() {
+    with_clipboard("clipboard.get", |clipboard| match clipboard.get_text() {
         Ok(text) => Ok(text),
         // Empty clipboard or a non-text payload: callers get an empty string.
         Err(ArboardError::ContentNotAvailable) => Ok(String::new()),
         Err(err) => Err(map_arboard("clipboard.get", err)),
-    }
+    })
 }
 
 pub(crate) fn set_text(text: &str) -> Result<(), NativeError> {
-    let mut clipboard = open("clipboard.set")?;
-    clipboard
-        .set_text(text)
-        .map_err(|err| map_arboard("clipboard.set", err))
+    with_clipboard("clipboard.set", |clipboard| {
+        clipboard
+            .set_text(text)
+            .map_err(|err| map_arboard("clipboard.set", err))
+    })
 }
 
-fn open(capability: &'static str) -> Result<Clipboard, NativeError> {
-    Clipboard::new().map_err(|err| map_arboard(capability, err))
+/// One handle for the process. Later calls reuse it so `set_text` does not
+/// drop the owner of the X11 selection.
+fn with_clipboard<T>(
+    capability: &'static str,
+    f: impl FnOnce(&mut Clipboard) -> Result<T, NativeError>,
+) -> Result<T, NativeError> {
+    static HELD: Mutex<Option<Clipboard>> = Mutex::new(None);
+    let mut slot = HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if slot.is_none() {
+        *slot = Some(Clipboard::new().map_err(|err| map_arboard(capability, err))?);
+    }
+    let clipboard = slot.as_mut().expect("clipboard stored above");
+    f(clipboard)
 }
 
 pub(crate) fn map_arboard(capability: &'static str, err: ArboardError) -> NativeError {
