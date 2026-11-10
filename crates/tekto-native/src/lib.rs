@@ -2,14 +2,17 @@
 //!
 //! Each capability is a small trait so platforms can be filled in one
 //! at a time (Windows, Linux, Android, later macOS, iOS, and web).
-//! Text clipboard is implemented on Linux and Windows. The API is stable
-//! for apps and for the JS [`NativeOp`] hook.
+//! Text clipboard is implemented on Linux and Windows. Linux notifications
+//! use the freedesktop notification service on the session bus. The API is
+//! stable for apps and for the JS [`NativeOp`] hook.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod linux_notify;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -36,16 +39,35 @@ pub enum NativeError {
 /// because clipboard get returns text rather than node ids.
 ///
 /// TypeScript can send the same shape later:
-/// `{"op":"clipboardGetText"}` and `{"op":"clipboardSetText","text":"..."}`.
+/// `{"op":"clipboardGetText"}`, `{"op":"clipboardSetText","text":"..."}`,
+/// and `{"op":"notificationsShow","title":"...","body":"..."}`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum NativeOp {
     ClipboardGetText,
-    ClipboardSetText { text: String },
-    FilesReadText { path: String },
-    FilesWriteText { path: String, text: String },
-    FilesReadBytes { path: String },
-    FilesWriteBytes { path: String, bytes: Vec<u8> },
+    ClipboardSetText {
+        text: String,
+    },
+    FilesReadText {
+        path: String,
+    },
+    FilesWriteText {
+        path: String,
+        text: String,
+    },
+    FilesReadBytes {
+        path: String,
+    },
+    FilesWriteBytes {
+        path: String,
+        bytes: Vec<u8>,
+    },
+    /// Show a plain-text desktop notification. Linux only; other platforms
+    /// return [`NativeError::Unsupported`].
+    NotificationsShow {
+        title: String,
+        body: String,
+    },
 }
 
 /// Run one [`NativeOp`] against [`native`].
@@ -70,6 +92,7 @@ pub fn apply_native_op(op: &NativeOp) -> Result<Option<String>, NativeError> {
             ))
         }),
         NativeOp::FilesWriteBytes { path, bytes } => host.write_bytes(path, bytes).map(|()| None),
+        NativeOp::NotificationsShow { title, body } => host.show(title, body).map(|()| None),
     }
 }
 
@@ -231,8 +254,16 @@ impl Clipboard for StubNative {
 }
 
 impl Notifications for StubNative {
-    fn show(&self, _title: &str, _body: &str) -> Result<(), NativeError> {
-        Err(unsupported("notifications.show"))
+    fn show(&self, title: &str, body: &str) -> Result<(), NativeError> {
+        #[cfg(target_os = "linux")]
+        {
+            linux_notify::show(title, body)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (title, body);
+            Err(unsupported("notifications.show"))
+        }
     }
 }
 
@@ -449,6 +480,119 @@ mod tests {
                 err,
                 NativeError::Unsupported {
                     capability: "clipboard.get",
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn notifications_op_json_roundtrip() {
+        let op = NativeOp::NotificationsShow {
+            title: "Saved".into(),
+            body: "Note stored".into(),
+        };
+        let json = serde_json::to_string(&op).unwrap();
+        assert_eq!(
+            json,
+            r#"{"op":"notificationsShow","title":"Saved","body":"Note stored"}"#
+        );
+        let back: NativeOp = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, op);
+    }
+
+    /// Headless child: no session bus. Must be [`NativeError::Unavailable`].
+    #[cfg(target_os = "linux")]
+    fn assert_headless_notify_error() {
+        let err = native().show("Tekto", "headless").expect_err("no bus");
+        assert!(
+            matches!(
+                err,
+                NativeError::Unavailable {
+                    capability: "notifications.show",
+                    platform: "linux",
+                    reason: "no session bus or notification daemon",
+                }
+            ),
+            "{err}"
+        );
+        let via = apply_native_op(&NativeOp::NotificationsShow {
+            title: "Tekto".into(),
+            body: "headless".into(),
+        })
+        .expect_err("native op");
+        assert!(
+            matches!(
+                via,
+                NativeError::Unavailable {
+                    capability: "notifications.show",
+                    ..
+                }
+            ),
+            "{via}"
+        );
+    }
+
+    /// Default test never contacts a notification daemon and never opens
+    /// displays `:1` or `:2`. On Linux it re-executes itself with the session
+    /// bus cleared. Set `TEKTO_NOTIFY_LIVE=1` to show a real notification.
+    #[test]
+    fn notifications_missing_bus_or_opt_in() {
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let reserved = matches!(display.as_str(), ":1" | ":2" | ":1.0" | ":2.0");
+        assert!(
+            !reserved || std::env::var_os("TEKTO_NOTIFY_LIVE").is_none(),
+            "refusing notifications on reserved display {display}"
+        );
+
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("TEKTO_NOTIFY_HEADLESS_CHILD").is_some() {
+            assert_headless_notify_error();
+            return;
+        }
+
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("TEKTO_NOTIFY_LIVE").is_some() && !linux_notify::skip_live_notify() {
+            native()
+                .show("Tekto", "notification probe")
+                .expect("live notification");
+            apply_native_op(&NativeOp::NotificationsShow {
+                title: "Tekto".into(),
+                body: "notification probe via op".into(),
+            })
+            .expect("live native op");
+            return;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let exe = std::env::current_exe().expect("test exe");
+            let empty = std::env::temp_dir()
+                .join(format!("tekto-notify-empty-runtime-{}", std::process::id()));
+            std::fs::create_dir_all(&empty).expect("empty runtime dir");
+            let output = std::process::Command::new(exe)
+                .args(["tests::notifications_missing_bus_or_opt_in", "--exact"])
+                .env_remove("DBUS_SESSION_BUS_ADDRESS")
+                .env("XDG_RUNTIME_DIR", &empty)
+                .env("TEKTO_NOTIFY_HEADLESS_CHILD", "1")
+                .output()
+                .expect("spawn headless notification test");
+            let _ = std::fs::remove_dir_all(&empty);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "headless notification child failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let err = native().show("Tekto", "body").expect_err("stub");
+            assert!(matches!(
+                err,
+                NativeError::Unsupported {
+                    capability: "notifications.show",
                     ..
                 }
             ));

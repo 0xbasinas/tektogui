@@ -5,13 +5,13 @@ description: Implement a tekto-native plugin (files, open/save dialogs, clipboar
 
 # Add a native feature
 
-`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Other platforms, dialogs, notifications, tray, and shortcuts return `NativeError::Unsupported { capability, platform }`.
+`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Other platforms, dialogs, tray, shortcuts, and notifications outside Linux return `NativeError::Unsupported { capability, platform }`.
 
 Windows code is compile-checked on Linux with `cargo check --target x86_64-pc-windows-gnu -p tekto-native` (no linker, no runtime). Clipboard and file behavior still need a Windows machine. Do not treat that check as a runtime test.
 
 On Windows, `arboard` links `clipboard-win` 5.4.3 and `error-code` 3.4.0, both Boost Software License 1.0. That is outside the MIT / Apache-2.0 / BSD / zlib set used for crates this repo adds directly. `windows-sys` and `windows-link` (pulled by `clipboard-win`) are MIT OR Apache-2.0. The file sandbox does not add a crate.
 
-A present platform implementation that cannot reach the OS service (headless Linux, no `DISPLAY` and no `WAYLAND_DISPLAY`) returns `NativeError::Unavailable { capability, platform, reason }`, not `Unsupported`. Do not open displays `:1` or `:2`. The opt-in live check is `TEKTO_CLIPBOARD_LIVE=1`.
+A present platform implementation that cannot reach the OS service (headless Linux, no `DISPLAY` and no `WAYLAND_DISPLAY`, or no session bus / notification daemon) returns `NativeError::Unavailable { capability, platform, reason }`, not `Unsupported`. Do not open displays `:1` or `:2`. Opt-in live checks are `TEKTO_CLIPBOARD_LIVE=1` and `TEKTO_NOTIFY_LIVE=1`.
 
 JS calls clipboard and files through `NativeOp` and `apply_native_op`. `tekto-js::apply_native_host_op` wraps that in `JsError`. It is not a scene-tree `HostOp` (get returns text, not a node id). There is still no QuickJS binding for it; do not enable the `quickjs` feature by default.
 
@@ -26,6 +26,14 @@ File ops (Linux and Windows; other platforms return `Unsupported` for `files.rea
 - `{"op":"filesWriteText","path":"notes/a.txt","text":"..."}` — returns `None`
 - `{"op":"filesReadBytes","path":"blob"}` — returns `Some` of a JSON byte array encoded as a string, for example `"[0,255]"`. The op result type is still `Option<String>`.
 - `{"op":"filesWriteBytes","path":"blob","bytes":[0,255]}` — `bytes` is a JSON array of numbers 0–255 (`Vec<u8>`). Returns `None`.
+
+Notification op (Linux; other platforms return `Unsupported` for `notifications.show`):
+
+- `{"op":"notificationsShow","title":"...","body":"..."}` — returns `None`. Title and body are plain text.
+
+## Linux notifications
+
+`Notifications::show` on Linux sends one freedesktop notification: app name `tekto`, summary = title, body = body, no icon, no actions, default timeout. It connects to `DBUS_SESSION_BUS_ADDRESS`, or to `$XDG_RUNTIME_DIR/bus` when that socket exists. No session bus, a refused connection, or a bus error from `org.freedesktop.Notifications` (no daemon) is `NativeError::Unavailable` with reason `no session bus or notification daemon`. The call does not open `DISPLAY`. A NUL in the title or body is `NativeError::Message`. Headless tests clear `DBUS_SESSION_BUS_ADDRESS` and point `XDG_RUNTIME_DIR` at an empty directory (`TEKTO_NOTIFY_HEADLESS_CHILD=1`). `TEKTO_NOTIFY_LIVE=1` shows a real notification and is off by default. Do not set it when `DISPLAY` is `:1` or `:2`.
 
 ## Linux file sandbox
 
