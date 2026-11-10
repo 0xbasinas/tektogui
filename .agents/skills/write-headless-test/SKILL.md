@@ -56,6 +56,10 @@ npm test
 
 Do not start a display or an emulator for these tests.
 
+## Long lists
+
+`layout_tree` windows a `list` inside `scroll`. After layout, only rows that meet the viewport plus `LIST_OVERSCAN_PX` (64) are children, so paint walks that window. `scroll_y` is the scroll box. Subtract the list's offset (scroll padding plus earlier siblings) before picking rows. Other rows keep the ids `list_item` returned until `Tree::remove` drops the list (that also drops spacers) or `append` moves the row. `scroll_extent` is still the full stack. Set `scroll_y`, lay out again, and assert the offset did not move and the rows for that offset are the children. Cover a list that is not at the top of the scroll. `crates/tekto/tests/list_virtual.rs` is the pattern. CPU `paint_tree` is enough. GPU uses the same walk when the `gpu` feature is on.
+
 ## Motion
 
 `Tree::transition` then `Tree::advance(ms)` moves opacity and bounds. A channel starts on the first `advance` after the call, so advance a stale clock before `transition` if you are testing an idle gap. Later calls merge props; they do not cancel other channels. Assert a midpoint and the end. After the end, run `layout_tree` again and assert the target bounds still hold (`LayoutStyle` keeps finished x, y, width, and height). Paint with `render_tree_png` if you need pixels. A short loop of frames is enough to note CPU cost; the renderer repaints the whole scene each time. Set `TEKTO_REDUCE_MOTION=1` only when the test should snap. Do not read OS animation settings in the test. AccessKit and the OS reduce-motion settings are still a follow-up.

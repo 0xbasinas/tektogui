@@ -51,7 +51,7 @@ Tools in the first slice:
 
 Live patches change the running tree immediately and do not require a reload. `POST /patch` and `ui.patch` accept JSON `{ "id", "text?", "name?", "fill?", "color?", "fontSize?", "padding?", "gap?" }` (`#rrggbb` or `#rrggbbaa`) and return the updated node, or a clear error (unknown id, bad color).
 
-A list (`kind` `list`) is a column of `list_item` rows. Each row's id is stable and is the AccessKit `ListItem` id. The list id is the AccessKit `List`. A tall list from `tekto::list` has a `scroll` parent; a short one does not. Rows are not virtualized.
+A list (`kind` `list`) is a column of `list_item` rows. Each row's id is stable and is the AccessKit `ListItem` id. The list id is the AccessKit `List`. A tall list from `tekto::list` has a `scroll` parent; a short one does not. After layout, a scrolling list keeps only the visible rows plus 64px overscan as children. The window is the list's own position in the scroll, so padding and earlier siblings count. Rows outside that window are not painted. Their ids still exist until the list is removed or the row is moved with `append`. Scroll height stays the full stack.
 
 A text field (`kind` `text_field`) stores its committed value in `text` and its accessible label in `name`. `ui.patch` with `text` replaces the value, clears any preedit, and leaves `name` alone. `ui.type` inserts plain characters at the caret (control characters are skipped), drops a preedit without committing it, and focuses that field. Backspace is a desktop key on the focused field, not part of `ui.type`. AccessKit role is `TextInput`, with the same stable id and label `name`. The AccessKit value is the committed text plus the current preedit, if the desktop IME is composing.
 
