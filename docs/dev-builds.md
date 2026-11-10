@@ -47,3 +47,45 @@ Times from GitHub-hosted Linux (UTC, job "Linux check", step "Test (includes hea
 The first nightly run of the MVP ([42849414759](https://github.com/0xbasinas/tektogui/actions/runs/42849414759)) failed at `rustfmt` before tests, so it is not a usable cold-test number.
 
 Reading: a warm `cargo test --workspace` on CI is a few seconds; after a change that recompiles the core crates it is around half a minute; a colder clippy+test after deps are cached is about 80 s. Windows and Android compile-only jobs stay off the PR path so those minutes are not spent on every change.
+
+## Incremental `cargo check -p notes` (issue #31)
+
+Question: after a small edit, does the crate graph make `cargo check` of a typical app (the Notes example) slow enough to justify a split or a new feature gate?
+
+No code change. Default features stay `cpu` + `desktop`. `js`, `quickjs`, and `gpu` stay off. The `dev` profile stays `incremental = true` and `debug = 1`. A facade split (for example dropping `tekto-widgets` out of `tekto`) would not pay for itself: a widget edit already rechecks only `tekto-widgets`, the thin `tekto` re-export, and `notes`. It does not rebuild winit, Parley, or ICU.
+
+### Machine
+
+- Linux x86_64, KVM guest, 8 vCPU Intel Xeon (family 6, model 207), 15 GiB RAM, no swap
+- `rustc 1.99.1 (58cf8f9c3 2026-10-13)`, `cargo 1.99.1`
+- `CARGO_TARGET_DIR=/workspace/tektogui-i31/target`
+- Profile printed by cargo: `dev` `[unoptimized + debuginfo]` (workspace sets `debug = 1`, so this is line tables, not full debuginfo)
+
+### Commands and times
+
+Deps were already built. Timings are wall clock from `bash` `TIMEFORMAT` (`real`), with cargo's own `Finished ... in` line in parentheses.
+
+```bash
+export CARGO_TARGET_DIR=/workspace/tektogui-i31/target
+cargo check -p notes
+```
+
+| Step | What changed | `cargo check -p notes` |
+| --- | --- | --- |
+| Warm, no edit | nothing | 0.14 s real (Finished in 0.10 s) |
+| App edit | `examples/notes/src/main.rs`, window title `"Notes"` → `"Notes "` | 0.17 s real (0.13 s). Rechecked `notes` only |
+| Widget edit | `crates/tekto-widgets/src/lib.rs`, greeting `"Hello from Tekto"` → `"Hello from Tekto!"` | 0.23 s real (0.19 s). Rechecked `tekto-widgets`, `tekto`, `notes` |
+| Doc-comment touch | one trailing space on the `notes_tree` doc comment | 0.22 s real (0.18 s). Same three crates |
+| Heavier crates (not the acceptance edit) | `LINE_HEIGHT` in `tekto-text` and a comment in `tekto-platform`, plus widgets restored to the pre-edit source so they rechecked too | 0.38 s real (0.33 s). Also rechecked `tekto-render` and `tekto-layout` |
+
+The first check in this worktree, with the registry already populated, finished in 10.4 s real and compiled 233 units. That is a from-scratch `check` of Notes, not an incremental edit.
+
+Probe edits were reverted. They are not in the tree.
+
+### Why nothing was split or gated
+
+- JS is already behind `tekto`'s `js` / `quickjs` features and is not in `cargo check -p notes`.
+- `gpu` is an empty feature. wgpu and Vello are not dependencies.
+- `a11y-os` (and `accesskit_winit`) stays off. In-process `accesskit` stays, on purpose.
+- A one-line Notes or widget edit is well under a second. Gating widgets, or making the example depend on leaf crates instead of `tekto`, would change the default API (`notes_tree`, `window`, `button`) for a gain measured in tens of milliseconds.
+- Editing the text or platform crate still does not rebuild the heavy third-party graph; those crates are small wrappers. Their compile cost shows up on a cold check, which feature flags cannot remove from an app that windows and draws text.
