@@ -17,7 +17,7 @@ a11y-os = ["tekto-platform/a11y-os"]
 js = ["dep:tekto-js"]
 # Embeds QuickJS-ng. Off by default; do not enable on PR CI.
 quickjs = ["js", "tekto-js/quickjs"]
-# Linux system tray (StatusNotifierItem). Off by default.
+# System tray (Linux StatusNotifierItem, Windows Shell_NotifyIconW). Off by default.
 tray = ["tekto-native/tray"]
 # Linux X11 global shortcuts. Off by default. Windows stays unsupported.
 shortcuts = ["tekto-native/shortcuts", "tekto-js?/shortcuts"]

@@ -9,8 +9,8 @@ description = "Plugin-style native APIs (files, clipboard, notifications, tray, 
 publish = false
 
 [features]
-# Linux StatusNotifierItem tray. Off by default so apps that do not show a
-# tray do not compile this client. No extra crate (MIT in-tree D-Bus only).
+# System tray. Off by default so apps that do not show a tray do not compile
+# this client. No extra crate: Linux StatusNotifierItem, Windows Shell_NotifyIconW.
 tray = []
 # Linux X11 global shortcuts (x11rb). Off by default so apps that do not
 # register shortcuts do not compile this client. Windows stays unsupported.

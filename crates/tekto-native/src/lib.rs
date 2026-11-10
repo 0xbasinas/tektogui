@@ -4,11 +4,11 @@
 //! at a time (Windows, Linux, Android, later macOS, iOS, and web).
 //! Text clipboard, notifications, and open/save dialogs are implemented on
 //! Linux and Windows.
-//! Linux notifications use the freedesktop session bus. The Linux system
-//! tray is behind the `tray` feature (StatusNotifierItem on the session
-//! bus, no extra crate). Linux global shortcuts are behind the `shortcuts`
-//! feature (an X11 key grab). Windows shortcuts stay unsupported. The API
-//! is stable for apps and for the JS [`NativeOp`] hook.
+//! Linux notifications use the freedesktop session bus. The system tray is
+//! behind the `tray` feature (StatusNotifierItem on Linux, `Shell_NotifyIconW`
+//! on Windows, no extra crate). Linux global shortcuts are behind the
+//! `shortcuts` feature (an X11 key grab). Windows shortcuts stay unsupported.
+//! The API is stable for apps and for the JS [`NativeOp`] hook.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -29,6 +29,8 @@ mod windows;
 mod windows_dialog;
 #[cfg(target_os = "windows")]
 mod windows_notify;
+#[cfg(all(target_os = "windows", feature = "tray"))]
+mod windows_tray;
 
 #[derive(Debug, Error)]
 pub enum NativeError {
@@ -84,8 +86,8 @@ pub enum NativeOp {
         title: String,
         body: String,
     },
-    /// Show the Linux tray icon (`tray` feature). `menu` entries are plain
-    /// labels. A click is collected by [`NativeOp::TrayTakeClick`].
+    /// Show the tray icon (`tray` feature). `menu` entries are plain labels.
+    /// A click is collected by [`NativeOp::TrayTakeClick`]. Linux and Windows.
     TrayShow {
         label: String,
         menu: Vec<TrayMenuItem>,
@@ -219,8 +221,8 @@ pub trait Notifications {
 }
 
 pub trait SystemTray {
-    /// Tooltip text. On Linux with the `tray` feature this is stored even
-    /// when the icon is hidden, and pushed to a visible icon.
+    /// Tooltip text. With the `tray` feature this is stored even when the
+    /// icon is hidden, and pushed to a visible icon. Linux and Windows.
     fn set_label(&self, label: &str) -> Result<(), NativeError>;
     /// Show a tray icon and a simple menu. A click is queued for
     /// [`Self::take_click`] and also passed to the [`Self::set_on_click`] hook.
@@ -381,7 +383,14 @@ impl SystemTray for StubNative {
         {
             linux_tray::set_label(label)
         }
-        #[cfg(not(all(target_os = "linux", feature = "tray")))]
+        #[cfg(all(target_os = "windows", feature = "tray"))]
+        {
+            windows_tray::set_label(label)
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "tray"),
+            all(target_os = "windows", feature = "tray")
+        )))]
         {
             let _ = label;
             Err(unsupported("tray.set_label"))
@@ -393,7 +402,14 @@ impl SystemTray for StubNative {
         {
             linux_tray::show_icon(label, menu)
         }
-        #[cfg(not(all(target_os = "linux", feature = "tray")))]
+        #[cfg(all(target_os = "windows", feature = "tray"))]
+        {
+            windows_tray::show_icon(label, menu)
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "tray"),
+            all(target_os = "windows", feature = "tray")
+        )))]
         {
             let _ = (label, menu);
             Err(unsupported("tray.show"))
@@ -405,7 +421,14 @@ impl SystemTray for StubNative {
         {
             linux_tray::hide_icon()
         }
-        #[cfg(not(all(target_os = "linux", feature = "tray")))]
+        #[cfg(all(target_os = "windows", feature = "tray"))]
+        {
+            windows_tray::hide_icon()
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "tray"),
+            all(target_os = "windows", feature = "tray")
+        )))]
         {
             Err(unsupported("tray.hide"))
         }
@@ -416,7 +439,14 @@ impl SystemTray for StubNative {
         {
             linux_tray::take_click()
         }
-        #[cfg(not(all(target_os = "linux", feature = "tray")))]
+        #[cfg(all(target_os = "windows", feature = "tray"))]
+        {
+            windows_tray::take_click()
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "tray"),
+            all(target_os = "windows", feature = "tray")
+        )))]
         {
             Err(unsupported("tray.take_click"))
         }
@@ -427,7 +457,14 @@ impl SystemTray for StubNative {
         {
             linux_tray::set_on_click(on_click)
         }
-        #[cfg(not(all(target_os = "linux", feature = "tray")))]
+        #[cfg(all(target_os = "windows", feature = "tray"))]
+        {
+            windows_tray::set_on_click(on_click)
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "tray"),
+            all(target_os = "windows", feature = "tray")
+        )))]
         {
             let _ = on_click;
             Err(unsupported("tray.on_click"))
@@ -1008,10 +1045,13 @@ mod tests {
     }
 
     /// Without the `tray` feature the icon stays out of the binary and the
-    /// call is a clear `Unsupported` error. Windows stays unsupported (issue #47).
-    #[cfg(not(all(target_os = "linux", feature = "tray")))]
+    /// call is a clear `Unsupported` error.
+    #[cfg(not(any(
+        all(target_os = "linux", feature = "tray"),
+        all(target_os = "windows", feature = "tray")
+    )))]
     #[test]
-    fn tray_without_linux_feature_is_unsupported() {
+    fn tray_without_feature_is_unsupported() {
         let err = native()
             .show_icon(
                 "Tekto",
