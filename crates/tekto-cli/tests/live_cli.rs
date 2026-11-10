@@ -1,0 +1,187 @@
+//! End-to-end checks that `tekto tree`, `tekto screenshot`, and `tekto patch`
+//! talk to a running dev server (issues #7 and #12).
+
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+fn tekto_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_tekto"))
+}
+
+fn unique_dir() -> PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("tekto-cli-e2e-{}-{now}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn run_tekto(dev_file: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(tekto_bin())
+        .args(args)
+        .env("TEKTO_DEV_FILE", dev_file)
+        .output()
+        .expect("run tekto")
+}
+
+fn wait_for_endpoint(path: &Path, timeout: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if let Ok(s) = fs::read_to_string(path) {
+            if s.contains("port") {
+                return;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("timed out waiting for dev server file {}", path.display());
+}
+
+fn id_for(tree: &str, needle: &str) -> u64 {
+    for line in tree.lines() {
+        if !line.contains(needle) {
+            continue;
+        }
+        if let Some(hash) = line.find('#') {
+            let digits: String = line[hash + 1..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if let Ok(id) = digits.parse() {
+                return id;
+            }
+        }
+    }
+    panic!("no node id for {needle} in tree:\n{tree}");
+}
+
+struct DevServer {
+    child: std::process::Child,
+}
+
+impl Drop for DevServer {
+    fn drop(&mut self) {
+        if let Some(mut stdin) = self.child.stdin.take() {
+            let _ = stdin.write_all(b"\n");
+            let _ = stdin.flush();
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn tree_screenshot_and_patch_against_dev_server() {
+    let dir = unique_dir();
+    let dev_file = dir.join("tekto-dev.json");
+    let headless = dir.join("headless.png");
+    let live = dir.join("live.png");
+
+    let child = Command::new(tekto_bin())
+        .args(["dev", "--headless", "--out"])
+        .arg(&headless)
+        .env("TEKTO_DEV_FILE", &dev_file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start tekto dev");
+    let _server = DevServer { child };
+
+    wait_for_endpoint(&dev_file, Duration::from_secs(30));
+
+    let out = run_tekto(&dev_file, &["tree"]);
+    assert!(
+        out.status.success(),
+        "tree failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let tree = String::from_utf8_lossy(&out.stdout);
+    assert!(tree.contains("window#1"), "missing window#1 in:\n{tree}");
+    assert!(
+        tree.contains("Hello from Tekto"),
+        "missing greeting in:\n{tree}"
+    );
+
+    let out = run_tekto(&dev_file, &["screenshot", live.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "screenshot failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let png = fs::read(&live).expect("live png");
+    assert!(
+        png.starts_with(&[0x89, b'P', b'N', b'G']),
+        "screenshot was not a PNG ({} bytes)",
+        png.len()
+    );
+
+    let body_id = id_for(&tree, "Hello from Tekto");
+    let banner_id = id_for(&tree, "banner");
+
+    let id = body_id.to_string();
+    let out = run_tekto(&dev_file, &["patch", &id, "--text", "Patched hello"]);
+    assert!(
+        out.status.success(),
+        "patch text failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = run_tekto(&dev_file, &["tree"]);
+    let tree2 = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        tree2.contains("Patched hello"),
+        "tree did not show patched text:\n{tree2}"
+    );
+    assert!(
+        !tree2.contains("Hello from Tekto"),
+        "old text still present:\n{tree2}"
+    );
+
+    let bid = banner_id.to_string();
+    let out = run_tekto(&dev_file, &["patch", &bid, "--fill", "#c44c3a"]);
+    assert!(
+        out.status.success(),
+        "patch fill failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_tekto(&dev_file, &["patch", &id, "--color", "#ffffff"]);
+    assert!(
+        out.status.success(),
+        "patch color failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = run_tekto(&dev_file, &["patch", "99999", "--text", "nope"]);
+    assert!(
+        !out.status.success(),
+        "missing id should be an error, stdout={}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let err = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        err.contains("unknown node") && err.contains("99999"),
+        "unclear missing-id error: {err}"
+    );
+}
+
+#[test]
+fn tree_fails_clearly_without_dev_server() {
+    let missing = unique_dir().join("no-server.json");
+    let out = run_tekto(&missing, &["tree"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("no dev server") && err.contains("tekto dev"),
+        "unclear no-server error: {err}"
+    );
+}
