@@ -237,6 +237,9 @@ fn serve(mut stream: UnixStream) {
             continue;
         }
         let call_serial = serial_of(&message);
+        // Field 7 is SENDER. The session bus routes a reply only when DESTINATION
+        // is that unique name. A peer on the same socket can ignore it.
+        let sender = header_string(&message, 7);
         let path = header_string(&message, 1).unwrap_or_default();
         let interface = header_string(&message, 2).unwrap_or_default();
         let member = header_string(&message, 3).unwrap_or_default();
@@ -250,9 +253,9 @@ fn serve(mut stream: UnixStream) {
         };
         let serial = tray().next_serial.fetch_add(1, Ordering::Relaxed);
         let packet = if bytes.is_empty() {
-            method_return(serial, call_serial, None, &[])
+            method_return(serial, call_serial, sender.as_deref(), None, &[])
         } else {
-            bytes_with_serial(serial, call_serial, &bytes)
+            bytes_with_serial(serial, call_serial, sender.as_deref(), &bytes)
         };
         if stream.write_all(&packet).is_err() {
             break;
@@ -1005,19 +1008,24 @@ fn tagged(signature: &str, body: &[u8]) -> Vec<u8> {
     out
 }
 
-fn bytes_with_serial(serial: u32, reply_to: u32, tagged_body: &[u8]) -> Vec<u8> {
+fn bytes_with_serial(
+    serial: u32,
+    reply_to: u32,
+    destination: Option<&str>,
+    tagged_body: &[u8],
+) -> Vec<u8> {
     if tagged_body.first().is_some_and(|len| *len == 0xff) {
         let name_len = tagged_body[1] as usize;
         let name = std::str::from_utf8(&tagged_body[2..2 + name_len])
             .unwrap_or("org.freedesktop.DBus.Error.Failed");
         let text_at = 2 + name_len;
         let text = std::str::from_utf8(&tagged_body[text_at..]).unwrap_or("tray error");
-        return build_error(serial, reply_to, name, text);
+        return build_error(serial, reply_to, destination, name, text);
     }
     let sig_len = tagged_body[0] as usize;
     let signature = std::str::from_utf8(&tagged_body[1..1 + sig_len]).unwrap_or("");
     let body = &tagged_body[1 + sig_len + 1..];
-    method_return(serial, reply_to, Some(signature), body)
+    method_return(serial, reply_to, destination, Some(signature), body)
 }
 
 fn error_body(name: &str, message: &str) -> Vec<u8> {
@@ -1029,19 +1037,37 @@ fn error_body(name: &str, message: &str) -> Vec<u8> {
     out
 }
 
-fn method_return(serial: u32, reply_to: u32, signature: Option<&str>, body: &[u8]) -> Vec<u8> {
+fn method_return(
+    serial: u32,
+    reply_to: u32,
+    destination: Option<&str>,
+    signature: Option<&str>,
+    body: &[u8],
+) -> Vec<u8> {
     let mut fields = Vec::new();
     write_field_u32(&mut fields, 5, reply_to);
+    if let Some(destination) = destination.filter(|name| !name.is_empty()) {
+        write_field_string(&mut fields, 6, "s", destination);
+    }
     if let Some(signature) = signature.filter(|sig| !sig.is_empty()) {
         write_field_signature(&mut fields, signature);
     }
     finish_message(2, serial, &fields, body)
 }
 
-fn build_error(serial: u32, reply_to: u32, name: &str, message: &str) -> Vec<u8> {
+fn build_error(
+    serial: u32,
+    reply_to: u32,
+    destination: Option<&str>,
+    name: &str,
+    message: &str,
+) -> Vec<u8> {
     let mut fields = Vec::new();
     write_field_string(&mut fields, 4, "s", name);
     write_field_u32(&mut fields, 5, reply_to);
+    if let Some(destination) = destination.filter(|name| !name.is_empty()) {
+        write_field_string(&mut fields, 6, "s", destination);
+    }
     write_field_signature(&mut fields, "s");
     let mut body = Vec::new();
     write_str(&mut body, message);
@@ -1410,7 +1436,7 @@ mod tests {
         expect_auth(&mut stream);
         let _ = read_message(&mut stream).unwrap();
         stream
-            .write_all(&method_return(1, 1, Some("s"), &string_body(":1.8")))
+            .write_all(&method_return(1, 1, None, Some("s"), &string_body(":1.8")))
             .unwrap();
         let register = read_message(&mut stream).unwrap();
         assert_eq!(
@@ -1421,6 +1447,7 @@ mod tests {
             .write_all(&build_error(
                 2,
                 2,
+                None,
                 "org.freedesktop.DBus.Error.ServiceUnknown",
                 "no watcher",
             ))
@@ -1432,11 +1459,13 @@ mod tests {
         expect_auth(&mut stream);
         let _ = read_message(&mut stream).unwrap();
         stream
-            .write_all(&method_return(1, 1, Some("s"), &string_body(":1.9")))
+            .write_all(&method_return(1, 1, None, Some("s"), &string_body(":1.9")))
             .unwrap();
         let register = read_message(&mut stream).unwrap();
         let mut seen = String::from_utf8_lossy(&register).into_owned();
-        stream.write_all(&method_return(2, 2, None, &[])).unwrap();
+        stream
+            .write_all(&method_return(2, 2, None, None, &[]))
+            .unwrap();
 
         let call = event_call(9, 2, "clicked");
         seen.push_str(&String::from_utf8_lossy(&call));
@@ -1499,5 +1528,244 @@ mod tests {
         let mut body = Vec::new();
         write_str(&mut body, text);
         body
+    }
+
+    #[test]
+    fn reply_header_names_the_caller() {
+        let body = string_body("Routed");
+        let ok = method_return(7, 3, Some(":1.42"), Some("s"), &body);
+        assert_eq!(ok[1], 2);
+        assert_eq!(header_u32(&ok, 5), Some(3));
+        assert_eq!(header_string(&ok, 6).as_deref(), Some(":1.42"));
+        assert!(message_body(&ok).windows(6).any(|part| part == b"Routed"));
+
+        let err = build_error(
+            8,
+            4,
+            Some(":1.42"),
+            "org.freedesktop.DBus.Error.Failed",
+            "nope",
+        );
+        assert_eq!(err[1], 3);
+        assert_eq!(header_u32(&err, 5), Some(4));
+        assert_eq!(header_string(&err, 6).as_deref(), Some(":1.42"));
+        assert_eq!(
+            header_string(&err, 4).as_deref(),
+            Some("org.freedesktop.DBus.Error.Failed")
+        );
+
+        let direct = method_return(1, 1, None, None, &[]);
+        assert!(header_string(&direct, 6).is_none());
+    }
+
+    /// Proves the session bus can deliver a property reply. Skips when
+    /// `dbus-daemon` is not installed. Uses a private address, never the
+    /// desktop bus and never displays :1 or :2.
+    #[test]
+    fn property_reply_routes_on_private_bus() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let bus = match PrivateBus::start() {
+            Ok(bus) => bus,
+            Err(err) if err == "missing" => {
+                eprintln!("skipped property_reply_routes_on_private_bus: dbus-daemon missing");
+                return;
+            }
+            Err(err) => panic!("private session bus: {err}"),
+        };
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let host_address = bus.address.clone();
+        let host = thread::spawn(move || {
+            let result = host_get_title(&host_address, ready_tx);
+            let _ = done_tx.send(result);
+        });
+        ready_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("watcher did not claim the name");
+        show_at(&bus.address, "Routed", &[item("quit", "Quit")]).unwrap();
+        let title = done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("host dropped")
+            .expect("Get Title was not routed");
+        assert_eq!(title, "Routed");
+        hide_icon().unwrap();
+        host.join().unwrap();
+    }
+
+    struct PrivateBus {
+        address: String,
+        child: std::process::Child,
+        dir: std::path::PathBuf,
+    }
+
+    impl Drop for PrivateBus {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    impl PrivateBus {
+        fn start() -> Result<Self, String> {
+            if std::process::Command::new("dbus-daemon")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_err()
+            {
+                return Err("missing".into());
+            }
+            let dir = std::env::temp_dir().join(format!(
+                "tekto-tray-dbus-{}-{}",
+                std::process::id(),
+                next_bus_id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let socket = dir.join("bus");
+            let config_path = dir.join("session.conf");
+            let config = format!(
+                concat!(
+                    "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n",
+                    " \"http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd\">\n",
+                    "<busconfig>\n",
+                    "  <type>session</type>\n",
+                    "  <listen>unix:path={}</listen>\n",
+                    "  <auth>EXTERNAL</auth>\n",
+                    "  <policy context=\"default\">\n",
+                    "    <allow own=\"*\"/>\n",
+                    "    <allow send_destination=\"*\"/>\n",
+                    "    <allow receive_sender=\"*\"/>\n",
+                    "    <allow send_type=\"method_call\"/>\n",
+                    "    <allow send_type=\"method_return\"/>\n",
+                    "    <allow send_type=\"error\"/>\n",
+                    "    <allow send_type=\"signal\"/>\n",
+                    "  </policy>\n",
+                    "</busconfig>\n"
+                ),
+                socket.display()
+            );
+            std::fs::write(&config_path, config).unwrap();
+            let child = std::process::Command::new("dbus-daemon")
+                .args(["--nofork", "--nopidfile", "--config-file"])
+                .arg(&config_path)
+                .spawn()
+                .map_err(|err| err.to_string())?;
+            let address = format!("unix:path={}", socket.display());
+            let mut bus = Self {
+                address,
+                child,
+                dir,
+            };
+            for _ in 0..50 {
+                if UnixStream::connect(&socket).is_ok() {
+                    return Ok(bus);
+                }
+                if bus.child.try_wait().ok().flatten().is_some() {
+                    return Err("dbus-daemon exited before the socket was ready".into());
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            let _ = bus.child.kill();
+            Err("dbus-daemon did not open the socket".into())
+        }
+    }
+
+    fn host_get_title(address: &str, ready: std::sync::mpsc::Sender<()>) -> Result<String, String> {
+        let mut stream = connect(address).map_err(|err| err.to_string())?;
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+        authenticate(&mut stream).map_err(|_| "auth failed".to_string())?;
+        stream
+            .write_all(&build_method_call(
+                1,
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "Hello",
+                None,
+                &[],
+            ))
+            .map_err(|err| err.to_string())?;
+        let hello = read_reply(&mut stream, 1).map_err(|_| "hello failed".to_string())?;
+        if hello.message_type != 2 {
+            return Err("hello was not a method return".into());
+        }
+        let mut name_body = Vec::new();
+        write_str(&mut name_body, WATCHER);
+        write_u32(&mut name_body, 0);
+        stream
+            .write_all(&build_method_call(
+                2,
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "RequestName",
+                Some("su"),
+                &name_body,
+            ))
+            .map_err(|err| err.to_string())?;
+        let owned = read_reply(&mut stream, 2).map_err(|_| "RequestName failed".to_string())?;
+        if owned.message_type != 2 {
+            return Err("watcher name was not claimed".into());
+        }
+        ready
+            .send(())
+            .map_err(|_| "ready channel closed".to_string())?;
+
+        let register = {
+            let mut found = None;
+            for _ in 0..8 {
+                let message =
+                    read_message(&mut stream).map_err(|_| "no register call".to_string())?;
+                if message.get(1) == Some(&1)
+                    && header_string(&message, 3).as_deref() == Some("RegisterStatusNotifierItem")
+                {
+                    found = Some(message);
+                    break;
+                }
+            }
+            found.ok_or("no RegisterStatusNotifierItem")?
+        };
+        let caller = header_string(&register, 7).ok_or("register call has no sender")?;
+        let service = body_string(&register).ok_or("register body is not a string")?;
+        stream
+            .write_all(&method_return(
+                3,
+                serial_of(&register),
+                Some(&caller),
+                None,
+                &[],
+            ))
+            .map_err(|err| err.to_string())?;
+
+        let mut get_body = Vec::new();
+        write_str(&mut get_body, SNI_IFACE);
+        write_str(&mut get_body, "Title");
+        stream
+            .write_all(&build_method_call(
+                4,
+                &service,
+                ITEM_PATH,
+                PROPS_IFACE,
+                "Get",
+                Some("ss"),
+                &get_body,
+            ))
+            .map_err(|err| err.to_string())?;
+        let reply =
+            read_reply(&mut stream, 4).map_err(|_| "Get Title was not delivered".to_string())?;
+        if reply.message_type != 2 {
+            return Err(format!("Get Title type {}", reply.message_type));
+        }
+        let text = String::from_utf8_lossy(message_body(&reply.bytes));
+        if !text.contains("Routed") {
+            return Err(format!("title body {text:?}"));
+        }
+        Ok("Routed".into())
     }
 }
