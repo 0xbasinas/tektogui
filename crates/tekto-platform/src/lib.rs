@@ -196,7 +196,7 @@ mod desktop;
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
-pub use desktop::run_android;
+pub use desktop::{run_android, run_android_with_session};
 #[cfg(all(
     feature = "desktop",
     not(target_arch = "wasm32"),

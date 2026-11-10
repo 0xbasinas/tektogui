@@ -508,10 +508,34 @@ pub fn http_post(url: &str, body: &Value) -> Result<(String, Vec<u8>), McpError>
     http_request("POST", url, Some(body))
 }
 
+/// POST a raw body (used by `POST /reload` to push a JS bundle).
+pub fn http_post_raw(
+    url: &str,
+    body: &[u8],
+    content_type: &str,
+) -> Result<(String, Vec<u8>), McpError> {
+    http_request_bytes("POST", url, Some(body), content_type)
+}
+
 fn http_request(
     method: &str,
     url: &str,
     body: Option<&Value>,
+) -> Result<(String, Vec<u8>), McpError> {
+    let payload = body.map(serde_json::to_vec).transpose()?;
+    let ct = if body.is_some() {
+        "application/json"
+    } else {
+        "application/octet-stream"
+    };
+    http_request_bytes(method, url, payload.as_deref(), ct)
+}
+
+fn http_request_bytes(
+    method: &str,
+    url: &str,
+    body: Option<&[u8]>,
+    content_type: &str,
 ) -> Result<(String, Vec<u8>), McpError> {
     let url = url
         .strip_prefix("http://")
@@ -524,13 +548,10 @@ fn http_request(
         (host, 80u16)
     };
     let mut stream = TcpStream::connect((host_only, port))?;
-    let payload = body
-        .map(serde_json::to_vec)
-        .transpose()?
-        .unwrap_or_default();
+    let payload = body.unwrap_or(b"");
     let extra = if body.is_some() {
         format!(
-            "Content-Type: application/json\r\nContent-Length: {}\r\n",
+            "Content-Type: {content_type}\r\nContent-Length: {}\r\n",
             payload.len()
         )
     } else {
@@ -540,7 +561,7 @@ fn http_request(
         format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n{extra}\r\n");
     // One write so the server cannot reply before the POST body arrives.
     let mut msg = req.into_bytes();
-    msg.extend_from_slice(&payload);
+    msg.extend_from_slice(payload);
     stream.write_all(&msg)?;
     let mut resp = Vec::new();
     stream.read_to_end(&mut resp)?;

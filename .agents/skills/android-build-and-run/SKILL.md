@@ -115,9 +115,28 @@ adb emu kill
 
 Do not use a broad `pkill`.
 
+## JS hot reload
+
+The default APK does **not** enable `quickjs` (keeps nightly Android CI lean). `tekto dev --js --android` builds with `-F quickjs`, installs, forwards port 8474, bundles the TSX entry with esbuild, and `POST /reload`. The host CLI does **not** need `--features quickjs`.
+
+```bash
+# Prefer a single ABI. beddcode30 is x86_64. Or let the CLI detect it.
+export TEKTO_ANDROID_TARGET=x86_64-linux-android
+# AVD should already be up; do not compile the APK and run the emulator in parallel.
+cargo run -p tekto-cli -- dev --js examples/notes/src/app.tsx --android
+```
+
+Equivalent APK-only command: `cargo apk2 build -p notes-android -F quickjs --target x86_64-linux-android`.
+
+The first painted frame may be the Rust `notes_tree`; the posted bundle then replaces it. Saving the `.tsx` rebuilds and posts again. `POST /reload` still works by hand after `adb forward tcp:8474 tcp:8474`.
+
+Judge QuickJS cost on the `.so` / release size delta, not the raw debug APK (debug already includes a very large unstripped `.so`).
+
+`rquickjs-sys` 0.14 has no pregenerated Android bindings, so the Android `quickjs` build enables rquickjs `bindgen`. That needs a host `libclang` plus the NDK sysroot (otherwise `stdbool.h` is missing). `tekto dev --js --android` sets `LIBCLANG_PATH` to the NDK copy at `toolchains/llvm/prebuilt/<host>/musl/lib` and `BINDGEN_EXTRA_CLANG_ARGS_<triple>` to `--sysroot` + clang builtin includes, when those variables are unset.
+
 ## Lifecycle
 
-`android_main` in `examples/notes-android` calls `tekto::run_android`, which builds the winit event loop with `with_android_app`. The window/surface is created on `resumed` and dropped on `suspended`. The C symbols `tekto_on_resumed` / `tekto_on_suspended` stay for a later Java Activity if we ever need one. IME is later.
+`android_main` in `examples/notes-android` calls `tekto::run_android` (or `run_android_with_session` when the `quickjs` feature is on, so `POST /reload` has a hook). That builds the winit event loop with `with_android_app`. The window/surface is created on `resumed` and dropped on `suspended`. The C symbols `tekto_on_resumed` / `tekto_on_suspended` stay for a later Java Activity if we ever need one. IME is later.
 
 ## CI
 

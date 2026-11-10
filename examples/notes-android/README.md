@@ -46,6 +46,21 @@ adb emu kill   # stop only this emulator
 
 The dev server on the device listens on `127.0.0.1:8474`. After `adb forward`, host `tekto tree` / `tekto screenshot` / `tekto patch` work the same as on desktop.
 
+## JS hot reload (`tekto dev --js --android`)
+
+The default APK stays lean (no QuickJS) so nightly Android CI does not compile rquickjs for two ABIs. To reload TSX over `adb forward`, the CLI builds with `-F quickjs`:
+
+```bash
+# Optional: build only the connected device ABI (beddcode30 is x86_64)
+export TEKTO_ANDROID_TARGET=x86_64-linux-android
+# Host CLI does not need --features quickjs (esbuild + HTTP only)
+cargo run -p tekto-cli -- dev --js examples/notes/src/app.tsx --android
+```
+
+The first frame may still be the Rust Notes tree; `POST /reload` then swaps in the TSX bundle. Saving the `.tsx` rebuilds and posts again.
+
+Or by hand: `cargo apk2 build -p notes-android -F quickjs --target x86_64-linux-android`.
+
 CI runs `cargo check -p notes-android --target aarch64-linux-android` on `nightly` (and on a manual `workflow_dispatch` with `full=true`), not on every PR. It does not start an emulator or build an APK.
 
 See [the android-build-and-run skill](../../.agents/skills/android-build-and-run/SKILL.md) for the full command list and lifecycle notes.

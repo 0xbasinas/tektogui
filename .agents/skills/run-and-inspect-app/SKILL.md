@@ -68,7 +68,9 @@ The process prints `js bundle Nms` on the first load and `js reload Nms` after a
 
 `POST /reload` queues a JS bundle (raw IIFE, or JSON `{"js":"..."}`) for the app thread. If `--js` was not used, the server returns a clear error (`no JS runtime attached`).
 
-The Android APK does not embed QuickJS yet, so `dev --js --android` is rejected. When a later APK has a JS runtime, the cheap hook is:
+On Android, `tekto dev --js examples/notes/src/app.tsx --android` builds the APK with `-F quickjs`, installs it, `adb forward`s port 8474, and POSTs the bundle. The host CLI does not need `--features quickjs`. Set `TEKTO_ANDROID_TARGET=x86_64-linux-android` for AVD beddcode30 so only one ABI is compiled. See the android-build-and-run skill.
+
+You can also POST a bundle by hand after `adb forward`:
 
 ```bash
 adb forward tcp:8474 tcp:8474
