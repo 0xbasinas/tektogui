@@ -1845,6 +1845,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "notebook"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tekto",
+]
+
+[[package]]
 name = "notes"
 version = "0.1.0"
 dependencies = [

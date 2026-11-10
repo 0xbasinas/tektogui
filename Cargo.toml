@@ -15,6 +15,7 @@ members = [
     "crates/tekto-cli",
     "crates/tekto-wasm",
     "examples/notes",
+    "examples/notebook",
     "examples/notes-android",
     "examples/time-travel",
 ]
