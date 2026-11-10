@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tekto_tree::{NodeId, NodePatch, Tree};
+use tekto_tree::{NodeId, NodePatch, Store, Tree};
 
 mod writeback;
 pub use writeback::{
@@ -57,6 +57,17 @@ pub trait AppHandle: Send + Sync {
     }
     fn state_json(&self) -> Value {
         json!({})
+    }
+    /// Recorded store frames. Default is history off and an empty list.
+    fn states_json(&self) -> Value {
+        json!({ "enabled": false, "cursor": 0, "states": [] })
+    }
+    /// Jump the opted-in store to `index`. Default reports that history is off.
+    fn restore_state(&self, index: u64) -> Result<Value, McpError> {
+        let _ = index;
+        Err(McpError::msg(
+            "time travel is off — opt in with Store::recording and attach it to the dev handle",
+        ))
     }
     fn logs(&self) -> Vec<String> {
         Vec::new()
@@ -101,6 +112,8 @@ pub struct SharedTreeHandle {
     pub apply_js: Mutex<Option<ApplyJsFn>>,
     /// Result of the last source write-back attempted after a patch.
     pub last_writeback: Mutex<Option<writeback::WritebackReport>>,
+    /// Opt-in JSON store. `None` means the app is not recording history.
+    pub history: Mutex<Option<Arc<Mutex<Store<Value>>>>>,
 }
 
 impl SharedTreeHandle {
@@ -227,6 +240,31 @@ impl AppHandle for SharedTreeHandle {
             "focus": tree.focus.map(|id| id.raw()),
             "last_click": tree.last_click.map(|id| id.raw()),
         })
+    }
+
+    fn states_json(&self) -> Value {
+        states_value(&self.history)
+    }
+
+    fn restore_state(&self, index: u64) -> Result<Value, McpError> {
+        let slot = self
+            .history
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?;
+        let Some(store) = slot.as_ref() else {
+            return Err(McpError::msg(
+                "time travel is off — opt in with Store::recording and attach it to the dev handle",
+            ));
+        };
+        let mut store = store.lock().map_err(|e| McpError::msg(e.to_string()))?;
+        let value = store
+            .jump(index)
+            .map_err(|e| McpError::msg(e.to_string()))?
+            .clone();
+        drop(store);
+        drop(slot);
+        self.notify_change();
+        Ok(value)
     }
 
     fn logs(&self) -> Vec<String> {
@@ -400,6 +438,34 @@ fn handle_client(mut stream: TcpStream, handle: Arc<dyn AppHandle>) -> Result<()
     Ok(())
 }
 
+fn states_value(history: &Mutex<Option<Arc<Mutex<Store<Value>>>>>) -> Value {
+    let Ok(slot) = history.lock() else {
+        return json!({ "enabled": false, "cursor": 0, "states": [] });
+    };
+    let Some(store) = slot.as_ref() else {
+        return json!({ "enabled": false, "cursor": 0, "states": [] });
+    };
+    let Ok(store) = store.lock() else {
+        return json!({ "enabled": false, "cursor": 0, "states": [] });
+    };
+    let states: Vec<Value> = store
+        .list()
+        .into_iter()
+        .map(|info| {
+            json!({
+                "index": info.index,
+                "label": info.label,
+                "current": info.current,
+            })
+        })
+        .collect();
+    json!({
+        "enabled": store.is_recording(),
+        "cursor": store.cursor(),
+        "states": states,
+    })
+}
+
 fn error_response(e: McpError) -> (&'static str, &'static str, Vec<u8>) {
     let msg = e.to_string();
     let status = if msg.contains("unknown node") {
@@ -446,6 +512,21 @@ fn dispatch(
             ok_json(serde_json::to_value(dump)?)
         }
         ("GET", "/state") => ok_json(handle.state_json()),
+        ("GET", "/states") => ok_json(handle.states_json()),
+        ("POST", "/states/restore") => {
+            let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
+            let index = v
+                .get("index")
+                .and_then(|x| x.as_u64())
+                .ok_or_else(|| McpError::msg("missing index"))?;
+            let value = handle.restore_state(index)?;
+            ok_json(json!({
+                "ok": true,
+                "index": index,
+                "value": value,
+                "states": handle.states_json(),
+            }))
+        }
         ("GET", "/logs") => ok_json(json!({ "logs": handle.logs() })),
         ("GET", "/components") => ok_json(components_value()?),
         ("POST", "/patch") => {
@@ -656,6 +737,8 @@ fn tool_list() -> Value {
         {"name": "ui.type", "description": "Insert plain characters at the caret of a text field (by stable id) and focus it. Not an IME: no composition or candidate window. Backspace is a desktop key, not this tool.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
         {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, fontSize, padding, or gap. Returns the updated node and a writeback report. Applies immediately (no reload). Unique literals in the app project are written back to source; ambiguous edits stay in the runtime tree.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}, "padding": {"type": "number"}, "gap": {"type": "number"}}, "required": ["id"]}},
         {"name": "app.state", "description": "Read opted-in app state as JSON.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "app.states", "description": "List time-travel frames for an opted-in store. enabled is false when the app did not record history.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "app.restore", "description": "Jump an opted-in store to a recorded index from app.states. Returns the restored JSON value.", "inputSchema": {"type": "object", "properties": {"index": {"type": "number"}}, "required": ["index"]}},
         {"name": "app.logs", "description": "Read structured logs.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "app.components", "description": "JSON schema of JSX components: kinds, props, and events. Same file the JSX runtime mounts. Does not need a running app.", "inputSchema": {"type": "object", "properties": {}}}
     ])
@@ -708,6 +791,14 @@ fn call_tool(params: &Value) -> Result<Value, McpError> {
         }
         "app.state" => {
             let (_, body) = http_get(&format!("{base}/state"))?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
+        "app.states" => {
+            let (_, body) = http_get(&format!("{base}/states"))?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
+        "app.restore" => {
+            let (_, body) = http_post(&format!("{base}/states/restore"), &args)?;
             Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
         }
         "app.logs" => {
@@ -801,6 +892,7 @@ mod tests {
             pending_js: Mutex::new(None),
             apply_js: Mutex::new(None),
             last_writeback: Mutex::new(None),
+            history: Mutex::new(None),
         };
         handle.click(t).unwrap();
         let dump = handle.tree();
@@ -842,11 +934,63 @@ mod tests {
             pending_js: Mutex::new(None),
             apply_js: Mutex::new(None),
             last_writeback: Mutex::new(None),
+            history: Mutex::new(None),
         };
         let err = handle
             .enqueue_js("tekto.create('window')".into())
             .unwrap_err();
         assert!(err.to_string().contains("no JS runtime"), "{err}");
+    }
+
+    #[test]
+    fn states_restore_jumps_an_opted_in_store() {
+        let store = Arc::new(Mutex::new(Store::recording(json!({"n": 0}), 8)));
+        {
+            let mut g = store.lock().unwrap();
+            g.set(json!({"n": 1}), Some("one".into()));
+            g.set(json!({"n": 2}), None);
+            g.set(json!({"n": 3}), Some("three".into()));
+        }
+        let handle = SharedTreeHandle {
+            tree: Arc::new(Mutex::new(Tree::new())),
+            render: Arc::new(|_| Ok(Vec::new())),
+            logs: Arc::new(Mutex::new(Vec::new())),
+            on_change: Mutex::new(None),
+            pending_js: Mutex::new(None),
+            apply_js: Mutex::new(None),
+            last_writeback: Mutex::new(None),
+            history: Mutex::new(Some(store)),
+        };
+        let (_s, _c, body) = dispatch(&handle, "GET", "/states", "").unwrap();
+        let listed: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(listed["enabled"], true);
+        assert_eq!(listed["cursor"], 3);
+        assert_eq!(listed["states"].as_array().unwrap().len(), 4);
+
+        let (_s, _c, body) =
+            dispatch(&handle, "POST", "/states/restore", r#"{"index":1}"#).unwrap();
+        let restored: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(restored["value"]["n"], 1);
+        assert_eq!(restored["states"]["cursor"], 1);
+
+        let (_s, _c, body) =
+            dispatch(&handle, "POST", "/states/restore", r#"{"index":3}"#).unwrap();
+        let restored: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(restored["value"]["n"], 3);
+
+        let off = SharedTreeHandle {
+            tree: Arc::new(Mutex::new(Tree::new())),
+            render: Arc::new(|_| Ok(Vec::new())),
+            logs: Arc::new(Mutex::new(Vec::new())),
+            on_change: Mutex::new(None),
+            pending_js: Mutex::new(None),
+            apply_js: Mutex::new(None),
+            last_writeback: Mutex::new(None),
+            history: Mutex::new(None),
+        };
+        let listed = off.states_json();
+        assert_eq!(listed["enabled"], false);
+        assert!(off.restore_state(0).is_err());
     }
 
     #[test]
@@ -919,6 +1063,7 @@ mod tests {
                 pending_js: Mutex::new(None),
                 apply_js: Mutex::new(None),
                 last_writeback: Mutex::new(None),
+                history: Mutex::new(None),
             },
             "GET",
             "/components",

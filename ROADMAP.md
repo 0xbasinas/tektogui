@@ -67,7 +67,7 @@ Still in Month 1:
 
 ## Month 6 — a real side app
 
-- Time-travel for opted-in stores
+- Time-travel for opted-in stores (landed: `Store::recording`, `examples/time-travel`, MCP `app.states` / `app.restore`. Off unless the app opts in)
 - `app.components` schemas for agents (shipped: `components.json` + MCP tool)
 - iOS hello (needs a Mac)
 - One real example app people can use
