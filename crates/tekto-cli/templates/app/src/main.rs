@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use tekto::{
     banner, render_headless_to_file, run, text, title_on_banner, window, Color, Tree, WindowOptions,
-    BODY_SIZE, PAGE_PADDING,
+    BODY_SIZE,
 };
 
 fn app_tree() -> Result<Tree, Box<dyn std::error::Error>> {
@@ -11,9 +11,9 @@ fn app_tree() -> Result<Tree, Box<dyn std::error::Error>> {
     let width = 640.0;
     let height = 400.0;
     let root = window(&mut tree, "{{title}}", width, height)?;
-    let banner_w = (width - PAGE_PADDING * 2.0).max(80.0);
-    let b = banner(&mut tree, root, banner_w, 64.0)?;
-    title_on_banner(&mut tree, b, "{{title}}", banner_w)?;
+    // Leave banner width unset so it stretches with the window.
+    let b = banner(&mut tree, root, f32::NAN, 64.0)?;
+    title_on_banner(&mut tree, b, "{{title}}", f32::NAN)?;
     text(
         &mut tree,
         root,

@@ -292,4 +292,48 @@ mod tests {
         assert_eq!(b.width, 400.0);
         assert_eq!(b.height, 250.0);
     }
+
+    #[test]
+    fn auto_width_child_shrinks_with_the_viewport() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        tree.get_mut(root).unwrap().layout = LayoutStyle {
+            width: 640.0,
+            height: 400.0,
+            padding: 24.0,
+            gap: 0.0,
+            column: true,
+            justify_center: false,
+        };
+        let child = tree.add(NodeKind::Rect, Some(root)).unwrap();
+        tree.get_mut(child).unwrap().layout = LayoutStyle {
+            width: f32::NAN,
+            height: 64.0,
+            ..LayoutStyle::default()
+        };
+        layout_tree(&mut tree, 640.0, 400.0);
+        let wide = tree.get(child).unwrap().bounds;
+        assert!(
+            (wide.width - 592.0).abs() < 0.5,
+            "wide width was {}",
+            wide.width
+        );
+
+        layout_tree(&mut tree, 393.0, 807.0);
+        let root_b = tree.get(root).unwrap().bounds;
+        let narrow = tree.get(child).unwrap().bounds;
+        assert_eq!(root_b.width, 393.0);
+        assert!(
+            narrow.x + narrow.width <= root_b.width + 0.5,
+            "child overflowed: x={} w={} parent={}",
+            narrow.x,
+            narrow.width,
+            root_b.width
+        );
+        assert!(
+            (narrow.width - 345.0).abs() < 0.5,
+            "expected 393-48=345, got {}",
+            narrow.width
+        );
+    }
 }
