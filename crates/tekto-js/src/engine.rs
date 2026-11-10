@@ -6,7 +6,7 @@ use rquickjs::{
 };
 use std::cell::RefCell;
 
-use crate::{Host, HostOp, JsError};
+use crate::{apply_native_host_op, Host, HostOp, JsError, NativeOp};
 
 thread_local! {
     static HOST: RefCell<Option<*mut (dyn Host + 'static)>> = const { RefCell::new(None) };
@@ -58,6 +58,7 @@ pub fn eval_script(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
             tekto.set("append", Func::from(js_append))?;
             tekto.set("remove", Func::from(js_remove))?;
             tekto.set("transition", Func::from(js_transition))?;
+            tekto.set("applyNativeOp", Func::from(js_apply_native_op))?;
             ctx.globals().set("tekto", tekto)?;
             ctx.eval::<(), _>(source)?;
             Ok(())
@@ -257,6 +258,32 @@ fn value_to_string<'js>(ctx: &Ctx<'js>, value: &Value<'js>) -> rquickjs::Result<
         ctx,
         JsError::Message("transition value must be a number".into()),
     )
+}
+
+/// `tekto.applyNativeOp(json)` runs one [`NativeOp`].
+///
+/// `json` is the same tagged object Rust uses (`{"op":"shortcutsRegister",...}`).
+/// A string result is returned as a string. No result is JavaScript `null`.
+/// Errors throw. Headless shortcut register throws `not available`.
+/// A build without the feature throws `not implemented`.
+fn js_apply_native_op<'js>(ctx: Ctx<'js>, spec: String) -> rquickjs::Result<Value<'js>> {
+    let op = match serde_json::from_str::<NativeOp>(&spec) {
+        Ok(op) => op,
+        Err(err) => {
+            return throw(&ctx, JsError::Message(format!("native op JSON: {err}")));
+        }
+    };
+    match apply_native_host_op(&op) {
+        Ok(None) => Ok(Value::new_null(ctx)),
+        Ok(Some(text)) => {
+            let js = match rquickjs::String::from_str(ctx.clone(), &text) {
+                Ok(js) => js,
+                Err(err) => return throw(&ctx, JsError::Message(err.to_string())),
+            };
+            Ok(Value::from_string(js))
+        }
+        Err(err) => throw(&ctx, err),
+    }
 }
 
 fn js_remove(ctx: Ctx<'_>, id: u64) -> rquickjs::Result<()> {

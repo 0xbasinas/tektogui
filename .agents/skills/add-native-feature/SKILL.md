@@ -5,15 +5,15 @@ description: Implement a tekto-native plugin (files, open/save dialogs, clipboar
 
 # Add a native feature
 
-`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs are still `NativeError::Unsupported` (issue #45). The Linux system tray is the `tray` feature in `src/linux_tray.rs` (no extra crate). Windows tray stays `Unsupported` (issue #47). Other platforms and global shortcuts return `NativeError::Unsupported { capability, platform }`. Without the `tray` feature, tray methods also return `Unsupported`.
+`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs are still `NativeError::Unsupported` (issue #45). The Linux system tray is the `tray` feature in `src/linux_tray.rs` (no extra crate). Windows tray stays `Unsupported` (issue #47). Linux global shortcuts are the `shortcuts` feature in `src/linux_shortcuts.rs` (`x11rb` 0.13.2, MIT OR Apache-2.0). Windows shortcuts stay `Unsupported` (issue #49). Other platforms return `NativeError::Unsupported { capability, platform }`. Without `tray` or `shortcuts`, those methods also return `Unsupported`.
 
 Windows code is compile-checked on Linux with `cargo check --target x86_64-pc-windows-gnu -p tekto-native` (no linker, no Windows runtime). Clipboard, files, and notifications still need a Windows machine. Do not treat that check as a runtime test. A toast was not shown on the Linux host that added this path.
 
 On Windows, `arboard` links `clipboard-win` 5.4.3 and `error-code` 3.4.0, both Boost Software License 1.0. That is outside the MIT / Apache-2.0 / BSD / zlib set used for crates this repo adds directly. `windows-sys` and `windows-link` (pulled by `clipboard-win`) are MIT OR Apache-2.0. The file sandbox does not add a crate.
 
-A present platform implementation that cannot reach the OS service (headless Linux, no `DISPLAY` and no `WAYLAND_DISPLAY`, no session bus / notification daemon, or no status notifier watcher) returns `NativeError::Unavailable { capability, platform, reason }`, not `Unsupported`. Do not open displays `:1` or `:2`. Opt-in live checks are `TEKTO_CLIPBOARD_LIVE=1`, `TEKTO_NOTIFY_LIVE=1`, and `TEKTO_TRAY_LIVE=1`.
+A present platform implementation that cannot reach the OS service (headless Linux, no `DISPLAY` and no `WAYLAND_DISPLAY`, no session bus / notification daemon, no status notifier watcher, or an X11 grab the server refuses) returns `NativeError::Unavailable { capability, platform, reason }`, not `Unsupported`. Do not open displays `:1` or `:2`. Opt-in live checks are `TEKTO_CLIPBOARD_LIVE=1`, `TEKTO_NOTIFY_LIVE=1`, `TEKTO_TRAY_LIVE=1`, and `TEKTO_SHORTCUTS_LIVE=1`.
 
-JS calls clipboard and files through `NativeOp` and `apply_native_op`. `tekto-js::apply_native_host_op` wraps that in `JsError`. It is not a scene-tree `HostOp` (get returns text, not a node id). There is still no QuickJS binding for it; do not enable the `quickjs` feature by default.
+JS calls clipboard, files, notifications, tray, and shortcuts through `NativeOp` and `apply_native_op`. `tekto-js::apply_native_host_op` wraps that in `JsError`. It is not a scene-tree `HostOp` (get returns text, not a node id). With `--features quickjs`, a script calls `tekto.applyNativeOp(json)` where `json` is one `NativeOp` object. `@tektogui/core` `nativeOpJson(op)` builds that string. Do not enable the `quickjs` feature by default. A headless or unsupported call throws (`not available` or `not implemented`) and does not panic.
 
 `NativeOp` is internally tagged (`#[serde(tag = "op", rename_all = "camelCase")]`). Clipboard ops:
 
@@ -42,6 +42,31 @@ Tray ops (Linux, and only when the `tray` feature is on; otherwise `Unsupported`
 - `{"op":"trayHide"}` — returns `None`
 - `{"op":"traySetLabel","label":"Notes"}` — returns `None`
 - `{"op":"trayTakeClick"}` — `Some(id)` for the oldest menu click, or `None` when the queue is empty
+
+Shortcut ops (Linux, and only when the `shortcuts` feature is on; otherwise `Unsupported` for `shortcuts.register`, `shortcuts.unregister`, `shortcuts.take_activation`, and `shortcuts.on_activation`. Windows is issue #49):
+
+- `{"op":"shortcutsRegister","accelerator":"Ctrl+K","id":"search"}` — returns `None`
+- `{"op":"shortcutsUnregister","id":"search"}` — returns `None`. A missing id is success.
+- `{"op":"shortcutsTakeActivation"}` — `Some(id)` for the oldest chord, or `None` when the queue is empty
+
+`set_on_activation` is Rust-only (same idea as `set_on_click`). TypeScript polls with `tekto.applyNativeOp(nativeOpJson({ op: "shortcutsTakeActivation" }))`. Register and unregister use `shortcutsRegister` and `shortcutsUnregister` the same way.
+
+## Linux global shortcuts
+
+`GlobalShortcuts` on Linux is feature `shortcuts` (`tekto` and `tekto-js` forward it to `tekto-native`). Default builds leave it out. The implementation is `src/linux_shortcuts.rs`. It uses `x11rb` 0.13.2 (MIT OR Apache-2.0, default features off, no libxcb and no GTK).
+
+`register(accelerator, id)` grabs the chord on the X11 root window (`XGrabKey`, async). Also grabs the CapsLock and NumLock variants. `unregister(id)` releases that grab. A press queues `id` for `take_activation` and calls `set_on_activation` (`Option<fn(&str)>`) on the shortcut thread. The hook must return quickly. It must not call `register` or `unregister` (those wait on the same thread).
+
+Accelerators look like `Ctrl+K`, `Alt+F4`, or `Ctrl+Shift+Space`. Modifiers are `Ctrl` / `Control`, `Shift`, `Alt` / `Mod1`, and `Super` / `Meta` / `Mod4`. The key is a letter, a digit, F1–F24, or Space, Tab, Enter, Escape, or an arrow. Alt is X11 Mod1 and Super is Mod4.
+
+Permission and compositor limits:
+
+- No `DISPLAY` and no `WAYLAND_DISPLAY`: `NativeError::Unavailable`, reason `no X11 display`. The call does not open a display. Headless tests clear both variables (`TEKTO_SHORTCUTS_HEADLESS_CHILD=1`).
+- Wayland with no `DISPLAY`: there is no client key grab. The freedesktop GlobalShortcuts portal would show a permission dialog and let the compositor bind the chord. This feature does not open that portal. Reason: `Wayland compositor does not allow an X11 key grab; the global shortcuts portal is not used`.
+- X11, including XWayland: if the display name is set but the server refuses the connection, the reason is `X11 display refused the connection`. If the server is up but refuses the grab (`BadAccess`, another client, or a compositor that blocks global grabs), the reason is `X11 key grab was denied`.
+- Displays `:1` and `:2` are reserved. The client refuses them with `refusing reserved display :1 or :2` and does not connect. Do not point tests at those displays.
+
+`TEKTO_SHORTCUTS_LIVE=1` grabs `Ctrl+Shift+F24` and releases it. Do not set it when `DISPLAY` is `:1` or `:2`. Run the feature tests with `cargo test -p tekto-native --features shortcuts` and `cargo test -p tekto-js --features shortcuts`. Do not add `shortcuts` to default PR CI.
 
 ## Linux tray
 

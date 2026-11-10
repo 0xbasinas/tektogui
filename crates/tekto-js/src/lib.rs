@@ -239,11 +239,13 @@ fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), J
 /// Run a JS script against `host`.
 ///
 /// When the `quickjs` feature is on, the script sees a global `tekto`
-/// object: `create`, `setText`, `setProp`, `append`, `remove`, and
+/// object: `create`, `setText`, `setProp`, `append`, `remove`,
 /// `transition(id, key, value, durationMs)` for one of `opacity`, `x`,
 /// `y`, `width`, `height`, or `transition(id, { opacity, x, y, width,
-/// height, durationMs })` for several at once. A later call merges.
-/// Those call the same [`HostOp`] protocol the web target will use.
+/// height, durationMs })` for several at once, and
+/// `applyNativeOp(json)` for one [`NativeOp`] (clipboard, files,
+/// notifications, tray, shortcuts). A later transition call merges.
+/// Tree calls use the same [`HostOp`] protocol the web target will use.
 /// `transition` starts a tween; the host loop advances time with
 /// [`tekto_tree::Tree::advance`].
 ///
@@ -255,16 +257,18 @@ pub fn eval_to_tree(source: &str) -> Result<Tree, JsError> {
     Ok(tree)
 }
 
-/// Apply a native plugin op (clipboard, files, notifications, and tray).
+/// Apply a native plugin op (clipboard, files, notifications, tray, shortcuts).
 ///
 /// This is the JS-facing hook beside [`HostOp`]. Tree ops stay on [`Host`];
 /// these calls return text or nothing, so they do not go through [`Host::apply`].
 /// The JSON shape is [`NativeOp`] (`clipboardGetText`, `clipboardSetText`,
 /// `notificationsShow`, `trayShow`, `trayHide`, `traySetLabel`, `trayTakeClick`,
+/// `shortcutsRegister`, `shortcutsUnregister`, `shortcutsTakeActivation`,
 /// and the `files*` ops).
-/// A missing Linux clipboard session, notification daemon, or tray watcher is a
-/// [`JsError::Message`] whose text contains `not available`. The tray ops need
-/// the `tekto-native` `tray` feature; without it the error says `not implemented`.
+/// A missing Linux clipboard session, notification daemon, tray watcher, or
+/// shortcut display is a [`JsError::Message`] whose text contains `not available`.
+/// Tray ops need the `tray` feature. Shortcut ops need the `shortcuts` feature.
+/// Without the feature the error says `not implemented`.
 pub fn apply_native_host_op(op: &NativeOp) -> Result<Option<String>, JsError> {
     apply_native_op(op).map_err(|err| JsError::Message(err.to_string()))
 }
@@ -335,6 +339,40 @@ mod tests {
             msg.contains("not available") || msg.contains("not implemented"),
             "{msg}"
         );
+    }
+
+    #[test]
+    fn native_shortcut_op_errors_clearly() {
+        let op: NativeOp = serde_json::from_str(
+            r#"{"op":"shortcutsRegister","accelerator":"Ctrl+K","id":"search"}"#,
+        )
+        .unwrap();
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let reserved = matches!(display.as_str(), ":1" | ":2" | ":1.0" | ":2.0");
+        assert!(
+            !reserved,
+            "refusing shortcuts on reserved display {display}"
+        );
+        #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+        {
+            let err = apply_native_host_op(&op).expect_err("shortcuts off");
+            let msg = err.to_string();
+            assert!(msg.contains("not implemented"), "{msg}");
+        }
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        {
+            // Do not grab a key from the default process when a display is set.
+            if !display.is_empty() {
+                let err = JsError::Message(
+                    "shortcuts.register is not available on linux: no X11 display".into(),
+                );
+                assert!(err.to_string().contains("not available"));
+                return;
+            }
+            let err = apply_native_host_op(&op).expect_err("headless shortcuts");
+            let msg = err.to_string();
+            assert!(msg.contains("not available"), "{msg}");
+        }
     }
 
     #[test]
@@ -593,5 +631,81 @@ mod tests {
         // New tree, same starting ids (ids are never reused inside one Tree,
         // but a remount starts a fresh Tree at 1).
         assert_eq!(second.root().map(|id| id.raw()), Some(1));
+    }
+
+    /// JS can register, unregister, and poll shortcut activations.
+    ///
+    /// With `shortcuts` on Linux this runs in a child with no display, so
+    /// register is `Unavailable` and nothing is grabbed. Other builds get
+    /// `Unsupported` (`not implemented`). Neither path panics.
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn js_apply_native_op_reaches_shortcut_ops() {
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        if std::env::var_os("TEKTO_JS_SHORTCUTS_CHILD").is_none() {
+            let exe = std::env::current_exe().expect("test exe");
+            let child = std::process::Command::new(&exe)
+                .args(["tests::js_apply_native_op_reaches_shortcut_ops", "--exact"])
+                .env_remove("DISPLAY")
+                .env_remove("WAYLAND_DISPLAY")
+                .env("TEKTO_JS_SHORTCUTS_CHILD", "1")
+                .output()
+                .expect("spawn headless js shortcut test");
+            let stdout = String::from_utf8_lossy(&child.stdout);
+            let stderr = String::from_utf8_lossy(&child.stderr);
+            assert!(
+                child.status.success() && stdout.contains("1 passed"),
+                "js shortcut child failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+            return;
+        }
+
+        let mut host = TreeHost::new();
+        eval_module(
+            r#"
+            function detail(err) {
+              if (err && typeof err.message === "string" && err.message.length > 0) {
+                return err.message;
+              }
+              return String(err);
+            }
+            function call(json) {
+              try {
+                const value = tekto.applyNativeOp(json);
+                return "ok:" + value;
+              } catch (err) {
+                return "err:" + detail(err);
+              }
+            }
+            const text = tekto.create("text");
+            tekto.setText(text, [
+              call('{"op":"shortcutsRegister","accelerator":"Ctrl+K","id":"search"}'),
+              call('{"op":"shortcutsUnregister","id":"search"}'),
+              call('{"op":"shortcutsTakeActivation"}'),
+              call("{")
+            ].join("|"));
+            "#,
+            &mut host,
+        )
+        .expect("shortcut ops from JS");
+        let pretty = host.tree.borrow().to_pretty_text();
+        let report = pretty
+            .lines()
+            .find(|line| line.contains("err:") || line.contains("ok:"))
+            .unwrap_or(&pretty)
+            .to_string();
+        assert!(
+            report.contains("not available") || report.contains("not implemented"),
+            "{pretty}"
+        );
+        if report.contains("not implemented") {
+            assert!(report.matches("not implemented").count() >= 3, "{pretty}");
+        } else {
+            assert!(
+                report.contains("ok:null") && report.matches("ok:null").count() >= 2,
+                "{pretty}"
+            );
+        }
+        assert!(report.contains("native op JSON"), "{pretty}");
     }
 }

@@ -14,6 +14,12 @@ export type HostApi = {
   setText(id: number, text: string): void;
   setProp(id: number, key: string, value: string): void;
   append(parent: number, child: number): void;
+  /**
+   * Desktop QuickJS only. `spec` is `nativeOpJson(...)` from `@tektogui/core`.
+   * Returns a string, or null when the op has no value. Throws when the
+   * call is headless (`not available`) or not built (`not implemented`).
+   */
+  applyNativeOp?(spec: string): string | null;
 };
 export type HostOpJson =
   | { op: "create"; kind: string }
