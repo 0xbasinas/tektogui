@@ -5,7 +5,7 @@ description: Implement a tekto-native plugin (files, open/save dialogs, clipboar
 
 # Add a native feature
 
-`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs use `GetOpenFileNameW` and `GetSaveFileNameW` in `src/windows_dialog.rs` (no extra crate). The Linux system tray is the `tray` feature in `src/linux_tray.rs` (no extra crate). Windows tray stays `Unsupported` (issue #47). Linux global shortcuts are the `shortcuts` feature in `src/linux_shortcuts.rs` (`x11rb` 0.13.2, MIT OR Apache-2.0). Windows shortcuts stay `Unsupported` (issue #49). Other platforms return `NativeError::Unsupported { capability, platform }`. Without `tray` or `shortcuts`, those methods also return `Unsupported`.
+`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs use `GetOpenFileNameW` and `GetSaveFileNameW` in `src/windows_dialog.rs` (no extra crate). The system tray is the `tray` feature: `src/linux_tray.rs` on Linux and `src/windows_tray.rs` on Windows (no extra crate). Linux global shortcuts are the `shortcuts` feature in `src/linux_shortcuts.rs` (`x11rb` 0.13.2, MIT OR Apache-2.0). Windows shortcuts stay `Unsupported` (issue #49). Other platforms return `NativeError::Unsupported { capability, platform }`. Without `tray` or `shortcuts`, those methods also return `Unsupported`.
 
 Windows code is compile-checked on Linux with `cargo check --target x86_64-pc-windows-gnu -p tekto-native` (no linker, no Windows runtime). Clipboard, files, notifications, and file dialogs still need a Windows machine. Do not treat that check as a runtime test. A toast was not shown on the Linux host that added the notification path, and a file dialog was not opened on the host that added the dialog path.
 
@@ -36,7 +36,7 @@ Notification op (Linux and Windows; other platforms return `Unsupported` for `no
 
 - `{"op":"notificationsShow","title":"...","body":"..."}` — returns `None`. Title and body are plain text.
 
-Tray ops (Linux, and only when the `tray` feature is on; otherwise `Unsupported` for `tray.show`, `tray.hide`, `tray.set_label`, `tray.take_click`, and `tray.on_click`. Windows is issue #47):
+Tray ops (Linux and Windows, and only when the `tray` feature is on; otherwise `Unsupported` for `tray.show`, `tray.hide`, `tray.set_label`, `tray.take_click`, and `tray.on_click`):
 
 - `{"op":"trayShow","label":"Tekto","menu":[{"id":"quit","label":"Quit"}]}` — returns `None`
 - `{"op":"trayHide"}` — returns `None`
@@ -75,6 +75,21 @@ Permission and compositor limits:
 `show_icon(label, menu)` registers with `org.kde.StatusNotifierWatcher`. `hide_icon` drops that connection. `set_label` stores the tooltip and, when the icon is visible, emits `NewTitle`. Menu rows are `TrayMenuItem { id, label }` (at most 16, unique non-empty ids, no NUL). A click queues `id` for `take_click` and calls the `set_on_click` hook (`Option<fn(&str)>`) on the tray thread. The hook must return quickly. It may call `hide_icon`. It must not block on tray work from that same thread.
 
 No session bus, a refused connection, or a missing watcher is `NativeError::Unavailable` with reason `no session bus or status notifier watcher`. The call does not open `DISPLAY`. Headless tests clear `DBUS_SESSION_BUS_ADDRESS` and point `XDG_RUNTIME_DIR` at an empty directory (`TEKTO_TRAY_HEADLESS_CHILD=1`). `TEKTO_TRAY_LIVE=1` registers a real icon and hides it again. Do not set it when `DISPLAY` is `:1` or `:2`. Run the feature tests with `cargo test -p tekto-native --features tray`. Do not add `tray` to default PR CI.
+
+## Windows tray
+
+`SystemTray` on Windows is the same `tray` feature and the same methods (`show_icon`, `hide_icon`, `set_label`, `take_click`, `set_on_click`). The implementation is `src/windows_tray.rs`. No extra crate. It uses `Shell_NotifyIconW` (`shell32`) on a hidden zero-size `WS_POPUP` window. `NIM_ADD` shows the icon (`NIF_MESSAGE | NIF_ICON | NIF_TIP`, `IDI_APPLICATION`). `NIM_MODIFY` updates the tooltip. `NIM_DELETE` removes the icon. A left click, right click, or double click calls `TrackPopupMenu` (`user32`) with the menu rows. The chosen row is queued for `take_click` and passed to `set_on_click` on the tray thread. The hook must return quickly. It may call `hide_icon`. It must not block on tray work from that same thread.
+
+Menu rules match Linux: at most 16 rows, unique non-empty ids, no NUL. The tooltip must also fit in 127 UTF-16 units (`szTip` is 128 units including NUL). A longer label or a bad menu is `NativeError::Message`. If the window cannot be created, or `Shell_NotifyIconW` rejects the icon, the error is `NativeError::Unavailable` with reason `Windows shell notification area is unavailable`. Headless and non-Windows builds do not call this API. Without the feature the calls return `Unsupported`.
+
+There is no Windows runtime test. Compile-check only:
+
+```bash
+cargo check -p tekto-native --target x86_64-pc-windows-gnu --features tray
+cargo check -p tekto --target x86_64-pc-windows-gnu --features tray
+```
+
+Those commands do not link or run on Windows. Icon lifetime, the popup menu, and a session with no notification area still need a Windows machine. Issue #47 stays open until that runtime check exists.
 
 ## Linux notifications
 
