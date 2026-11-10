@@ -1,0 +1,28 @@
+[package]
+name = "tekto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Tekto app API: build a tree, run it windowed or headless, talk to agents"
+publish = false
+
+[features]
+default = ["cpu", "desktop"]
+cpu = ["tekto-render/cpu", "tekto-platform/cpu"]
+desktop = ["tekto-platform/desktop", "cpu"]
+gpu = ["tekto-render/gpu"]
+js = ["dep:tekto-js"]
+
+[dependencies]
+tekto-tree = { workspace = true }
+tekto-layout = { workspace = true }
+tekto-text = { workspace = true }
+tekto-render = { workspace = true }
+tekto-platform = { workspace = true }
+tekto-a11y = { workspace = true }
+tekto-mcp = { workspace = true }
+tekto-native = { workspace = true }
+tekto-widgets = { workspace = true }
+tekto-js = { workspace = true, optional = true }

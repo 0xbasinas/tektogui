@@ -1,0 +1,12 @@
+{
+  "name": "tektogui",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "node --test packages/core/test.js packages/jsx-runtime/test.js"
+  }
+}

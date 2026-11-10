@@ -1,0 +1,13 @@
+[package]
+name = "tekto-a11y"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "AccessKit tree built from the Tekto scene tree (also the agent UI tree)"
+publish = false
+
+[dependencies]
+tekto-tree = { workspace = true }
+accesskit = { workspace = true }

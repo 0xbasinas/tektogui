@@ -1,0 +1,18 @@
+[package]
+name = "tekto-js"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "TypeScript runtime bindings. On desktop this will embed QuickJS-ng; on the web, apps use the browser JS engine."
+publish = false
+
+[features]
+default = []
+# QuickJS-ng (rquickjs) is optional and off by default: it is slow to compile.
+quickjs = []
+
+[dependencies]
+tekto-tree = { workspace = true }
+thiserror = { workspace = true }
