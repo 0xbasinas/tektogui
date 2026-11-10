@@ -57,6 +57,10 @@ The dev server on the device listens on `127.0.0.1:8474`. After `adb forward`, h
 
 `tekto::native().show(title, body)` (and `NativeOp` `notificationsShow`) posts a status-bar notification on Android. The manifest above declares `android.permission.POST_NOTIFICATIONS`. This APK's `target_sdk_version` is 30, so that permission is granted at install. An app that raises the target to 33 or higher must still declare it. The plugin then asks the user at runtime and returns `NativeError::Unavailable` (`POST_NOTIFICATIONS was denied`) until they allow it. Turning notifications off for the app is the same error kind, with reason `notifications are disabled for this app`. Blocking the `tekto` channel (API 26+, importance none) uses reason `the tekto notification channel is blocked`. A live post was not run here. It needs a device or an emulator.
 
+## Clipboard
+
+`tekto::native().get_text()` / `set_text()` (and `NativeOp` `clipboardGetText` / `clipboardSetText`) use Android `ClipboardManager`. No extra permission. On API 29 and later a read only works while the activity has window focus. A background read returns `NativeError::Unavailable` with reason `the app is in the background`. This app is not the default IME, so the IME exception does not apply. `set_text` still works in the background. A NUL in the text is `NativeError::Message`. A missing activity context uses reason `Android activity context is not ready`. An empty or non-text clip reads as `""`. Android 12 and later may show a system toast when the app reads or copies. That toast is not an error. A live clipboard check was not run here.
+
 ## JS hot reload (`tekto dev --js --android`)
 
 The default APK stays lean (no QuickJS) so nightly Android CI does not compile rquickjs for two ABIs. To reload TSX over `adb forward`, the CLI builds with `-F quickjs`:

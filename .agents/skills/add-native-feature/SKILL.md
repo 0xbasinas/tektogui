@@ -5,7 +5,7 @@ description: Implement a tekto-native plugin (files, open/save dialogs, clipboar
 
 # Add a native feature
 
-`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Android notifications use `NotificationManager` in `src/android_notify.rs` (`jni` and `ndk-context`, both MIT OR Apache-2.0, Android-only). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs use `GetOpenFileNameW` and `GetSaveFileNameW` in `src/windows_dialog.rs` (no extra crate). The system tray is the `tray` feature: `src/linux_tray.rs` on Linux and `src/windows_tray.rs` on Windows (no extra crate). Global shortcuts are the `shortcuts` feature: `src/linux_shortcuts.rs` (`x11rb` 0.13.2, MIT OR Apache-2.0) and `src/windows_shortcuts.rs` (`RegisterHotKey`, no extra crate). A live Windows hotkey check is still issue #49. Other platforms return `NativeError::Unsupported { capability, platform }`. Without `tray` or `shortcuts`, those methods also return `Unsupported`.
+`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Android notifications use `NotificationManager` in `src/android_notify.rs` (`jni` and `ndk-context`, both MIT OR Apache-2.0, Android-only). Android text clipboard uses `ClipboardManager` in `src/android_clipboard.rs` (same two crates, no new dependency). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs use `GetOpenFileNameW` and `GetSaveFileNameW` in `src/windows_dialog.rs` (no extra crate). The system tray is the `tray` feature: `src/linux_tray.rs` on Linux and `src/windows_tray.rs` on Windows (no extra crate). Global shortcuts are the `shortcuts` feature: `src/linux_shortcuts.rs` (`x11rb` 0.13.2, MIT OR Apache-2.0) and `src/windows_shortcuts.rs` (`RegisterHotKey`, no extra crate). A live Windows hotkey check is still issue #49. Other platforms return `NativeError::Unsupported { capability, platform }`. Without `tray` or `shortcuts`, those methods also return `Unsupported`.
 
 Windows code is compile-checked on Linux with `cargo check --target x86_64-pc-windows-gnu -p tekto-native` (no linker, no Windows runtime). Clipboard, files, notifications, and file dialogs still need a Windows machine. Do not treat that check as a runtime test. A toast was not shown on the Linux host that added the notification path, and a file dialog was not opened on the host that added the dialog path.
 
@@ -155,6 +155,24 @@ cargo check -p tekto-native --target aarch64-linux-android
 ```
 
 That does not install an APK and does not post a notification. A live notice still needs a device or an emulator. Do not start an emulator for this check.
+
+## Android clipboard
+
+`Clipboard::get_text` and `set_text` on Android use `ClipboardManager` (`src/android_clipboard.rs`). The `NativeOp` names stay `clipboardGetText` and `clipboardSetText`. No new crate. The same Android-only `jni` 0.22.4 and `ndk-context` 0.1.1 dependencies as notifications apply (MIT OR Apache-2.0). `jni` keeps default features off.
+
+The context is the `ndk-context` handle. If it is missing, both calls return `NativeError::Unavailable` with reason `Android activity context is not ready`. A null `getSystemService("clipboard")` uses reason `Android clipboard service is unavailable` (`clipboard.get` or `clipboard.set`). A `SecurityException` uses reason `clipboard access was denied`. Other JNI failures are `NativeError::Message`. None of these panic.
+
+On API 29+ the OS only returns clipboard text to the focused app or the default IME. This plugin is not an IME. It reads `Activity.hasWindowFocus`. If that is false, `get_text` returns `Unavailable` with reason `the app is in the background` and does not call `getPrimaryClip` (so Android 12 does not toast a background paste). Below API 29 a background read is allowed. A context that is not an `Activity` counts as unfocused. `set_text` calls `ClipData.newPlainText` and `setPrimaryClip` and does not need focus. Android 12+ may toast when the app copies or reads. That toast is not an error.
+
+A NUL in `set_text` is `NativeError::Message` (`clipboard.set: text must not contain NUL`). X11 and Windows clipboard owners stop at the first NUL, so the Android path rejects it instead of writing a truncated string. An empty string is a valid write. `get_text` returns `""` when there is no clip, when `coerceToText` is null, or when the clip is not text.
+
+Host tests use an in-memory clipboard for the success path, plus `allow_read`, `require_context`, and `require_service`. Compile-check:
+
+```bash
+cargo check -p tekto-native --target aarch64-linux-android
+```
+
+That does not install an APK and does not touch the device clipboard. A live round trip still needs a device or an emulator. Do not start an emulator for this check.
 
 ## Linux file sandbox
 
