@@ -2,8 +2,8 @@
 //!
 //! The browser JavaScript engine sends the same [`tekto_js::HostOp`] JSON
 //! that desktop QuickJS uses, then asks for a CPU-renderer PNG. This crate
-//! does not link QuickJS, wgpu, or any HTML/CSS/DOM type. A canvas blit of
-//! those PNG bytes is a later issue.
+//! does not link QuickJS, wgpu, or any HTML/CSS/DOM type. The host page
+//! blits those PNG bytes with `@tektogui/wasm/canvas` (`paintCanvas`).
 //!
 //! On `wasm32-unknown-unknown` the cdylib exports a tiny C ABI
 //! (`tekto_alloc`, `tekto_apply_ops`, `tekto_render_png`, `tekto_reset`,
