@@ -48,6 +48,21 @@ skrifa = "0.44"
 winit = "0.30.13"
 softbuffer = "0.4"
 accesskit = "0.21"
+# Optional GPU path (`tekto` feature `gpu`). Not in the default graph.
+# vello 0.10 (Apache-2.0 OR MIT). wgpu is pinned here so we can leave
+# dx12 off: wgpu-hal 29 does not compile its DX12 backend against the
+# `windows` crate versions cargo selects for `x86_64-pc-windows-gnu`.
+vello = { version = "0.10.0", default-features = false, features = ["wgpu"] }
+wgpu = { version = "29.0.4", default-features = false, features = [
+    "std",
+    "parking_lot",
+    "wgsl",
+    "vulkan",
+    "gles",
+    "metal",
+] }
+pollster = "0.4"
+png = "0.18"
 accesskit_winit = { version = "0.29.2", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 

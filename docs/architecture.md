@@ -44,8 +44,8 @@ A `NodePatch` can change text, name, fill, or color at runtime. That is the live
 
 `tekto-render` is a trait:
 
-- `CpuRenderer` (default): tiny-skia, glyph outlines via Skrifa. Used for windows (through softbuffer), headless PNGs, tests, and later a canvas2d-style web fallback.
-- `GpuRenderer`: stub. wgpu / Vello (and WebGPU on the web) will live behind the `gpu` feature so default builds stay fast.
+- `CpuRenderer` (default): tiny-skia, glyph outlines via Skrifa. Used for windows (through softbuffer), headless PNGs, tests, and later a canvas2d-style web fallback. `render_tree_png` always uses this path.
+- `GpuRenderer` (`--features gpu`): wgpu 29 (Vulkan, GLES, Metal; DX12 is off) + Vello 0.10. The desktop window records the same `paint_tree` calls (fills, text, clips; opacity is already in the color) and blits the GPU texture through softbuffer. If no adapter exists, the window falls back to `CpuRenderer`. WebGPU on the web is still later. The feature is off by default so everyday builds do not compile wgpu or Vello.
 
 Apps never call tiny-skia or wgpu directly.
 
@@ -53,7 +53,7 @@ Apps never call tiny-skia or wgpu directly.
 
 `tekto-platform` hides the host:
 
-- **Desktop (Windows, Linux, macOS):** winit window, softbuffer presents CPU frames.
+- **Desktop (Windows, Linux, macOS):** winit window, softbuffer presents frames. Default paint is the CPU renderer. `--features gpu` paints with wgpu / Vello and still presents through softbuffer.
 - **Android:** `examples/notes-android` is a `NativeActivity` APK (`cargo-apk2`, `winit` + `android-activity`). `android_main` calls `tekto::run_android`. The window / softbuffer surface is created on `resumed` and dropped on `suspended`. The CPU core also still builds headless for host tests and for `cargo check --target aarch64-linux-android`.
 - **Web:** planned. The Rust core builds to WASM. Painting uses WebGPU / WebGL2 (GPU backend) or the CPU renderer to a `<canvas>`. TypeScript runs in the **browser JS engine**, not QuickJS. The public API stays the same; no DOM in app code.
 
@@ -89,7 +89,7 @@ Linux file reads and writes are confined to `$XDG_DATA_HOME/tekto` (or `$HOME/.l
 ## Compile times
 
 - Default features: CPU renderer + desktop shell only.
-- No wgpu, Vello, or QuickJS in the default graph.
+- No wgpu, Vello, or QuickJS in the default graph. Opt into the GPU backend with `--features gpu` (not on PR CI).
 - Dev profile: `debug = 1`, incremental on. A `dev-fast` profile exists if you want a bit of opt-level for demos.
 - Later we can look at dylib / hot-patch for Rust, similar to Subsecond.
 
