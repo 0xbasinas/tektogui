@@ -16,7 +16,8 @@ use winit::window::Window;
 
 pub(crate) struct Overlay {
     pub(crate) sync: android_field::AndroidFieldSync,
-    /// `FieldOverlay` loaded. False uses the winit key path.
+    /// `FieldOverlay` loaded. Key events are still delivered unless a
+    /// text field is focused (`overlay_suppresses_keys`).
     pub(crate) ready: bool,
     missing_logged: bool,
     app: winit::platform::android::activity::AndroidApp,
