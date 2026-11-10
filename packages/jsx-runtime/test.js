@@ -84,6 +84,22 @@ test("scroll lowers to a scroll container", () => {
   assert.ok(ops.some((o) => o.op === "append" && o.parent === 1 && o.child === 2));
 });
 
+test("list lowers to list and list_item rows", () => {
+  const ops = renderToOps(
+    jsx("list", {
+      width: 200,
+      children: [
+        jsx("list_item", { height: 36, children: "Short" }),
+        jsx("list_item", { height: 80, children: "Tall" }),
+      ],
+    }),
+  );
+  assert.equal(ops[0].kind, "list");
+  assert.ok(ops.some((o) => o.op === "create" && o.kind === "list_item"));
+  assert.ok(ops.some((o) => o.op === "setProp" && o.key === "height" && o.value === "80"));
+  assert.ok(ops.some((o) => o.op === "setText" && o.text === "Tall"));
+});
+
 test("text_field lowers to a labeled value", () => {
   const ops = renderToOps(jsx("text_field", { name: "Title", children: "Hello" }));
   assert.deepEqual(ops, [

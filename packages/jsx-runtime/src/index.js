@@ -18,7 +18,17 @@ export function isElement(value) {
   return value !== null && typeof value === "object" && "type" in value && "props" in value;
 }
 
-const INTRINSICS = new Set(["window", "group", "rect", "text", "button", "text_field", "scroll"]);
+const INTRINSICS = new Set([
+  "window",
+  "group",
+  "rect",
+  "text",
+  "button",
+  "text_field",
+  "scroll",
+  "list",
+  "list_item",
+]);
 const PROPS = new Set(["name", "title", "text", "fill", "color", "fontSize", "font_size", "width", "height", "padding", "gap", "column", "justifyCenter", "justify_center"]);
 
 function childrenOf(props) {
