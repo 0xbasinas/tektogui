@@ -41,6 +41,10 @@ pub enum NativeError {
 pub enum NativeOp {
     ClipboardGetText,
     ClipboardSetText { text: String },
+    FilesReadText { path: String },
+    FilesWriteText { path: String, text: String },
+    FilesReadBytes { path: String },
+    FilesWriteBytes { path: String, bytes: Vec<u8> },
 }
 
 /// Run one [`NativeOp`] against [`native`].
@@ -52,6 +56,19 @@ pub fn apply_native_op(op: &NativeOp) -> Result<Option<String>, NativeError> {
     match op {
         NativeOp::ClipboardGetText => host.get_text().map(Some),
         NativeOp::ClipboardSetText { text } => host.set_text(text).map(|()| None),
+        NativeOp::FilesReadText { path } => host.read_to_string(path).map(Some),
+        NativeOp::FilesWriteText { path, text } => host.write_string(path, text).map(|()| None),
+        NativeOp::FilesReadBytes { path } => host.read_bytes(path).map(|bytes| {
+            Some(format!(
+                "[{}]",
+                bytes
+                    .iter()
+                    .map(u8::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ))
+        }),
+        NativeOp::FilesWriteBytes { path, bytes } => host.write_bytes(path, bytes).map(|()| None),
     }
 }
 
@@ -103,6 +120,8 @@ fn unsupported(capability: &'static str) -> NativeError {
 pub trait Files {
     fn read_to_string(&self, path: &str) -> Result<String, NativeError>;
     fn write_string(&self, path: &str, contents: &str) -> Result<(), NativeError>;
+    fn read_bytes(&self, path: &str) -> Result<Vec<u8>, NativeError>;
+    fn write_bytes(&self, path: &str, contents: &[u8]) -> Result<(), NativeError>;
     fn open_dialog(&self) -> Result<Option<String>, NativeError>;
     fn save_dialog(&self) -> Result<Option<String>, NativeError>;
 }
@@ -129,24 +148,32 @@ pub struct StubNative;
 
 impl Files for StubNative {
     fn read_to_string(&self, path: &str) -> Result<String, NativeError> {
-        // Plain file read works on desktop even before dialogs exist.
-        #[cfg(not(target_arch = "wasm32"))]
+        String::from_utf8(self.read_bytes(path)?)
+            .map_err(|e| NativeError::Message(format!("files.read: invalid UTF-8: {e}")))
+    }
+
+    fn write_string(&self, path: &str, contents: &str) -> Result<(), NativeError> {
+        self.write_bytes(path, contents.as_bytes())
+    }
+
+    fn read_bytes(&self, path: &str) -> Result<Vec<u8>, NativeError> {
+        #[cfg(target_os = "linux")]
         {
-            std::fs::read_to_string(path).map_err(|e| NativeError::Message(e.to_string()))
+            linux::read_file(path)
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(not(target_os = "linux"))]
         {
             let _ = path;
             Err(unsupported("files.read"))
         }
     }
 
-    fn write_string(&self, path: &str, contents: &str) -> Result<(), NativeError> {
-        #[cfg(not(target_arch = "wasm32"))]
+    fn write_bytes(&self, path: &str, contents: &[u8]) -> Result<(), NativeError> {
+        #[cfg(target_os = "linux")]
         {
-            std::fs::write(path, contents).map_err(|e| NativeError::Message(e.to_string()))
+            linux::write_file(path, contents)
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(not(target_os = "linux"))]
         {
             let _ = (path, contents);
             Err(unsupported("files.write"))
@@ -211,6 +238,58 @@ pub fn native() -> StubNative {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn files_are_confined_and_ops_round_trip() {
+        use std::os::unix::fs::symlink;
+        if std::env::var_os("TEKTO_FILES_TEST_CHILD").is_none() {
+            let dir = std::env::temp_dir().join(format!("tekto-files-test-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["tests::files_are_confined_and_ops_round_trip", "--exact"])
+                .env("XDG_DATA_HOME", &dir)
+                .env("TEKTO_FILES_TEST_CHILD", "1")
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let host = native();
+        host.write_string("hello", "hello λ").unwrap();
+        assert_eq!(host.read_to_string("hello").unwrap(), "hello λ");
+        let op = NativeOp::FilesWriteBytes {
+            path: "binary".into(),
+            bytes: vec![0, 255],
+        };
+        let json = serde_json::to_string(&op).unwrap();
+        assert_eq!(serde_json::from_str::<NativeOp>(&json).unwrap(), op);
+        apply_native_op(&op).unwrap();
+        assert_eq!(
+            apply_native_op(&NativeOp::FilesReadBytes {
+                path: "binary".into()
+            })
+            .unwrap()
+            .unwrap(),
+            "[0,255]"
+        );
+        assert!(host.read_to_string("binary").is_err());
+        for path in ["../escape", "/tmp/escape", "a/../escape", "./hello"] {
+            assert!(host.write_string(path, "bad").is_err(), "{path}");
+        }
+        let root =
+            std::path::PathBuf::from(std::env::var_os("XDG_DATA_HOME").unwrap()).join("tekto");
+        symlink("/tmp", root.join("link")).unwrap();
+        assert!(host.write_string("link/escape", "bad").is_err());
+        symlink("/tmp/tekto-escape", root.join("file-link")).unwrap();
+        assert!(host.write_string("file-link", "bad").is_err());
+        assert!(host.read_bytes("missing").is_err());
+    }
 
     #[test]
     fn reports_a_platform_name() {
