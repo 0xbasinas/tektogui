@@ -10,7 +10,7 @@ Pipeline: scene tree → `layout_tree` (Taffy) → `paint_tree` / `CpuRenderer` 
 ## Where to look
 
 - Bounds and tree dump: `crates/tekto-tree` (`layout`, `bounds`, `to_pretty_text`, `hit`)
-- Flex layout: `crates/tekto-layout/src/lib.rs` — window uses padding/gap; text height is still a `font_size * 1.4` guess unless you are fixing that
+- Flex layout: `crates/tekto-layout/src/lib.rs` — window uses padding/gap; text nodes are measured with Parley (`layout_tree_with_text` / a thread-local `TextEngine`)
 - Text: `crates/tekto-text/src/lib.rs` — `FontFamily::named("Roboto")`, `Blob::new(Arc::new(bytes.to_vec()))`, `register_fonts(blob, None)`
 - Paint: `crates/tekto-render/src/cpu.rs` — glyph y is flipped (`self.y - y`); `run.font()` is `FontData` (`.data`, `.index`); `NormalizedCoord::from_bits(c.to_bits())`
 - Window blit: `crates/tekto-platform/src/desktop.rs` and `rgba_to_u32_softbuffer` in `lib.rs`
