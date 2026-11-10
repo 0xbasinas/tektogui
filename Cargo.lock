@@ -2677,6 +2677,7 @@ dependencies = [
 name = "tekto"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "tekto-a11y",
  "tekto-js",
  "tekto-layout",

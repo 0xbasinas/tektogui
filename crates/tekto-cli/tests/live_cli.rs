@@ -95,6 +95,45 @@ fn tree_screenshot_and_patch_against_dev_server() {
 
     wait_for_endpoint(&dev_file, Duration::from_secs(30));
 
+    let out = run_tekto(&dev_file, &["inspect"]);
+    assert!(
+        out.status.success(),
+        "inspect failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let inspector_url = String::from_utf8(out.stdout).unwrap();
+    let inspector_url = inspector_url.trim();
+    assert!(inspector_url.ends_with("/inspector"));
+    let (headers, page) = tekto_mcp::http_get(inspector_url).unwrap();
+    assert!(headers.contains("text/html; charset=utf-8"));
+    let page = String::from_utf8(page).unwrap();
+    assert!(page.contains("Tekto inspector") && page.contains("/tree") && page.contains("/patch"));
+    let base = inspector_url.strip_suffix("/inspector").unwrap();
+    let (_, health) = tekto_mcp::http_get(&format!("{base}/health")).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&health).unwrap()["ok"],
+        true
+    );
+    let (_, tree_json) = tekto_mcp::http_get(&format!("{base}/tree")).unwrap();
+    let tree_json: serde_json::Value = serde_json::from_slice(&tree_json).unwrap();
+    let node = tree_json["dump"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["text"] == "Hello from Tekto")
+        .unwrap();
+    let (_, patched) = tekto_mcp::http_post(
+        &format!("{base}/patch"),
+        &serde_json::json!({"id": node["id"], "name": "Inspector test"}),
+    )
+    .unwrap();
+    let patched: serde_json::Value = serde_json::from_slice(&patched).unwrap();
+    assert_eq!(patched["node"]["name"], "Inspector test");
+    let (_, updated) = tekto_mcp::http_get(&format!("{base}/tree")).unwrap();
+    assert!(String::from_utf8(updated)
+        .unwrap()
+        .contains("Inspector test"));
+
     let out = run_tekto(&dev_file, &["tree"]);
     assert!(
         out.status.success(),

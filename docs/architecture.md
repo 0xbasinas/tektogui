@@ -64,7 +64,7 @@ Apps never call tiny-skia or wgpu directly.
 
 `tekto-mcp` starts a localhost HTTP server and writes `tekto-dev.json` (or `$TEKTO_DEV_FILE`). The `tekto` CLI and the stdio MCP adapter both use that server.
 
-Dev-mode tools (first slice): `ui.tree`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`. Record / replay and write-back to source files are planned.
+Dev-mode tools (first slice): `ui.tree`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`. Unique live patches can write back to source. Tree actions can be recorded and replayed with `tekto::Recording` (see the agent guide); that helper does not capture a live session by itself.
 
 `NodeKind::TextField` is a single-line field. The scene `text` is the committed value agents read and patch; `name` is the label. AccessKit maps it to `Role::TextInput` on the same id. Its value is the committed text with the current IME preedit inserted at the caret, so a composition shows up before commit. Desktop input is printable keys, Backspace, and winit `WindowEvent::Ime` (preedit and commit) on the shared Linux/Windows window path. IME is enabled only while a text field is focused. Printable keys are ignored during a preedit. Changing focus clears the previous field's preedit. A commit echo is ignored only until the event queue goes idle. We pass the caret rectangle to the OS (`set_ime_cursor_area`) and do not draw a candidate window. Still open: selection and marked-range highlight, arrow keys, copy and paste, a real Windows IME session (the event path is compiled, not run here), and the Android soft keyboard.
 
@@ -79,6 +79,8 @@ Packages under `packages/` (`@tektogui/core`, `@tektogui/jsx-runtime`, `create-t
 ## Native plugins
 
 `tekto-native` is a small plugin API: files (read/write, open/save dialogs), clipboard, notifications, system tray, global shortcuts. The same API is meant to be called from Rust and from TypeScript. Each feature is filled per platform; stubs return a clear error.
+
+Linux notifications are plain text (`Notifications::show(title, body)`). The call uses the freedesktop notification service on the session bus (`org.freedesktop.Notifications.Notify`) with a small in-tree D-Bus client, so no extra crate is added. The same call is `NativeOp` `notificationsShow` (`{"op":"notificationsShow","title":"...","body":"..."}`) through `apply_native_op` / `tekto-js::apply_native_host_op`. If there is no session bus, or the bus has no notification daemon, the call returns `NativeError::Unavailable` (it does not open a display). Other platforms, including Windows, still return `Unsupported`. A live check is off unless `TEKTO_NOTIFY_LIVE=1`.
 
 Linux text clipboard is implemented with `arboard` (MIT OR Apache-2.0): `Clipboard::get_text` / `set_text` on `native()`, and the same calls through `NativeOp` (`clipboardGetText`, `clipboardSetText`) via `apply_native_op` / `tekto-js::apply_native_host_op`. X11 is used by default; Wayland is used when `WAYLAND_DISPLAY` is set. One `arboard::Clipboard` is kept for the process so the X11 selection survives `set_text` when no clipboard manager is running. If there is no clipboard session the call returns `NativeError::Unavailable` (no panic). Windows text clipboard uses the same crate without Wayland. Android stays a stub. An empty clipboard reads as an empty string. A live round-trip test is off unless `TEKTO_CLIPBOARD_LIVE=1`. Windows is compile-checked from Linux (`x86_64-pc-windows-gnu`); running the clipboard still needs a Windows machine.
 

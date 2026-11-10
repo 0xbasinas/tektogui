@@ -14,6 +14,7 @@ Or run the windowed Notes example. The process writes a small file (default: `$X
 ## CLI tools (same server as MCP)
 
 ```bash
+cargo run -p tekto-cli -- inspect  # print the browser inspector URL
 cargo run -p tekto-cli -- tree
 cargo run -p tekto-cli -- screenshot /tmp/shot.png
 cargo run -p tekto-cli -- patch 4 --text "New title"
@@ -22,6 +23,10 @@ cargo run -p tekto-cli -- click 4
 ```
 
 `tree` prints the scene / AccessKit tree with stable ids, roles, names, and bounds. The id is positional (`tekto patch 4`, not `--id`).
+
+The inspector at `GET /inspector` shows the live tree. Select a node, choose properties, and apply a patch. Refresh the tree after changes from elsewhere. `tekto inspect` discovers the server through the same endpoint file as `tekto tree`.
+
+Agents can use the same HTTP server directly: `GET /health` checks availability, `GET /tree` returns JSON with `pretty` and `dump` (including node ids and children), and `GET /tree.txt` returns the readable tree. `POST /patch` accepts a JSON object with the node `id` and properties to change, and returns the updated node and any writeback result. Errors return a JSON `error` and an HTTP error status.
 
 ## MCP
 
@@ -79,3 +84,15 @@ TEKTO_SHOT_DIR=/tmp/shots cargo test -p tekto --test headless_snapshot
 - Do not drive the app through a browser DOM. There is no DOM in the app API.
 - Do not invent a second id scheme. Use `NodeId`.
 - Do not add a heavy crate just to make a demo nicer. Keep default builds lean.
+
+### Record and replay tree actions
+
+`tekto::Recording` stores versioned, serde-compatible actions for pointer clicks,
+field keys, and the tree operations behind `ui.click`, `ui.type`, and `ui.patch`.
+Use `record(&mut tree, action)` to apply an action and append it to a log, then
+serialize the recording with `serde_json`. Replay it on the same initial tree
+with `replay(&mut tree, layout)`. Lay out the tree before recording or replaying;
+use the callback to lay it out after each action so pointer coordinates see the
+current bounds. The helper records actions passed to it; it does not automatically
+capture a live window or dev-server session, run app callbacks, or write patches
+back to source. See `crates/tekto/tests/record_replay.rs` and its JSON fixture.

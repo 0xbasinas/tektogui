@@ -31,4 +31,5 @@ tekto-widgets = { workspace = true }
 tekto-js = { workspace = true, optional = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tekto-js = { workspace = true }

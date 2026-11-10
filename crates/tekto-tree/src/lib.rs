@@ -4,6 +4,9 @@
 //! agent MCP, and live patches pointed at the same node after a rebuild
 //! of only part of the tree.
 
+mod recording;
+pub use recording::{Action, RecordedKey, Recording};
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;

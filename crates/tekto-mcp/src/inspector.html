@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tekto inspector</title>
+<style>
+body { font: 15px system-ui, sans-serif; color: #27313a; background: #f6f7f7; margin: 0; }
+header { padding: 1rem 1.5rem; background: white; border-bottom: 1px solid #d9dfe2; }
+h1 { font-size: 1.2rem; margin: 0; }
+main { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(280px, 1fr); gap: 1rem; padding: 1rem; }
+section { background: white; border: 1px solid #d9dfe2; border-radius: 6px; padding: 1rem; min-width: 0; }
+h2 { font-size: 1rem; margin: 0 0 1rem; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+#tree ul { list-style: none; padding-left: 1.2rem; }
+#tree > ul { padding-left: 0; }
+#tree button { border: 0; background: transparent; color: inherit; text-align: left; padding: .25rem; overflow-wrap: anywhere; }
+#tree button[aria-pressed="true"] { background: #dcecf7; border-radius: 4px; }
+label { display: block; margin: .7rem 0; }
+input { box-sizing: border-box; display: block; width: 100%; padding: .4rem; margin-top: .2rem; }
+#status { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 650px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header><h1>Tekto inspector</h1></header>
+<main>
+<section><h2>Tree</h2><button id="refresh" type="button">Refresh tree</button><div id="tree"></div></section>
+<section><h2 id="selection">Select a node</h2><form id="patch">
+<p>Enter only the properties to change. Text and name can be empty.</p>
+<label><input type="checkbox" data-field="text"> Change text <input name="text" disabled></label>
+<label><input type="checkbox" data-field="name"> Change name <input name="name" disabled></label>
+<label><input type="checkbox" data-field="fill"> Change fill <input name="fill" placeholder="#rrggbb" disabled></label>
+<label><input type="checkbox" data-field="color"> Change color <input name="color" placeholder="#rrggbb" disabled></label>
+<label><input type="checkbox" data-field="fontSize"> Change font size <input name="fontSize" type="number" step="any" disabled></label>
+<label><input type="checkbox" data-field="padding"> Change padding <input name="padding" type="number" step="any" disabled></label>
+<label><input type="checkbox" data-field="gap"> Change gap <input name="gap" type="number" step="any" disabled></label>
+<button id="apply" disabled>Apply patch</button>
+</form><pre id="status" role="status" aria-live="polite"></pre></section>
+</main>
+<script>
+const tree = document.querySelector('#tree');
+const form = document.querySelector('#patch');
+const status = document.querySelector('#status');
+let selected = null;
+let nodes = new Map();
+async function request(path, options) {
+  const response = await fetch(path, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+}
+function select(node) {
+  selected = node.id;
+  document.querySelector('#selection').textContent = `${node.kind} #${node.id}`;
+  document.querySelector('#apply').disabled = false;
+  for (const checkbox of form.querySelectorAll('[data-field]')) {
+    const field = checkbox.dataset.field;
+    checkbox.checked = false;
+    const input = form.elements[field];
+    input.disabled = true;
+    input.value = node[field === 'fontSize' ? 'font_size' : field] ?? '';
+  }
+  for (const button of tree.querySelectorAll('button')) button.setAttribute('aria-pressed', String(Number(button.dataset.id) === selected));
+}
+function branch(id) {
+  const node = nodes.get(id);
+  if (!node) return null;
+  const li = document.createElement('li');
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.dataset.id = node.id;
+  button.setAttribute('aria-pressed', String(node.id === selected));
+  button.textContent = `${node.kind} #${node.id}${node.name ? ' — ' + node.name : ''}${node.text ? ' · ' + node.text : ''}`;
+  button.addEventListener('click', () => select(node));
+  li.append(button);
+  if (node.children.length) {
+    const ul = document.createElement('ul');
+    for (const id of node.children) { const child = branch(id); if (child) ul.append(child); }
+    li.append(ul);
+  }
+  return li;
+}
+async function refresh() {
+  const data = await request('/tree');
+  nodes = new Map(data.dump.nodes.map(node => [node.id, node]));
+  const ul = document.createElement('ul');
+  const root = branch(data.dump.root);
+  if (root) ul.append(root);
+  tree.replaceChildren(ul);
+  if (selected !== null && !nodes.has(selected)) {
+    selected = null;
+    document.querySelector('#selection').textContent = 'Select a node';
+    document.querySelector('#apply').disabled = true;
+  }
+}
+document.querySelector('#refresh').addEventListener('click', () => refresh().then(() => { status.textContent = 'Tree refreshed.'; }).catch(e => { status.textContent = e.message; }));
+for (const checkbox of form.querySelectorAll('[data-field]')) checkbox.addEventListener('change', () => { form.elements[checkbox.dataset.field].disabled = !checkbox.checked; });
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+  if (selected === null) return;
+  const patch = { id: selected };
+  for (const checkbox of form.querySelectorAll('[data-field]:checked')) {
+    const input = form.elements[checkbox.dataset.field];
+    if (input.type === 'number' && input.value === '') { status.textContent = `Enter a number for ${checkbox.dataset.field}.`; return; }
+    patch[checkbox.dataset.field] = input.type === 'number' ? Number(input.value) : input.value;
+  }
+  if (Object.keys(patch).length === 1) { status.textContent = 'Choose a property to change.'; return; }
+  try {
+    const result = await request('/patch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+    await refresh();
+    if (nodes.has(selected)) select(nodes.get(selected));
+    status.textContent = JSON.stringify(result, null, 2);
+  } catch (error) { status.textContent = error.message; }
+});
+refresh().catch(e => { status.textContent = e.message; });
+</script>
+</body>
+</html>
