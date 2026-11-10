@@ -5,7 +5,11 @@ description: Implement a tekto-native plugin (files, open/save dialogs, clipboar
 
 # Add a native feature
 
-`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Other platforms, dialogs, notifications, tray, and shortcuts return `NativeError::Unsupported { capability, platform }`.
+`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Other platforms, dialogs, notifications, tray, and shortcuts return `NativeError::Unsupported { capability, platform }`.
+
+Windows code is compile-checked on Linux with `cargo check --target x86_64-pc-windows-gnu -p tekto-native` (no linker, no runtime). Clipboard and file behavior still need a Windows machine. Do not treat that check as a runtime test.
+
+On Windows, `arboard` links `clipboard-win` 5.4.3 and `error-code` 3.4.0, both Boost Software License 1.0. That is outside the MIT / Apache-2.0 / BSD / zlib set used for crates this repo adds directly. `windows-sys` and `windows-link` (pulled by `clipboard-win`) are MIT OR Apache-2.0. The file sandbox does not add a crate.
 
 A present platform implementation that cannot reach the OS service (headless Linux, no `DISPLAY` and no `WAYLAND_DISPLAY`) returns `NativeError::Unavailable { capability, platform, reason }`, not `Unsupported`. Do not open displays `:1` or `:2`. The opt-in live check is `TEKTO_CLIPBOARD_LIVE=1`.
 
@@ -16,7 +20,7 @@ JS calls clipboard and files through `NativeOp` and `apply_native_op`. `tekto-js
 - `{"op":"clipboardGetText"}`
 - `{"op":"clipboardSetText","text":"..."}`
 
-File ops (Linux only; other platforms return `Unsupported` for `files.read` / `files.write`):
+File ops (Linux and Windows; other platforms return `Unsupported` for `files.read` / `files.write`):
 
 - `{"op":"filesReadText","path":"notes/a.txt"}` — `apply_native_op` returns `Some(text)`
 - `{"op":"filesWriteText","path":"notes/a.txt","text":"..."}` — returns `None`
@@ -26,6 +30,14 @@ File ops (Linux only; other platforms return `Unsupported` for `files.read` / `f
 ## Linux file sandbox
 
 `Files::read_to_string`, `write_string`, `read_bytes`, and `write_bytes` on Linux go through `linux::read_file` / `write_file`. The root is `$XDG_DATA_HOME/tekto` when `XDG_DATA_HOME` is absolute, otherwise `$HOME/.local/share/tekto`. The root is created if needed. Paths must be relative and made only of normal components: no absolute paths, empty segments, `.`, `..`, or a NUL. Each component is opened with `openat` and `O_NOFOLLOW` (and `O_DIRECTORY` for parents), so a symlink or a rename out of the tree fails. Parent directories must already exist; the plugin does not create them. New files are mode `0o600`. `read_to_string` is UTF-8 over `read_bytes`. Dialogs and paths outside this directory stay unsupported. Headless confinement tests set `XDG_DATA_HOME` in a child process (`TEKTO_FILES_TEST_CHILD=1`) so they do not write the developer’s real app-data directory.
+
+## Windows file sandbox
+
+Same shape as Linux: `read_to_string`, `write_string`, `read_bytes`, and `write_bytes` under an app-data root. The root is `%LOCALAPPDATA%\tekto` when `LOCALAPPDATA` is absolute, otherwise `%USERPROFILE%\AppData\Local\tekto`. The root is created if needed. Paths must be relative and made only of normal components (`/` or `\`). Rejected: absolute paths, drive prefixes, UNC, empty segments, `.`, `..`, NUL, `:` (alternate data streams), `* ? " < > |`, and a component that ends in a space or a dot.
+
+Each component is opened with `NtCreateFile` relative to the previous directory handle, with `FILE_OPEN_REPARSE_POINT`. If the opened object has `FILE_ATTRIBUTE_REPARSE_POINT` (junction, symlink, mount point, or cloud placeholder), the call fails and does not follow it. Parent directories must already exist. New files are created only when the name is absent; an existing reparse point is not overwritten. `read_to_string` is UTF-8 over `read_bytes`.
+
+Residual risk: ancestors of the app-data root are opened by Win32 path (`create_dir_all` and the root `NtCreateFile` on `\??\...`), so a junction above the root is followed the same way any app opens `%LOCALAPPDATA%`. Inside the root, a junction cannot retarget an open that starts from the root handle. Hard links inside the tree still name the same file data (same as Linux `openat`). There is no Windows runtime test in CI.
 
 Fill **one platform at a time**. Keep the trait API the same for Rust and for TypeScript.
 
@@ -52,8 +64,8 @@ Fill **one platform at a time**. Keep the trait API the same for Rust and for Ty
 ```bash
 cargo test -p tekto-native
 cargo clippy --workspace --all-targets -- -D warnings
-# If you touched Windows or Android paths (compile only is enough):
-cargo check --target x86_64-pc-windows-msvc --workspace
+# If you touched Windows or Android paths (compile only is enough; no linker, no Windows runtime):
+cargo check --target x86_64-pc-windows-gnu -p tekto-native
 # Android (do not launch the beddcode30 emulator):
 #   source ~/.android-env.sh   # if that file exists
 cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu
