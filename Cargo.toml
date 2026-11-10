@@ -55,13 +55,12 @@ accesskit = "0.21"
 # dx12 off: wgpu-hal 29 does not compile its DX12 backend against the
 # `windows` crate versions cargo selects for `x86_64-pc-windows-gnu`.
 vello = { version = "0.10.0", default-features = false, features = ["wgpu"] }
+# Backends are selected per target in `tekto-render` (Vulkan/GLES/Metal
+# on desktop, WebGPU on wasm32). DX12 stays off.
 wgpu = { version = "29.0.4", default-features = false, features = [
     "std",
     "parking_lot",
     "wgsl",
-    "vulkan",
-    "gles",
-    "metal",
 ] }
 pollster = "0.4"
 png = "0.18"
