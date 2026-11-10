@@ -7,6 +7,8 @@ pub use tekto_a11y::{
     dump as accesskit_dump, tree_update as accesskit_tree_update, tree_update_with_focus,
     AccessKitDump,
 };
+#[cfg(feature = "js")]
+pub use tekto_js::{apply_ops, eval_module, Host, HostOp, JsError, TreeHost};
 pub use tekto_layout::layout_tree;
 pub use tekto_mcp::{
     endpoint_path, read_endpoint, run_stdio_mcp, start_dev_server, AppHandle, DevEndpoint,
@@ -23,6 +25,7 @@ pub use tekto_platform::{
 };
 pub use tekto_render::{paint_tree, render_tree_png, CpuRenderer, RenderError, Renderer};
 pub use tekto_tree::{Color, LayoutStyle, Node, NodeId, NodeKind, NodePatch, Rect, Tree, TreeDump};
+
 pub use tekto_widgets::{
     banner, notes_tree, text, title_on_banner, window, BANNER_HEIGHT, BANNER_PADDING, BODY_SIZE,
     PAGE_PADDING, STACK_GAP, TITLE_SIZE,
