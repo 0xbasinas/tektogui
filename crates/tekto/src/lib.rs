@@ -14,7 +14,7 @@ pub use tekto_mcp::{
 };
 pub use tekto_native::{current_platform, native, Clipboard, Files, NativeError, Notifications};
 pub use tekto_platform::{
-    run_headless, run_windowed, start_handle, AppRuntime, PlatformError, WindowOptions,
+    run_headless, run_windowed, start_handle, AppRuntime, PlatformError, Viewport, WindowOptions,
 };
 pub use tekto_render::{paint_tree, render_tree_png, CpuRenderer, RenderError, Renderer};
 pub use tekto_tree::{Color, LayoutStyle, Node, NodeId, NodeKind, NodePatch, Rect, Tree, TreeDump};

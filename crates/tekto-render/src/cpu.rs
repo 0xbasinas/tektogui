@@ -14,6 +14,10 @@ use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, PixmapMut, Transfor
 pub struct CpuRenderer {
     pixmap: Pixmap,
     text: TextEngine,
+    /// Physical pixels per logical pixel. Layout and paint stay in logical
+    /// units; the pixmap is `logical * scale`. At 1.0 the output matches
+    /// the old unscaled path (headless snapshots stay stable).
+    scale: f32,
 }
 
 impl CpuRenderer {
@@ -24,7 +28,17 @@ impl CpuRenderer {
         Ok(Self {
             pixmap,
             text: TextEngine::new(),
+            scale: 1.0,
         })
+    }
+
+    /// Paint logical coordinates into a physical pixmap.
+    pub fn set_scale(&mut self, scale: f32) {
+        self.scale = if scale > 0.0 { scale } else { 1.0 };
+    }
+
+    pub fn scale(&self) -> f32 {
+        self.scale
     }
 }
 
@@ -54,7 +68,10 @@ impl Renderer for CpuRenderer {
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
-        let Some(r) = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height) else {
+        let s = self.scale;
+        let Some(r) =
+            tiny_skia::Rect::from_xywh(rect.x * s, rect.y * s, rect.width * s, rect.height * s)
+        else {
             return;
         };
         let mut paint = Paint::default();
@@ -76,14 +93,17 @@ impl Renderer for CpuRenderer {
         if text.is_empty() {
             return;
         }
+        let s = self.scale;
         let brush = [color.r, color.g, color.b, color.a];
-        let layout = self.text.layout(text, size, brush, max_width);
+        let layout = self
+            .text
+            .layout(text, size * s, brush, max_width.map(|w| w * s));
         let pixmap = self.pixmap.as_mut();
         let mut pen = TinySkiaPen::new(pixmap);
         for line in layout.lines() {
             for item in line.items() {
                 if let PositionedLayoutItem::GlyphRun(glyph_run) = item {
-                    render_glyph_run(&glyph_run, &mut pen, x, y);
+                    render_glyph_run(&glyph_run, &mut pen, x * s, y * s);
                 }
             }
         }

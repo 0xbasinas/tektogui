@@ -39,6 +39,12 @@ pub fn layout_tree_with_text(
     let Some(root) = tree.root() else {
         return;
     };
+    // The viewport is the window: keep the root's layout size in sync so a
+    // resize actually relayouts children (padding, banner width, and so on).
+    if let Some(n) = tree.get_mut(root) {
+        n.layout.width = viewport_width;
+        n.layout.height = viewport_height;
+    }
     let mut taffy: TaffyTree<NodeId> = TaffyTree::new();
     let mut map: Vec<(NodeId, taffy::NodeId)> = Vec::new();
     let taffy_root = build(&mut taffy, tree, root, &mut map);
@@ -265,5 +271,25 @@ mod tests {
             long_h > short_h + 10.0,
             "expected wrapped text to be taller: short={short_h} long={long_h}"
         );
+    }
+
+    #[test]
+    fn viewport_resize_relayouts_root() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        tree.get_mut(root).unwrap().layout = LayoutStyle {
+            width: 200.0,
+            height: 100.0,
+            padding: 0.0,
+            gap: 0.0,
+            column: true,
+            justify_center: false,
+        };
+        layout_tree(&mut tree, 200.0, 100.0);
+        assert_eq!(tree.get(root).unwrap().bounds.width, 200.0);
+        layout_tree(&mut tree, 400.0, 250.0);
+        let b = tree.get(root).unwrap().bounds;
+        assert_eq!(b.width, 400.0);
+        assert_eq!(b.height, 250.0);
     }
 }
