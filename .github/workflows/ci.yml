@@ -72,3 +72,21 @@ jobs:
         run: cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu
       - name: Check Notes Android skeleton
         run: cargo check -p notes-android --target aarch64-linux-android
+
+  wasm:
+    name: WASM core check
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/nightly')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm-check
+      - name: Check WASM core and op bridge
+        run: cargo check -p tekto-wasm --target wasm32-unknown-unknown
+      - name: Check tekto CPU + HostOp (no desktop shell, no quickjs, no gpu)
+        run: cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js

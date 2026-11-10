@@ -3189,6 +3189,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tekto-wasm"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tekto-js",
+ "tekto-layout",
+ "tekto-render",
+ "tekto-tree",
+]
+
+[[package]]
 name = "tekto-widgets"
 version = "0.1.0"
 dependencies = [

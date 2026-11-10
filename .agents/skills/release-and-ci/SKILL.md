@@ -29,12 +29,13 @@ Triggers: pull requests, pushes to `nightly` or `main`, and `workflow_dispatch`.
 | Job | When it runs | What it does |
 |---|---|---|
 | Linux check | every PR and every push | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets` |
-| Windows compile | `push` to `nightly`, or manual dispatch | `cargo check --workspace --all-targets` on `windows-latest` |
-| Android compile | `push` to `nightly`, or manual dispatch | `cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu` |
+| Windows compile | `push` to `nightly`, or manual dispatch with `full=true` | `cargo check --workspace --all-targets` on `windows-latest` |
+| Android compile | `push` to `nightly`, or manual dispatch with `full=true` | `cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu` |
+| WASM core check | `push` to `nightly`, or any `workflow_dispatch` | `cargo check -p tekto-wasm --target wasm32-unknown-unknown` and `cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js` |
 
 `RUSTFLAGS=-D warnings`. Caches use Swatinem/rust-cache. Concurrency cancels older runs on the same ref.
 
-**Keep it light:** do not run Windows, Android, emulators, packaging, or (later) wasm on every PR. Put expensive jobs on nightly or `workflow_dispatch`. Timeouts are already 25–30 minutes.
+**Keep it light:** do not run Windows, Android, emulators, packaging, or wasm on every PR. Windows and Android stay on nightly or `workflow_dispatch` with `full=true`. The wasm job runs on a push to `nightly` or any `workflow_dispatch`. Timeouts are already 20–30 minutes.
 
 ## Packaging (local, not CI)
 
