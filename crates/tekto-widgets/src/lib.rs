@@ -1,7 +1,8 @@
 //! Built-in widgets. The look is plain and quiet: warm page, charcoal
 //! ink, comfortable spacing. Themes come later.
 
-use tekto_tree::{Color, LayoutStyle, NodeId, NodeKind, Tree, TreeError};
+use tekto_text::TextEngine;
+use tekto_tree::{Color, LayoutStyle, Node, NodeId, NodeKind, Tree, TreeError};
 
 /// Space used around the window content.
 pub const PAGE_PADDING: f32 = 24.0;
@@ -298,7 +299,7 @@ fn ensure_list_scroll(tree: &mut Tree, list_id: NodeId) -> Result<(), WidgetErro
     let width = list.layout.width;
     let gap = list.layout.gap;
     let children = list.children.clone();
-    let content = stacked_node_height(tree, &children, gap);
+    let content = stacked_node_height(tree, &children, gap, width);
     if content <= viewport {
         return Ok(());
     }
@@ -316,22 +317,56 @@ fn ensure_list_scroll(tree: &mut Tree, list_id: NodeId) -> Result<(), WidgetErro
     Ok(())
 }
 
-fn stacked_node_height(tree: &Tree, children: &[NodeId], gap: f32) -> f32 {
+fn stacked_node_height(tree: &Tree, children: &[NodeId], gap: f32, list_width: f32) -> f32 {
     if children.is_empty() {
         return 0.0;
     }
+    let mut text = None;
     let mut total = 0.0;
     for id in children {
         let Some(node) = tree.get(*id) else {
             continue;
         };
-        if !node.layout.height.is_finite() || node.layout.height < 0.0 {
+        let height = row_border_height(node, list_width, &mut text);
+        if !height.is_finite() {
             return f32::INFINITY;
         }
-        total += node.layout.height;
+        total += height;
     }
     let gap = if gap.is_finite() { gap.max(0.0) } else { 0.0 };
     total + gap * (children.len() - 1) as f32
+}
+
+/// Border-box height used for the scroll decision.
+///
+/// A finite row height is that box. A non-finite height hugs the label: the
+/// same Parley measure layout uses, plus the row's vertical padding. A
+/// negative height is not a hug and is treated as unbounded.
+fn row_border_height(node: &Node, list_width: f32, text: &mut Option<TextEngine>) -> f32 {
+    let set = node.layout.height;
+    if set.is_finite() {
+        return if set < 0.0 { f32::INFINITY } else { set };
+    }
+    let content = node.text.as_deref().unwrap_or("");
+    let sample = if content.is_empty() { " " } else { content };
+    let pad = if node.layout.padding.is_finite() {
+        node.layout.padding.max(0.0)
+    } else {
+        0.0
+    };
+    let width = if node.layout.width.is_finite() {
+        node.layout.width
+    } else {
+        list_width
+    };
+    let max_width = if width.is_finite() {
+        Some((width - 2.0 * pad).max(0.0))
+    } else {
+        None
+    };
+    let engine = text.get_or_insert_with(TextEngine::new);
+    let (_, measured) = engine.measure(sample, node.font_size, max_width);
+    measured.max(1.0) + 2.0 * pad
 }
 
 /// Title text drawn on the dark banner.
@@ -472,5 +507,38 @@ mod tests {
         let again = list_item(&mut tree, built.list, "Four", 50.0).unwrap();
         assert_eq!(tree.get(built.list).unwrap().parent, Some(scroll_id));
         assert_eq!(tree.get(again).unwrap().parent, Some(built.list));
+    }
+
+    #[test]
+    fn short_auto_height_row_stays_unwrapped() {
+        let mut tree = Tree::new();
+        let root = window(&mut tree, "Items", 320.0, 400.0).unwrap();
+        let built = list(&mut tree, root, 200.0, 100.0, &[]).unwrap();
+        list_item(&mut tree, built.list, "Hi", f32::NAN).unwrap();
+        assert_eq!(tree.get(built.list).unwrap().parent, Some(root));
+        assert!(scroll_parent(&tree, built.list).is_none());
+    }
+
+    #[test]
+    fn overflowing_auto_height_rows_wrap_once() {
+        let mut tree = Tree::new();
+        let root = window(&mut tree, "Items", 320.0, 400.0).unwrap();
+        let built = list(&mut tree, root, 200.0, 100.0, &[]).unwrap();
+        for label in ["One", "Two", "Three", "Four", "Five", "Six"] {
+            list_item(&mut tree, built.list, label, f32::NAN).unwrap();
+        }
+        let scroll_id = scroll_parent(&tree, built.list).expect("rows exceed 100px");
+        assert_eq!(tree.get(scroll_id).unwrap().parent, Some(root));
+        assert_eq!(tree.get(scroll_id).unwrap().layout.height, 100.0);
+        list_item(&mut tree, built.list, "Seven", f32::NAN).unwrap();
+        assert_eq!(tree.get(built.list).unwrap().parent, Some(scroll_id));
+        let scrolls = tree
+            .get(root)
+            .unwrap()
+            .children
+            .iter()
+            .filter(|id| tree.get(**id).unwrap().kind == NodeKind::Scroll)
+            .count();
+        assert_eq!(scrolls, 1);
     }
 }

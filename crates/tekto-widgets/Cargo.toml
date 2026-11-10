@@ -9,4 +9,5 @@ description = "Built-in Tekto widgets with a plain, quiet default look"
 publish = false
 
 [dependencies]
+tekto-text = { workspace = true }
 tekto-tree = { workspace = true }
