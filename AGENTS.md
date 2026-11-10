@@ -13,6 +13,24 @@ Priorities, in practice:
 3. Ships stay small and start quickly.
 4. The default look is plain, quiet, and comfortable (spacing, typography, later smooth scroll and animation). Themes come later.
 
+## Skills
+
+Short, command-accurate how-tos live in `.agents/skills/<slug>/SKILL.md`. The same folders are symlinked from `.claude/skills/` so Claude Code finds them. Codex, Grok, and Cursor should follow this file: if the task matches a row below, **read that skill first**. If you change a command, flag, or crate rule, update the skill in the same PR.
+
+| Skill | When to use |
+|---|---|
+| [add-widget](.agents/skills/add-widget/SKILL.md) | New built-in widget (Rust, TSX sketch, AccessKit, headless test) |
+| [add-crate](.agents/skills/add-crate/SKILL.md) | New workspace crate or a heavy dependency; keep builds fast |
+| [add-native-feature](.agents/skills/add-native-feature/SKILL.md) | `tekto-native` plugin for one platform (files, clipboard, …) |
+| [run-and-inspect-app](.agents/skills/run-and-inspect-app/SKILL.md) | `tekto dev`, tree / click / type / screenshot / live patch |
+| [write-headless-test](.agents/skills/write-headless-test/SKILL.md) | Snapshot and tree asserts without a window |
+| [debug-render-or-layout](.agents/skills/debug-render-or-layout/SKILL.md) | Wrong bounds, missing text, blank PNG or window |
+| [android-build-and-run](.agents/skills/android-build-and-run/SKILL.md) | Android compile (no busy emulator; no Activity yet) |
+| [web-build](.agents/skills/web-build/SKILL.md) | WASM / web target — not built yet; keep abstractions ready |
+| [add-mcp-tool](.agents/skills/add-mcp-tool/SKILL.md) | New dev-server route, MCP tool, or CLI inspect command |
+| [release-and-ci](.agents/skills/release-and-ci/SKILL.md) | PRs into `nightly`, merge to `main`, light CI rules |
+| [pick-up-an-issue](.agents/skills/pick-up-an-issue/SKILL.md) | Start from a GitHub issue and open a small PR |
+
 ## Git
 
 - Open pull requests against **`nightly`**, not `main`.
