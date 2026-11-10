@@ -58,8 +58,11 @@ struct State {
     drag_last_y: f32,
     dragged: bool,
     modifiers: Modifiers,
-    /// `Window::set_ime_allowed` follows text-field focus.
+    /// `Window::set_ime_allowed` follows text-field focus (desktop).
     ime_allowed: bool,
+    /// Android `EditText` overlay. Absent on desktop.
+    #[cfg(target_os = "android")]
+    overlay: Option<crate::android_overlay::Overlay>,
     /// Last IME commit, so a following key event does not insert it again.
     last_ime_commit: Option<String>,
     handle: Option<Arc<SharedTreeHandle>>,
@@ -130,6 +133,11 @@ impl ApplicationHandler<AppEvent> for App {
             dragged: false,
             modifiers: Modifiers::default(),
             ime_allowed: false,
+            #[cfg(target_os = "android")]
+            overlay: Some(crate::android_overlay::Overlay::new({
+                use winit::platform::android::ActiveEventLoopExtAndroid;
+                event_loop.android_app().clone()
+            })),
             last_ime_commit: None,
             handle: self.handle.clone(),
             viewport: Arc::clone(&self.viewport),
@@ -153,6 +161,7 @@ impl ApplicationHandler<AppEvent> for App {
         // A key after the queue goes idle is the user's next keystroke.
         if let Some(state) = self.state.as_mut() {
             crate::expire_ime_echo(&mut state.last_ime_commit);
+            sync_ime(state);
         }
         let running = self
             .state
@@ -167,7 +176,30 @@ impl ApplicationHandler<AppEvent> for App {
                 Instant::now() + Duration::from_millis(16),
             ));
         } else {
-            event_loop.set_control_flow(ControlFlow::Wait);
+            let field_focused = self.state.as_ref().is_some_and(|state| {
+                #[cfg(target_os = "android")]
+                {
+                    state.overlay.as_ref().is_some_and(|overlay| overlay.ready)
+                        && state.tree.lock().ok().is_some_and(|tree| {
+                            tree.focus
+                                .and_then(|id| tree.get(id))
+                                .is_some_and(|node| node.kind == tekto_tree::NodeKind::TextField)
+                        })
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    let _ = state;
+                    false
+                }
+            });
+            if field_focused {
+                // Poll the native EditText. It has no callback into this thread.
+                event_loop.set_control_flow(ControlFlow::WaitUntil(
+                    Instant::now() + Duration::from_millis(16),
+                ));
+            } else {
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
         }
     }
 
@@ -245,6 +277,13 @@ impl ApplicationHandler<AppEvent> for App {
             // drawing that popup is the OS input method's job.
             WindowEvent::KeyboardInput { event, .. } => {
                 if let Some(state) = self.state.as_mut() {
+                    // The Android overlay owns the soft keyboard. Key events
+                    // would insert the same character a second time.
+                    #[cfg(target_os = "android")]
+                    if state.overlay.as_ref().is_some_and(|o| o.ready) {
+                        sync_ime(state);
+                        return;
+                    }
                     apply_field_key(state, &event);
                     sync_ime(state);
                 }
@@ -501,6 +540,12 @@ impl accesskit::DeactivationHandler for LiveDeactivate {
 impl App {
     /// Retire the current buffer. Surface first, then the winit window.
     fn release_surface(&mut self) {
+        #[cfg(target_os = "android")]
+        if let Some(state) = self.state.as_mut() {
+            if let Some(overlay) = state.overlay.as_mut() {
+                crate::android_overlay::hide(overlay);
+            }
+        }
         let Some(state) = self.state.take() else {
             crate::lifecycle::on_suspended();
             return;
@@ -618,9 +663,18 @@ fn apply_pointer_click(state: &mut State, x: f32, y: f32) {
 /// Turn the platform IME on only while a text field is focused, and tell it
 /// where the caret is so a candidate window can sit nearby.
 ///
-/// Shared by the Linux and Windows winit backends (this file). Android still
-/// has no soft keyboard. The candidate popup itself is drawn by the OS.
+/// Linux and Windows use winit `set_ime_allowed`. Android uses a native
+/// `EditText` (`android_overlay`); winit there does not deliver IME text.
+/// The candidate popup itself is drawn by the OS.
 fn sync_ime(state: &mut State) {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(overlay) = state.overlay.as_mut() {
+            if crate::android_overlay::sync_overlay(overlay, &state.window, &state.tree) {
+                return;
+            }
+        }
+    }
     let focused_field = state.tree.lock().ok().and_then(|tree| {
         let id = tree.focus?;
         let node = tree.get(id)?;
@@ -750,19 +804,24 @@ pub fn run_windowed(runtime: AppRuntime, opts: WindowOptions) -> Result<(), Plat
 
 /// Start a window using an already-running dev session (so `tekto dev --js`
 /// can attach a JS reload hook before the event loop starts).
+#[cfg(target_os = "android")]
 pub fn run_windowed_with_session(
     runtime: AppRuntime,
     opts: WindowOptions,
     session: Option<crate::DevSession>,
 ) -> Result<(), PlatformError> {
-    #[cfg(target_os = "android")]
-    {
-        let _ = (runtime, opts, session);
-        return Err(PlatformError::msg(
-            "on Android, call tekto::run_android(...) from android_main",
-        ));
-    }
-    #[cfg(not(target_os = "android"))]
+    let _ = (runtime, opts, session);
+    Err(PlatformError::msg(
+        "on Android, call tekto::run_android(...) from android_main",
+    ))
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn run_windowed_with_session(
+    runtime: AppRuntime,
+    opts: WindowOptions,
+    session: Option<crate::DevSession>,
+) -> Result<(), PlatformError> {
     run_event_loop(runtime, opts, None, session)
 }
 
