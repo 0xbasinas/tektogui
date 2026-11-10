@@ -200,6 +200,24 @@ fn parse_bool(key: &str, value: &str) -> Result<bool, JsError> {
     }
 }
 
+/// Prop keys `setProp` accepts. `components.json` must stay inside this set
+/// (plus the JSX alias `title`, which is rewritten to `name` before the host).
+pub const HOST_PROP_KEYS: &[&str] = &[
+    "width",
+    "height",
+    "column",
+    "justifyCenter",
+    "justify_center",
+    "text",
+    "name",
+    "fill",
+    "color",
+    "fontSize",
+    "font_size",
+    "padding",
+    "gap",
+];
+
 fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), JsError> {
     match key {
         "width" | "height" | "column" | "justifyCenter" | "justify_center" => {
@@ -730,5 +748,47 @@ mod tests {
             );
         }
         assert!(report.contains("native op JSON"), "{pretty}");
+    }
+
+    #[test]
+    fn component_schema_lists_every_host_prop() {
+        let raw = include_str!("../../../packages/jsx-runtime/src/components.json");
+        let schema: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let aliases = schema["propAliases"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        // Snake_case spellings are aliases. JSX rewrites `title` before setProp.
+        // Every other HOST_PROP_KEYS entry is a prop agents can set on any kind.
+        let mut required: Vec<&str> = HOST_PROP_KEYS
+            .iter()
+            .copied()
+            .filter(|key| !aliases.contains_key(*key))
+            .collect();
+        required.push("title");
+        let components = schema["components"].as_array().unwrap();
+        assert!(!components.is_empty(), "components.json lists no widgets");
+        for comp in components {
+            let kind = comp["name"].as_str().unwrap();
+            let listed: Vec<&str> = comp["props"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["name"].as_str().unwrap())
+                .collect();
+            for name in &listed {
+                let host = aliases.get(*name).and_then(|v| v.as_str()).unwrap_or(name);
+                assert!(
+                    HOST_PROP_KEYS.contains(&host),
+                    "{kind} prop {name} is not a host prop"
+                );
+            }
+            for key in &required {
+                assert!(
+                    listed.contains(key),
+                    "{kind} schema omits host prop {key} (setProp accepts it on every node)"
+                );
+            }
+        }
     }
 }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { jsx, jsxs, isElement, Fragment } from "./src/index.js";
+import { jsx, jsxs, isElement, Fragment, componentSchema } from "./src/index.js";
 
 test("jsx builds a plain element, not a DOM node", () => {
   const el = jsxs("window", { title: "Notes", children: [jsx("text", { children: "Hi" })] });
@@ -98,6 +98,41 @@ test("list lowers to list and list_item rows", () => {
   assert.ok(ops.some((o) => o.op === "create" && o.kind === "list_item"));
   assert.ok(ops.some((o) => o.op === "setProp" && o.key === "height" && o.value === "80"));
   assert.ok(ops.some((o) => o.op === "setText" && o.text === "Tall"));
+});
+
+test("component schema lists every prop JSX forwards on each kind", () => {
+  const names = componentSchema.components.map((c) => c.name);
+  for (const kind of ["button", "text_field", "scroll", "list", "list_item", "text", "window", "group", "rect"]) {
+    assert.ok(names.includes(kind), `schema omits core widget ${kind}`);
+  }
+  assert.throws(() => renderToOps(jsx("nope", {})), /unknown element type nope/);
+
+  // mount() forwards any catalog prop on every kind (one global set).
+  // A prop listed on only some kinds is a lie to agents reading app.components.
+  const aliasKeys = new Set(Object.keys(componentSchema.propAliases ?? {}));
+  const forwarded = new Set(
+    componentSchema.components.flatMap((c) => c.props.map((p) => p.name)).filter((name) => !aliasKeys.has(name)),
+  );
+  forwarded.add("title");
+  for (const spec of componentSchema.components) {
+    assert.ok(Array.isArray(spec.props));
+    assert.ok(Array.isArray(spec.events));
+    const listed = new Set(spec.props.map((p) => p.name));
+    for (const key of forwarded) {
+      assert.ok(listed.has(key), `${spec.name} omits prop ${key} that JSX forwards`);
+    }
+  }
+
+  const button = renderToOps(jsx("button", { width: 200, height: 40, children: "Save" }));
+  assert.ok(button.some((o) => o.op === "setProp" && o.key === "width" && o.value === "200"));
+  assert.ok(button.some((o) => o.op === "setProp" && o.key === "height" && o.value === "40"));
+  const buttonSpec = componentSchema.components.find((c) => c.name === "button");
+  for (const key of ["width", "height"]) {
+    assert.ok(
+      buttonSpec.props.some((p) => p.name === key),
+      `button schema omits ${key}`,
+    );
+  }
 });
 
 test("text_field lowers to a labeled value", () => {

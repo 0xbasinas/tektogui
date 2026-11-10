@@ -1,4 +1,28 @@
 export const Fragment: symbol;
+
+export type ComponentProp = {
+  name: string;
+  type: string;
+  description?: string;
+};
+export type ComponentEvent = {
+  name: string;
+  description?: string;
+};
+export type ComponentSpec = {
+  name: string;
+  description?: string;
+  props: ComponentProp[];
+  events: ComponentEvent[];
+};
+export type ComponentSchema = {
+  version: number;
+  description?: string;
+  propAliases?: Record<string, string>;
+  components: ComponentSpec[];
+};
+/** Kinds, props, and events. Same JSON as the MCP tool `app.components`. */
+export const componentSchema: ComponentSchema;
 export type TektoElement = {
   type: string | symbol | ((props: Record<string, unknown>) => TektoElement);
   props: Record<string, unknown>;
