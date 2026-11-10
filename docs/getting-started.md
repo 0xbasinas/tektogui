@@ -36,6 +36,20 @@ cargo run -p tekto-cli -- patch 4 --text "Hello from an agent"
 
 (Node ids can differ slightly if the tree shape changes; use `tekto tree` to see them.)
 
+## Start a new app
+
+From the tektogui repo (or any folder, if `TEKTO_ROOT` points at it):
+
+```bash
+cargo run -p tekto-cli -- new hello
+cd hello
+cargo run -- --headless --out hello.png
+```
+
+That writes a compiling Rust app, a `src/app.tsx` sketch, and a README. The app depends on this checkout by path, so you only need a Rust toolchain.
+
+`npm create tektogui hello` (or `npx create-tektogui hello`) does the same thing by calling `tekto new`.
+
 ## Write a tiny Rust app
 
 ```rust
