@@ -174,7 +174,9 @@ impl Tree {
         }
         let now = self.time_ms;
         let mut still = Vec::new();
-        let pending = std::mem::take(&mut self.transitions);
+        let mut pending = std::mem::take(&mut self.transitions);
+        // Parents first so a child with its own tween overwrites the shift.
+        pending.sort_by_key(|anim| node_depth(self, anim.node));
         for mut anim in pending {
             if !self.nodes.contains_key(&anim.node) {
                 continue;
@@ -226,7 +228,8 @@ impl Tree {
     }
 
     fn finish_transitions(&mut self) {
-        let pending = std::mem::take(&mut self.transitions);
+        let mut pending = std::mem::take(&mut self.transitions);
+        pending.sort_by_key(|anim| node_depth(self, anim.node));
         for anim in pending {
             apply_channels(self, anim.node, &anim.channels, 1.0);
             commit_layout_targets(self, anim.node, &anim.channels);
@@ -308,7 +311,42 @@ fn apply_channels(tree: &mut Tree, id: NodeId, channels: &[Channel], eased: f32)
             ChannelKind::Height => bounds.height = mix(channel.from, channel.to).max(0.0),
         }
     }
+    let dx = bounds.x - node.bounds.x;
+    let dy = bounds.y - node.bounds.y;
     node.bounds = bounds;
+    // Layout writes absolute bounds before this runs. Move the subtree with
+    // the node so a child is not left at the pre-animation position.
+    shift_descendants(tree, id, dx, dy);
+}
+
+fn node_depth(tree: &Tree, mut id: NodeId) -> u32 {
+    let mut depth = 0;
+    while let Some(parent) = tree.nodes.get(&id).and_then(|node| node.parent) {
+        depth += 1;
+        id = parent;
+        if depth > 10_000 {
+            break;
+        }
+    }
+    depth
+}
+
+fn shift_descendants(tree: &mut Tree, id: NodeId, dx: f32, dy: f32) {
+    if !dx.is_finite() || !dy.is_finite() || (dx == 0.0 && dy == 0.0) {
+        return;
+    }
+    let children = tree
+        .nodes
+        .get(&id)
+        .map(|node| node.children.clone())
+        .unwrap_or_default();
+    for child in children {
+        if let Some(node) = tree.nodes.get_mut(&child) {
+            node.bounds.x += dx;
+            node.bounds.y += dy;
+        }
+        shift_descendants(tree, child, dx, dy);
+    }
 }
 
 #[cfg(test)]

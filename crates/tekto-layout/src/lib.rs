@@ -536,4 +536,114 @@ mod tests {
         assert!((reduced.width - 70.0).abs() < 0.01);
         assert!((reduced.height - 28.0).abs() < 0.01, "h {}", reduced.height);
     }
+
+    #[test]
+    fn parent_transition_keeps_child_with_the_parent() {
+        use tekto_tree::StyleTransition;
+
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        tree.get_mut(root).unwrap().layout = LayoutStyle {
+            width: 300.0,
+            height: 200.0,
+            padding: 0.0,
+            gap: 0.0,
+            column: true,
+            justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
+        };
+        let parent = tree.add(NodeKind::Rect, Some(root)).unwrap();
+        tree.get_mut(parent).unwrap().layout = LayoutStyle {
+            width: 80.0,
+            height: 40.0,
+            padding: 4.0,
+            gap: 0.0,
+            column: true,
+            justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
+        };
+        let child = tree.add(NodeKind::Rect, Some(parent)).unwrap();
+        tree.get_mut(child).unwrap().layout = LayoutStyle::sized(20.0, 10.0);
+        layout_tree(&mut tree, 300.0, 200.0);
+
+        let parent_start = tree.get(parent).unwrap().bounds;
+        let child_start = tree.get(child).unwrap().bounds;
+        let offset_x = child_start.x - parent_start.x;
+        let offset_y = child_start.y - parent_start.y;
+        assert!(offset_x.abs() > 0.5 || offset_y.abs() > 0.5);
+
+        tree.transition(
+            parent,
+            StyleTransition {
+                x: Some(parent_start.x + 40.0),
+                y: Some(parent_start.y + 24.0),
+                width: Some(parent_start.width + 30.0),
+                height: Some(parent_start.height + 16.0),
+                duration_ms: Some(100.0),
+                ..StyleTransition::default()
+            },
+        )
+        .unwrap();
+
+        let assert_child_follows = |tree: &Tree, label: &str| {
+            let parent_b = tree.get(parent).unwrap().bounds;
+            let child_b = tree.get(child).unwrap().bounds;
+            let dx = child_b.x - parent_b.x;
+            let dy = child_b.y - parent_b.y;
+            assert!(
+                (dx - offset_x).abs() < 0.01,
+                "{label} child x offset {dx}, expected {offset_x}"
+            );
+            assert!(
+                (dy - offset_y).abs() < 0.01,
+                "{label} child y offset {dy}, expected {offset_y}"
+            );
+            assert!((child_b.width - child_start.width).abs() < 0.01);
+            assert!((child_b.height - child_start.height).abs() < 0.01);
+        };
+
+        // Same order as a desktop frame: layout, then advance.
+        layout_tree(&mut tree, 300.0, 200.0);
+        assert!(tree.advance(0.0));
+        assert_child_follows(&tree, "start");
+
+        layout_tree(&mut tree, 300.0, 200.0);
+        assert!(tree.advance(50.0));
+        let mid = tree.get(parent).unwrap().bounds;
+        assert!(
+            mid.x > parent_start.x + 10.0 && mid.x < parent_start.x + 30.0,
+            "mid x {}",
+            mid.x
+        );
+        assert!(
+            mid.y > parent_start.y + 6.0 && mid.y < parent_start.y + 18.0,
+            "mid y {}",
+            mid.y
+        );
+        assert!(
+            mid.width > parent_start.width + 8.0 && mid.width < parent_start.width + 22.0,
+            "mid w {}",
+            mid.width
+        );
+        assert_child_follows(&tree, "midpoint");
+
+        layout_tree(&mut tree, 300.0, 200.0);
+        assert!(!tree.advance(100.0));
+        let end = tree.get(parent).unwrap().bounds;
+        assert!((end.x - (parent_start.x + 40.0)).abs() < 0.01);
+        assert!((end.y - (parent_start.y + 24.0)).abs() < 0.01);
+        assert!((end.width - (parent_start.width + 30.0)).abs() < 0.01);
+        assert!((end.height - (parent_start.height + 16.0)).abs() < 0.01);
+        assert_child_follows(&tree, "completion");
+
+        layout_tree(&mut tree, 300.0, 200.0);
+        let again = tree.get(parent).unwrap().bounds;
+        assert!((again.x - end.x).abs() < 0.01);
+        assert!((again.y - end.y).abs() < 0.01);
+        assert!((again.width - end.width).abs() < 0.01);
+        assert!((again.height - end.height).abs() < 0.01);
+        assert_child_follows(&tree, "later layout");
+    }
 }
