@@ -13,6 +13,7 @@
 //! the OS. Live patches wake the event loop so the window and AccessKit
 //! stay in sync.
 
+use crate::pointer_route::{apply_pointer_op, FingerPhase, PointerOp, PointerSession};
 use crate::{
     logical_from_physical, rgba_to_u32_softbuffer, AppRuntime, PlatformError, Viewport,
     WindowOptions,
@@ -25,11 +26,11 @@ use std::time::{Duration, Instant};
 use tekto_layout::layout_tree;
 use tekto_mcp::{AppHandle, SharedTreeHandle};
 use tekto_render::{paint_tree, CpuRenderer, Renderer};
-use tekto_tree::{FieldKey, ImeEvent, NodeId, Tree, SCROLL_WHEEL_LINE};
+use tekto_tree::{FieldKey, ImeEvent, Tree, SCROLL_WHEEL_LINE};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{
-    ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent,
+    ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
@@ -50,13 +51,8 @@ struct State {
     renderer: Painter,
     tree: Arc<Mutex<Tree>>,
     clear: tekto_tree::Color,
-    cursor: Option<(f32, f32)>,
-    /// Left button is down. A drag inside a scroll container pans it.
-    pointer_down: bool,
-    press_origin: Option<(f32, f32)>,
-    drag_scroll: Option<NodeId>,
-    drag_last_y: f32,
-    dragged: bool,
+    /// Mouse and touch share one gesture. See [`crate::pointer_route`].
+    pointer: PointerSession,
     modifiers: Modifiers,
     /// `Window::set_ime_allowed` follows text-field focus (desktop).
     ime_allowed: bool,
@@ -125,12 +121,7 @@ impl ApplicationHandler<AppEvent> for App {
             renderer,
             tree: Arc::clone(&self.tree),
             clear: self.runtime.clear,
-            cursor: None,
-            pointer_down: false,
-            press_origin: None,
-            drag_scroll: None,
-            drag_last_y: 0.0,
-            dragged: false,
+            pointer: PointerSession::default(),
             modifiers: Modifiers::default(),
             ime_allowed: false,
             #[cfg(target_os = "android")]
@@ -234,10 +225,8 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(state) = self.state.as_mut() {
                     let scale = state.window.scale_factor();
                     let (x, y) = logical_from_physical(position.x, position.y, scale);
-                    state.cursor = Some((x, y));
-                    if state.pointer_down {
-                        apply_pointer_drag(state, x, y);
-                    }
+                    let op = state.pointer.on_cursor_moved(x, y);
+                    deliver_pointer(state, op);
                 }
             }
             WindowEvent::MouseInput {
@@ -246,19 +235,28 @@ impl ApplicationHandler<AppEvent> for App {
                 ..
             } => {
                 if let Some(state) = self.state.as_mut() {
-                    match button_state {
-                        ElementState::Pressed => {
-                            if let Some((x, y)) = state.cursor {
-                                begin_pointer(state, x, y);
-                            }
-                        }
-                        ElementState::Released => end_pointer(state),
-                    }
+                    let pressed = button_state == ElementState::Pressed;
+                    let op = state.pointer.on_left_button(pressed);
+                    deliver_pointer(state, op);
+                }
+            }
+            WindowEvent::Touch(touch) => {
+                if let Some(state) = self.state.as_mut() {
+                    let scale = state.window.scale_factor();
+                    let (x, y) = logical_from_physical(touch.location.x, touch.location.y, scale);
+                    let phase = match touch.phase {
+                        TouchPhase::Started => FingerPhase::Started,
+                        TouchPhase::Moved => FingerPhase::Moved,
+                        TouchPhase::Ended => FingerPhase::Ended,
+                        TouchPhase::Cancelled => FingerPhase::Cancelled,
+                    };
+                    let op = state.pointer.on_touch(touch.id, phase, x, y);
+                    deliver_pointer(state, op);
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if let Some(state) = self.state.as_mut() {
-                    if let Some((x, y)) = state.cursor {
+                    if let Some((x, y)) = state.pointer.cursor {
                         let scale = state.window.scale_factor();
                         let dy = wheel_delta_logical(delta, scale);
                         if dy != 0.0 {
@@ -577,9 +575,6 @@ impl App {
     }
 }
 
-/// A few pixels of movement before a press becomes a pan, so a click still clicks.
-const DRAG_SLOP: f32 = 4.0;
-
 fn wheel_delta_logical(delta: MouseScrollDelta, scale: f64) -> f32 {
     match delta {
         // Positive line delta is a wheel notch away from the user: reveal content above.
@@ -591,56 +586,25 @@ fn wheel_delta_logical(delta: MouseScrollDelta, scale: f64) -> f32 {
     }
 }
 
-fn begin_pointer(state: &mut State, x: f32, y: f32) {
-    state.pointer_down = true;
-    state.press_origin = Some((x, y));
-    state.drag_last_y = y;
-    state.dragged = false;
-    state.drag_scroll = state
-        .tree
-        .lock()
-        .ok()
-        .and_then(|tree| tree.scroll_target_at(x, y));
-    if state.drag_scroll.is_none() {
-        apply_pointer_click(state, x, y);
-    }
+fn pointer_ms(state: &State) -> f64 {
+    state.anim_origin.elapsed().as_secs_f64() * 1000.0
 }
 
-fn apply_pointer_drag(state: &mut State, x: f32, y: f32) {
-    let Some(id) = state.drag_scroll else {
+fn deliver_pointer(state: &mut State, op: PointerOp) {
+    if matches!(op, PointerOp::Ignore) {
+        return;
+    }
+    let now = pointer_ms(state);
+    let Ok(mut tree) = state.tree.lock() else {
         return;
     };
-    if let Some((ox, oy)) = state.press_origin {
-        if (x - ox).abs() + (y - oy).abs() >= DRAG_SLOP {
-            state.dragged = true;
-        }
+    let effect = apply_pointer_op(&mut state.pointer, &mut tree, op, now);
+    drop(tree);
+    if let Some((x, y)) = effect.click_at {
+        apply_pointer_click(state, x, y);
+    } else if effect.redraw {
+        state.window.request_redraw();
     }
-    if !state.dragged {
-        return;
-    }
-    // Dragging down pulls content down, which decreases the offset.
-    let delta = state.drag_last_y - y;
-    state.drag_last_y = y;
-    if delta == 0.0 {
-        return;
-    }
-    if let Ok(mut tree) = state.tree.lock() {
-        let _ = tree.scroll_by(id, delta);
-    }
-    state.window.request_redraw();
-}
-
-fn end_pointer(state: &mut State) {
-    let was_down = state.pointer_down;
-    state.pointer_down = false;
-    let scroll = state.drag_scroll.take();
-    state.press_origin = None;
-    if was_down && scroll.is_some() && !state.dragged {
-        if let Some((x, y)) = state.cursor {
-            apply_pointer_click(state, x, y);
-        }
-    }
-    state.dragged = false;
 }
 
 fn apply_wheel(state: &mut State, x: f32, y: f32, delta_y: f32) {

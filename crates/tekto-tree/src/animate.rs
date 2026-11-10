@@ -103,7 +103,7 @@ impl Tree {
     }
 
     pub fn animations_running(&self) -> bool {
-        !self.transitions.is_empty()
+        !self.transitions.is_empty() || self.scroll_motion_active()
     }
 
     /// Start or merge a transition on `id`. Samples current style as the start.
@@ -170,6 +170,7 @@ impl Tree {
         }
         if self.reduced_motion {
             self.finish_transitions();
+            self.integrate_flings(self.time_ms);
             return false;
         }
         let now = self.time_ms;
@@ -220,7 +221,8 @@ impl Tree {
             }
         }
         self.transitions = still;
-        !self.transitions.is_empty()
+        self.integrate_flings(self.time_ms);
+        self.animations_running()
     }
 
     pub(crate) fn drop_transitions(&mut self, id: NodeId) {
