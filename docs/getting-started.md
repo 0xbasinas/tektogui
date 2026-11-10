@@ -81,7 +81,13 @@ cargo test --workspace
 npm test
 ```
 
-Set `TEKTO_SHOT_DIR` to choose where the snapshot PNG is written.
+Set `TEKTO_SHOT_DIR` to choose where a copy of the PNG is written. The test also compares bytes to the blessed reference at `crates/tekto/tests/snapshots/notes-headless.png`. After an intentional visual change:
+
+```bash
+TEKTO_BLESS=1 cargo test -p tekto --test headless_snapshot
+```
+
+Commit the updated reference PNG. Do not bless a change you did not mean to make.
 
 ## Targets
 
