@@ -1,4 +1,7 @@
-//! winit + softbuffer window that presents the CPU-rendered framebuffer.
+//! winit + softbuffer window. The default paint path is the CPU renderer.
+//! With the `gpu` feature, wgpu / Vello paints the frame and the same
+//! softbuffer blit presents it. If no adapter is available, the window
+//! falls back to the CPU renderer.
 //!
 //! After every layout the AccessKit tree is rebuilt (same stable ids as
 //! the scene tree). The optional `a11y-os` feature publishes that tree to
@@ -39,7 +42,7 @@ struct State {
     surface: Surface<Rc<Window>, Rc<Window>>,
     window: Rc<Window>,
     epoch: crate::lifecycle::SurfaceEpoch,
-    renderer: CpuRenderer,
+    renderer: Painter,
     tree: Arc<Mutex<Tree>>,
     clear: tekto_tree::Color,
     cursor: Option<(f32, f32)>,
@@ -105,8 +108,7 @@ impl ApplicationHandler<AppEvent> for App {
         let context = Context::new(window.clone()).expect("softbuffer context");
         let surface = Surface::new(&context, window.clone()).expect("softbuffer surface");
         let size = window.inner_size();
-        let renderer =
-            CpuRenderer::new(size.width.max(1), size.height.max(1)).expect("cpu renderer");
+        let renderer = Painter::new(size.width.max(1), size.height.max(1));
         let epoch = crate::lifecycle::begin_surface();
         self.state = Some(State {
             surface,
@@ -268,6 +270,68 @@ fn publish_accesskit(
     });
 }
 
+/// CPU by default. The `gpu` feature tries Vello first.
+enum Painter {
+    Cpu(Box<CpuRenderer>),
+    #[cfg(feature = "gpu")]
+    Gpu(Box<tekto_render::GpuRenderer>),
+}
+
+impl Painter {
+    fn new(width: u32, height: u32) -> Self {
+        #[cfg(feature = "gpu")]
+        {
+            match tekto_render::GpuRenderer::new(width, height) {
+                Ok(renderer) => {
+                    eprintln!(
+                        "tekto: painting with wgpu / Vello ({})",
+                        renderer.adapter_name()
+                    );
+                    return Painter::Gpu(Box::new(renderer));
+                }
+                Err(err) => {
+                    eprintln!("tekto: GPU renderer unavailable ({err}); using CPU");
+                }
+            }
+        }
+        Painter::Cpu(Box::new(
+            CpuRenderer::new(width, height).expect("cpu renderer"),
+        ))
+    }
+
+    fn resize(&mut self, width: u32, height: u32) -> Result<(), tekto_render::RenderError> {
+        match self {
+            Painter::Cpu(renderer) => renderer.resize(width, height),
+            #[cfg(feature = "gpu")]
+            Painter::Gpu(renderer) => renderer.resize(width, height),
+        }
+    }
+
+    fn set_scale(&mut self, scale: f32) {
+        match self {
+            Painter::Cpu(renderer) => renderer.set_scale(scale),
+            #[cfg(feature = "gpu")]
+            Painter::Gpu(renderer) => renderer.set_scale(scale),
+        }
+    }
+
+    fn paint(&mut self, tree: &Tree, clear: tekto_tree::Color) {
+        match self {
+            Painter::Cpu(renderer) => paint_tree(renderer.as_mut(), tree, clear),
+            #[cfg(feature = "gpu")]
+            Painter::Gpu(renderer) => paint_tree(renderer.as_mut(), tree, clear),
+        }
+    }
+
+    fn rgba8(&self) -> Result<Vec<u8>, tekto_render::RenderError> {
+        match self {
+            Painter::Cpu(renderer) => renderer.rgba8(),
+            #[cfg(feature = "gpu")]
+            Painter::Gpu(renderer) => renderer.rgba8(),
+        }
+    }
+}
+
 fn window_logical_and_physical(window: &Window) -> (f32, f32, f32, u32, u32) {
     let physical = window.inner_size();
     let pw = physical.width.max(1);
@@ -307,7 +371,7 @@ fn redraw(state: &mut State) {
     }
     let (_lw, _lh, _scale, pw, ph) = window_logical_and_physical(&state.window);
     if let Ok(tree) = state.tree.lock() {
-        paint_tree(&mut state.renderer, &tree, state.clear);
+        state.renderer.paint(&tree, state.clear);
         publish_accesskit(
             &tree,
             #[cfg(feature = "a11y-os")]

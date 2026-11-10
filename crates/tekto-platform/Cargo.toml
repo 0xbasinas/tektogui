@@ -18,6 +18,9 @@ desktop = ["dep:winit", "dep:softbuffer", "cpu"]
 # everyday dev and CI builds stay lean; accesskit_winit pulls accesskit_unix
 # on Linux.
 a11y-os = ["desktop", "dep:accesskit_winit"]
+# Paint the desktop window with wgpu / Vello. The CPU renderer stays
+# available as a fallback when no adapter can be created.
+gpu = ["desktop", "tekto-render/gpu"]
 
 [dependencies]
 tekto-tree = { workspace = true }

@@ -26,6 +26,14 @@ Windowed, on Linux or Windows:
 cargo run -p notes
 ```
 
+GPU paint (wgpu / Vello, off by default, not used for headless PNGs):
+
+```bash
+cargo run -p notes --features gpu
+```
+
+If the machine has no usable adapter, that window prints a line and paints with the CPU renderer instead. Headless `--out` screenshots stay on the CPU path either way.
+
 
 The window layouts in logical pixels and paints at the current scale factor (HiDPI text stays sharp). Resize relayouts the tree. Closing the window shuts down the dev server (the `tekto-dev.json` endpoint file is removed).
 

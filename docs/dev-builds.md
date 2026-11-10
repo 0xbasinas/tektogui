@@ -23,7 +23,7 @@ It does include, on purpose:
 
 Off by default (opt in only when you need them):
 
-- `gpu` — reserved; do not add wgpu or Vello to the default graph
+- `gpu` — Vello 0.10 and wgpu 29.0.4 (both MIT OR Apache-2.0), plus `pollster` 0.4 and `png` 0.18 (same license). wgpu is built with Vulkan, GLES, and Metal only (no DX12). Off by default. `cargo run -p notes --features gpu` paints the window on the GPU. `cargo test -p tekto --features gpu --lib gpu_notes` paints the Notes tree when an adapter exists (llvmpipe counts). Do not enable `gpu` on default tests or PR CI.
 - `js` — the `HostOp` protocol only (no engine)
 - `quickjs` — embeds QuickJS-ng via `rquickjs` (both MIT). Slow to compile. Do not enable on PR CI. Local check: `cargo test -p tekto-js --features quickjs`. The CLI flag is the same: `cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx`. Hot reload also needs the MIT `esbuild` binary on `PATH` (not a Rust dependency, not on PR CI).
 - `a11y-os` — `accesskit_winit`, which pulls zbus / AT-SPI on Linux
@@ -85,7 +85,7 @@ Probe edits were reverted. They are not in the tree.
 ### Why nothing was split or gated
 
 - JS is already behind `tekto`'s `js` / `quickjs` features and is not in `cargo check -p notes`.
-- `gpu` is an empty feature. wgpu and Vello are not dependencies.
+- `gpu` now depends on wgpu and Vello, but only when that feature is on. A default Notes check still does not build them.
 - `a11y-os` (and `accesskit_winit`) stays off. In-process `accesskit` stays, on purpose.
 - A one-line Notes or widget edit is well under a second. Gating widgets, or making the example depend on leaf crates instead of `tekto`, would change the default API (`notes_tree`, `window`, `button`) for a gain measured in tens of milliseconds.
 - Editing the text or platform crate still does not rebuild the heavy third-party graph; those crates are small wrappers. Their compile cost shows up on a cold check, which feature flags cannot remove from an app that windows and draws text.

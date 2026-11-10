@@ -11,8 +11,8 @@ publish = false
 [features]
 default = ["cpu"]
 cpu = ["dep:tiny-skia", "dep:skrifa", "dep:tekto-text", "dep:parley"]
-# GPU (wgpu / Vello) is not a default dep. It is heavy to compile. See issues.
-gpu = []
+# wgpu + Vello. Heavy to compile. Off unless the app asks for `gpu`.
+gpu = ["dep:vello", "dep:wgpu", "dep:pollster", "dep:png", "dep:tekto-text", "dep:parley"]
 
 [dependencies]
 tekto-tree = { workspace = true }
@@ -21,3 +21,7 @@ tiny-skia = { workspace = true, optional = true }
 skrifa = { workspace = true, optional = true }
 tekto-text = { workspace = true, optional = true }
 parley = { workspace = true, optional = true }
+vello = { workspace = true, optional = true }
+wgpu = { workspace = true, optional = true }
+pollster = { workspace = true, optional = true }
+png = { workspace = true, optional = true }

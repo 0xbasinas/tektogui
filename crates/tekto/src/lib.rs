@@ -27,7 +27,9 @@ pub use tekto_platform::{
     run_headless, run_windowed, run_windowed_with_session, start_handle, AppRuntime, DevSession,
     PlatformError, Viewport, WindowOptions,
 };
-pub use tekto_render::{paint_tree, render_tree_png, CpuRenderer, RenderError, Renderer};
+pub use tekto_render::{
+    paint_tree, render_tree_png, CpuRenderer, GpuRenderer, RenderError, Renderer,
+};
 pub use tekto_tree::{
     ease_smoothstep, reduced_motion_requested, Action, Color, FieldKey, ImeEvent, LayoutStyle,
     Node, NodeId, NodeKind, NodePatch, RecordedKey, Recording, Rect, StyleTransition, Tree,
@@ -55,6 +57,34 @@ pub fn render_headless_to_file(
 pub fn run(tree: Tree, opts: WindowOptions) -> Result<(), PlatformError> {
     let runtime = AppRuntime::new(tree, opts.title.clone());
     run_windowed(runtime, opts)
+}
+
+#[cfg(all(test, feature = "gpu"))]
+mod gpu_notes {
+    use super::*;
+
+    #[test]
+    fn gpu_notes_tree_or_no_adapter() {
+        let mut renderer = match GpuRenderer::new(640, 400) {
+            Ok(renderer) => renderer,
+            Err(err) => {
+                eprintln!("gpu notes: no adapter: {err}");
+                return;
+            }
+        };
+        eprintln!("gpu notes adapter: {}", renderer.adapter_name());
+        let mut tree = notes_tree(640.0, 400.0).unwrap();
+        layout_tree(&mut tree, 640.0, 400.0);
+        paint_tree(&mut renderer, &tree, Color::PAGE);
+        let png = renderer.to_png().expect("gpu notes png");
+        assert!(png.starts_with(b"\x89PNG"));
+        assert!(png.len() > 500, "gpu notes png too small");
+        let shot = std::path::Path::new("/workspace/tektogui-shots/i32-gpu-notes.png");
+        if let Some(parent) = shot.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(shot, &png);
+    }
 }
 
 #[cfg(test)]
