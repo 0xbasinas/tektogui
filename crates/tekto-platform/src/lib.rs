@@ -188,6 +188,9 @@ pub fn rgba_to_u32_softbuffer(rgba: &[u8]) -> Vec<u32> {
 mod gpu_policy;
 pub use gpu_policy::{gpu_paint_allowed, wants_gpu_paint};
 
+mod android_field;
+#[cfg(target_os = "android")]
+mod android_overlay;
 #[cfg(all(
     feature = "desktop",
     not(target_arch = "wasm32"),
