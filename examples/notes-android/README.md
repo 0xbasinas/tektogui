@@ -28,17 +28,21 @@ The leanest path that still produces a real, installable APK.
 source ~/.android-env.sh   # if present
 export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/27.1.12297006}"
 
+# Build (or reuse) the APK before starting the emulator. Do not compile alongside it.
 cargo apk2 build -p notes-android
 # or: cargo run -p tekto-cli -- build --target android
 
-# AVD (manual; do not add to CI). Do not start this if another heavy
-# build is running. beddcode30 often needs software emulation:
+# AVD (manual; do not add to CI), only after notes.apk exists.
+# Do not start this if another heavy build is running.
+# beddcode30 often needs software emulation:
 emulator -avd beddcode30 -no-window -memory 2048 -accel off &
 adb wait-for-device
 # wait until: adb shell getprop sys.boot_completed  ->  1
 
-cargo run -p tekto-cli -- dev --android
-# installs, launches NativeActivity, adb forward tcp:8474, writes the host endpoint
+# Install the APK you already built. `tekto dev --android` rebuilds, so do not use it while the emulator is up.
+adb install -r target/x86_64-linux-android/debug/apk/notes.apk
+adb shell am start -n com.tektogui.notes/android.app.NativeActivity
+adb forward tcp:8474 tcp:8474
 
 cargo run -p tekto-cli -- tree
 adb exec-out screencap -p > /workspace/tektogui-shots/notes-android.png
@@ -52,10 +56,11 @@ The dev server on the device listens on `127.0.0.1:8474`. After `adb forward`, h
 The default APK stays lean (no QuickJS) so nightly Android CI does not compile rquickjs for two ABIs. To reload TSX over `adb forward`, the CLI builds with `-F quickjs`:
 
 ```bash
-# Optional: build only the connected device ABI (beddcode30 is x86_64)
-export TEKTO_ANDROID_TARGET=x86_64-linux-android
-# Host CLI does not need --features quickjs (esbuild + HTTP only)
-cargo run -p tekto-cli -- dev --js examples/notes/src/app.tsx --android
+# Build the QuickJS APK first, emulator stopped. beddcode30 is x86_64.
+cargo apk2 build -p notes-android -F quickjs --target x86_64-linux-android
+# Then start beddcode30 (commands above), install that APK, and adb forward tcp:8474.
+# Host esbuild + POST /reload do not need --features quickjs.
+# `tekto dev --js --android` rebuilds the APK; do not run it while the emulator is up.
 ```
 
 The first frame may still be the Rust Notes tree; `POST /reload` then swaps in the TSX bundle. Saving the `.tsx` rebuilds and posts again.
@@ -81,11 +86,13 @@ On AVD `beddcode30`, only when it is free. Do not start the emulator if another 
 source ~/.android-env.sh
 export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/27.1.12297006}"
 
+# Build (or reuse) the APK first. Do not compile alongside the emulator.
+cargo apk2 build -p notes-android --target x86_64-linux-android
+
 emulator -avd beddcode30 -no-window -memory 2048 -accel off &
 adb wait-for-device
 until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done
 
-cargo apk2 build -p notes-android --target x86_64-linux-android
 adb install -r target/x86_64-linux-android/debug/apk/notes.apk
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 sleep 3
