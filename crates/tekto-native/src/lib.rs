@@ -6,8 +6,8 @@
 //! Linux and Windows.
 //! Linux notifications use the freedesktop session bus. The system tray is
 //! behind the `tray` feature (StatusNotifierItem on Linux, `Shell_NotifyIconW`
-//! on Windows, no extra crate). Linux global shortcuts are behind the
-//! `shortcuts` feature (an X11 key grab). Windows shortcuts stay unsupported.
+//! on Windows, no extra crate). Linux and Windows global shortcuts are behind
+//! the `shortcuts` feature (an X11 key grab, or `RegisterHotKey`).
 //! The API is stable for apps and for the JS [`NativeOp`] hook.
 
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,8 @@ mod windows;
 mod windows_dialog;
 #[cfg(target_os = "windows")]
 mod windows_notify;
+#[cfg(all(target_os = "windows", feature = "shortcuts"))]
+mod windows_shortcuts;
 #[cfg(all(target_os = "windows", feature = "tray"))]
 mod windows_tray;
 
@@ -240,7 +242,8 @@ pub trait SystemTray {
 
 pub trait GlobalShortcuts {
     /// Bind `accelerator` (for example `Ctrl+K` or `Ctrl+Shift+F1`) to `id`.
-    /// On Linux this needs the `shortcuts` feature and an X11 display.
+    /// Needs the `shortcuts` feature. Linux also needs an X11 display.
+    /// Windows uses `RegisterHotKey` on a background thread.
     fn register(&self, accelerator: &str, id: &str) -> Result<(), NativeError>;
     /// Drop the binding for `id`. A missing id is success.
     fn unregister(&self, id: &str) -> Result<(), NativeError>;
@@ -478,7 +481,14 @@ impl GlobalShortcuts for StubNative {
         {
             linux_shortcuts::register(accelerator, id)
         }
-        #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+        #[cfg(all(target_os = "windows", feature = "shortcuts"))]
+        {
+            windows_shortcuts::register(accelerator, id)
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "shortcuts"),
+            all(target_os = "windows", feature = "shortcuts")
+        )))]
         {
             let _ = (accelerator, id);
             Err(unsupported("shortcuts.register"))
@@ -489,7 +499,14 @@ impl GlobalShortcuts for StubNative {
         {
             linux_shortcuts::unregister(id)
         }
-        #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+        #[cfg(all(target_os = "windows", feature = "shortcuts"))]
+        {
+            windows_shortcuts::unregister(id)
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "shortcuts"),
+            all(target_os = "windows", feature = "shortcuts")
+        )))]
         {
             let _ = id;
             Err(unsupported("shortcuts.unregister"))
@@ -500,7 +517,14 @@ impl GlobalShortcuts for StubNative {
         {
             linux_shortcuts::take_activation()
         }
-        #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+        #[cfg(all(target_os = "windows", feature = "shortcuts"))]
+        {
+            windows_shortcuts::take_activation()
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "shortcuts"),
+            all(target_os = "windows", feature = "shortcuts")
+        )))]
         {
             Err(unsupported("shortcuts.take_activation"))
         }
@@ -510,7 +534,14 @@ impl GlobalShortcuts for StubNative {
         {
             linux_shortcuts::set_on_activation(on_activation)
         }
-        #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+        #[cfg(all(target_os = "windows", feature = "shortcuts"))]
+        {
+            windows_shortcuts::set_on_activation(on_activation)
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "shortcuts"),
+            all(target_os = "windows", feature = "shortcuts")
+        )))]
         {
             let _ = on_activation;
             Err(unsupported("shortcuts.on_activation"))
@@ -547,9 +578,11 @@ mod tests {
         assert_eq!(op, NativeOp::ShortcutsTakeActivation);
     }
 
-    /// Without the `shortcuts` feature, and on Windows (issue #49), the calls
-    /// stay `Unsupported`.
-    #[cfg(not(all(target_os = "linux", feature = "shortcuts")))]
+    /// Without the `shortcuts` feature the calls stay `Unsupported`.
+    #[cfg(not(any(
+        all(target_os = "linux", feature = "shortcuts"),
+        all(target_os = "windows", feature = "shortcuts")
+    )))]
     #[test]
     fn shortcut_ops_report_unsupported() {
         use super::*;

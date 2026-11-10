@@ -53,7 +53,7 @@ Still in Month 1:
 - Web paint: CPU renderer to canvas (landed: `@tektogui/wasm/canvas`). WebGPU is optional (`tekto-wasm` feature `gpu`, `@tektogui/wasm/gpu`) and falls back to that blit. WebGL2 stays on the blit.
 - TypeScript apps on the browser engine, same JSX API (landed: `node packages/wasm/dev.js` runs the Notes TSX sketch on the wasm core)
 - File open/save dialogs on Windows (`GetOpenFileNameW` / `GetSaveFileNameW`, compile-checked; a live dialog is still issue #45). Linux uses zenity; see `docs/architecture.md`
-- Global shortcuts on desktop (Linux shortcuts are the optional `shortcuts` feature; Windows shortcuts are still open. Tray is the optional `tray` feature on Linux and Windows; a live Windows tray check is still open)
+- Global shortcuts on desktop (Linux and Windows shortcuts are the optional `shortcuts` feature; a live Windows hotkey check is still open. Tray is the optional `tray` feature on Linux and Windows; a live Windows tray check is still open)
 - Better list virtualization and scroll feel
 
 ## Month 5 — mobile polish and plugins

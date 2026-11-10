@@ -64,7 +64,7 @@ Short, command-accurate how-tos live in `.agents/skills/<slug>/SKILL.md`. The sa
 
 `tekto-js` is the `HostOp` protocol. Desktop embeds QuickJS-ng behind `--features quickjs` (off by default, not on PR CI). Web uses the browser engine and calls the same ops on a WASM module.
 
-`tekto-native` is the plugin API for files, dialogs, clipboard, notifications, tray, and global shortcuts. Fill in one platform at a time; stubs should return a clear error. The tray is the optional `tray` feature (off by default): StatusNotifierItem on Linux, `Shell_NotifyIconW` on Windows. Linux global shortcuts are the optional `shortcuts` feature (X11 grab via `x11rb`, off by default). Windows shortcuts stay unsupported.
+`tekto-native` is the plugin API for files, dialogs, clipboard, notifications, tray, and global shortcuts. Fill in one platform at a time; stubs should return a clear error. The tray is the optional `tray` feature (off by default): StatusNotifierItem on Linux, `Shell_NotifyIconW` on Windows. Linux and Windows global shortcuts are the optional `shortcuts` feature (X11 grab via `x11rb` on Linux, `RegisterHotKey` on Windows, off by default). A live Windows hotkey check is still open.
 
 ## How to check a change
 
