@@ -1,7 +1,6 @@
 /** TypeScript + JSX sketch of this app.
  *
- * The JSX runtime is not yet wired to the Rust tree (Month 2).
- * This file is here so the UI can be designed in the open.
+ * JSX is lowered to HostOps with `renderToOps` / `mount` from `@tektogui/jsx-runtime`.
  */
 
 import { createSignal } from "@tektogui/core";
