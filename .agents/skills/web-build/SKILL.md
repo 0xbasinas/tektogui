@@ -15,7 +15,7 @@ Canvas blit and WebGPU paint are not in this crate (`#41`). `packages/wasm/smoke
 - `packages/wasm` (`@tektogui/wasm`) — small JS glue: `connectWasm`, `applyOps`, `renderPng`, and `create` / `setText` / `setProp` / `append` / `remove` for `mount`.
 - `cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js` — the app facade without the desktop shell.
 
-No new crates were added for the ABI (no `wasm-bindgen`). Existing deps stay MIT / Apache-2.0 / BSD / zlib.
+No new crates were added for the ABI (no `wasm-bindgen`). Direct deps added for this path stay MIT / Apache-2.0 / BSD / zlib. The text stack (Parley / ICU) already pulls Unicode License v3 crates into both the default host tree and `tekto-wasm`: `icu_segmenter`, `icu_normalizer`, `icu_provider`, `zerovec`, `writeable`, `yoke`, `tinystr`, and the other `icu_*` data crates, plus `unicode-ident` (`(MIT OR Apache-2.0) AND Unicode-3.0`). Unicode-3.0 is permissive. It is not MIT, Apache-2.0, BSD, or zlib, and it is not GPL or LGPL. Do not add a new direct dependency outside MIT / Apache-2.0 / BSD / zlib. Do not rip out the text stack to drop these transitives.
 
 ## Check
 

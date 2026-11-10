@@ -47,7 +47,7 @@ Short, command-accurate how-tos live in `.agents/skills/<slug>/SKILL.md`. The sa
 - One crate does one job. Put new code in the crate that already owns that job.
 - Public APIs should be small and easy to read.
 - Default features must stay lean. Optional, heavy work (QuickJS, wgpu / Vello, `a11y-os` / accesskit_winit) goes behind feature flags and is off by default.
-- Only MIT, Apache-2.0, BSD, or zlib dependencies. If you add a crate, write the license in the PR.
+- New direct dependencies: only MIT, Apache-2.0, BSD, or zlib. If you add a crate, write the license in the PR. Do not add GPL or LGPL. The existing text stack already has Unicode License v3 transitives (ICU, `zerovec`, `unicode-ident`). On Windows, `arboard` pulls BSL-1.0 `clipboard-win` and `error-code`. Flag those; do not treat the graph as MIT/Apache/BSD/zlib only.
 - Do not invent a new DSL. TypeScript and Rust are enough.
 - Do not put HTML, CSS, or DOM types in the public app API. The web target paints our tree; apps never see the DOM.
 - Every interactive widget needs a stable node id and an AccessKit role and name. The AccessKit tree *is* the agent tree. Do not build a second parallel tree.
