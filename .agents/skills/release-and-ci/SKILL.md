@@ -28,7 +28,7 @@ Triggers: pull requests, pushes to `nightly` or `main`, and `workflow_dispatch`.
 
 | Job | When it runs | What it does |
 |---|---|---|
-| Linux check | every PR and every push | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets` |
+| Linux check | every PR and every push | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`. That test step is the replay check and the screenshot check: `crates/tekto/tests/record_replay.rs` loads `fixtures/session.json`, and `headless_snapshot` compares PNG bytes to `tests/snapshots/notes-headless.png`. Do not add a second PR job for them. |
 | Windows compile | `push` to `nightly`, or manual dispatch with `full=true` | `cargo check --workspace --all-targets` on `windows-latest` |
 | Android compile | `push` to `nightly`, or manual dispatch with `full=true` | `cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu` |
 | WASM core check | `push` to `nightly`, or any `workflow_dispatch` | `cargo check -p tekto-wasm --target wasm32-unknown-unknown` and `cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js` |
@@ -39,7 +39,7 @@ Triggers: pull requests, pushes to `nightly` or `main`, and `workflow_dispatch`.
 
 ## Packaging (local, not CI)
 
-Notes ships as a small release binary. Do not enable `quickjs` or `gpu` for the default package. Do not commit `dist/` artifacts. No store signing and no MSI.
+Notes ships as a small release binary. Do not enable `quickjs` or `gpu` for the default package. Do not commit `dist/` artifacts. No store signing and no MSI. Requirements we have not met are in [docs/signing.md](../../../docs/signing.md). Do not buy certificates, commit keystores, or add a macOS signing job.
 
 ```bash
 export CARGO_TARGET_DIR=/path/to/this/worktree/target

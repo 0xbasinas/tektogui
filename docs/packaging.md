@@ -1,6 +1,6 @@
 # Packaging experiments
 
-First pass at shipping the Notes example. No store signing. These steps are local only. They are not part of GitHub Actions.
+First pass at shipping the Notes example. Builds are unsigned. What Play, the App Store, Authenticode, and macOS notarization would require is in [signing.md](signing.md). We do not do those steps. These packaging steps are local only. They are not part of GitHub Actions.
 
 The default package is a **release** build of `examples/notes`. It does not turn on `quickjs` or `gpu`. The release profile uses thin LTO, one codegen unit, and `strip = "symbols"` (see the workspace `Cargo.toml`).
 
@@ -57,6 +57,6 @@ tektogui-notes-windows-x86_64/
   README.txt     # how to run it; say it is unsigned
 ```
 
-Zip that folder, for example `tektogui-notes-windows-x86_64.zip`. Ship the zip or the folder. Users may see a SmartScreen warning because the binary is unsigned. That is expected until a later signing experiment.
+Zip that folder, for example `tektogui-notes-windows-x86_64.zip`. Ship the zip or the folder. Users may see a SmartScreen warning because the binary is unsigned. That is expected. Signing requirements are listed in [signing.md](signing.md). We have not bought a certificate.
 
 Expected layout matches Linux: one binary plus a short readme. Do not add `quickjs` or `gpu` to this package.
