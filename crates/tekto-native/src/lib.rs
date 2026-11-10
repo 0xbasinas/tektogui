@@ -2,7 +2,8 @@
 //!
 //! Each capability is a small trait so platforms can be filled in one
 //! at a time (Windows, Linux, Android, later macOS, iOS, and web).
-//! Text clipboard and notifications are implemented on Linux and Windows.
+//! Text clipboard, notifications, and open/save dialogs are implemented on
+//! Linux and Windows.
 //! Linux notifications use the freedesktop session bus. The Linux system
 //! tray is behind the `tray` feature (StatusNotifierItem on the session
 //! bus, no extra crate). Linux global shortcuts are behind the `shortcuts`
@@ -24,6 +25,8 @@ mod linux_shortcuts;
 mod linux_tray;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(any(target_os = "windows", test))]
+mod windows_dialog;
 #[cfg(target_os = "windows")]
 mod windows_notify;
 
@@ -296,7 +299,11 @@ impl Files for StubNative {
         {
             linux_dialog::show(false)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            windows_dialog::show(false)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             Err(unsupported("files.open_dialog"))
         }
@@ -307,7 +314,11 @@ impl Files for StubNative {
         {
             linux_dialog::show(true)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            windows_dialog::show(true)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             Err(unsupported("files.save_dialog"))
         }

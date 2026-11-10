@@ -5,9 +5,9 @@ description: Implement a tekto-native plugin (files, open/save dialogs, clipboar
 
 # Add a native feature
 
-`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs are still `NativeError::Unsupported` (issue #45). The Linux system tray is the `tray` feature in `src/linux_tray.rs` (no extra crate). Windows tray stays `Unsupported` (issue #47). Linux global shortcuts are the `shortcuts` feature in `src/linux_shortcuts.rs` (`x11rb` 0.13.2, MIT OR Apache-2.0). Windows shortcuts stay `Unsupported` (issue #49). Other platforms return `NativeError::Unsupported { capability, platform }`. Without `tray` or `shortcuts`, those methods also return `Unsupported`.
+`crates/tekto-native/src/lib.rs` holds small traits: `Files`, `Clipboard`, `Notifications`, `SystemTray`, `GlobalShortcuts`. `StubNative` is the current implementation. Linux text clipboard (`get_text` / `set_text`) uses `arboard` (MIT OR Apache-2.0, `default-features = false`, `wayland-data-control`) in `src/linux.rs`. Linux file reads and writes are sandboxed in the same file (`libc` 0.2, MIT OR Apache-2.0, Linux-only). Linux open and save dialogs call the installed `zenity` helper from `src/linux_dialog.rs` (no extra crate). Linux notifications (`Notifications::show`) talk to the freedesktop notification service in `src/linux_notify.rs` (session bus only; no extra crate). Windows text clipboard uses the same `arboard` crate without the Wayland feature (`src/windows.rs`). Windows file reads and writes use the same trait methods, confined with `NtCreateFile` (no extra crate). Windows notifications use `Shell_NotifyIconW` in `src/windows_notify.rs` (no extra crate). Windows open and save dialogs use `GetOpenFileNameW` and `GetSaveFileNameW` in `src/windows_dialog.rs` (no extra crate). The Linux system tray is the `tray` feature in `src/linux_tray.rs` (no extra crate). Windows tray stays `Unsupported` (issue #47). Linux global shortcuts are the `shortcuts` feature in `src/linux_shortcuts.rs` (`x11rb` 0.13.2, MIT OR Apache-2.0). Windows shortcuts stay `Unsupported` (issue #49). Other platforms return `NativeError::Unsupported { capability, platform }`. Without `tray` or `shortcuts`, those methods also return `Unsupported`.
 
-Windows code is compile-checked on Linux with `cargo check --target x86_64-pc-windows-gnu -p tekto-native` (no linker, no Windows runtime). Clipboard, files, and notifications still need a Windows machine. Do not treat that check as a runtime test. A toast was not shown on the Linux host that added this path.
+Windows code is compile-checked on Linux with `cargo check --target x86_64-pc-windows-gnu -p tekto-native` (no linker, no Windows runtime). Clipboard, files, notifications, and file dialogs still need a Windows machine. Do not treat that check as a runtime test. A toast was not shown on the Linux host that added the notification path, and a file dialog was not opened on the host that added the dialog path.
 
 On Windows, `arboard` links `clipboard-win` 5.4.3 and `error-code` 3.4.0, both Boost Software License 1.0. That is outside the MIT / Apache-2.0 / BSD / zlib set used for crates this repo adds directly. `windows-sys` and `windows-link` (pulled by `clipboard-win`) are MIT OR Apache-2.0. The file sandbox does not add a crate.
 
@@ -27,10 +27,10 @@ File ops (Linux and Windows; other platforms return `Unsupported` for `files.rea
 - `{"op":"filesReadBytes","path":"blob"}` — returns `Some` of a JSON byte array encoded as a string, for example `"[0,255]"`. The op result type is still `Option<String>`.
 - `{"op":"filesWriteBytes","path":"blob","bytes":[0,255]}` — `bytes` is a JSON array of numbers 0–255 (`Vec<u8>`). Returns `None`.
 
-Dialog ops (Linux only; Windows and other platforms return `Unsupported` for `files.open_dialog` / `files.save_dialog`, issue #45):
+Dialog ops (Linux and Windows; other platforms return `Unsupported` for `files.open_dialog` / `files.save_dialog`):
 
 - `{"op":"filesOpenDialog"}` — `Ok(Some(absolute path))`, or `Ok(None)` on cancel
-- `{"op":"filesSaveDialog"}` — same result shape. Save asks zenity to confirm overwrite.
+- `{"op":"filesSaveDialog"}` — same result shape. Save asks the user to confirm overwrite.
 
 Notification op (Linux and Windows; other platforms return `Unsupported` for `notifications.show`):
 
@@ -98,7 +98,17 @@ That command does not link or run on Windows. Icon lifetime, session failures, a
 
 ## Linux open and save dialogs
 
-`Files::open_dialog` and `Files::save_dialog` on Linux run `zenity --file-selection` from `src/linux_dialog.rs`. Save also passes `--save --confirm-overwrite`. No new crate. A chosen file is `Ok(Some(path))` only when the path is absolute. Cancel (zenity exit code 1 and empty stderr) is `Ok(None)`. If both `DISPLAY` and `WAYLAND_DISPLAY` are missing or empty, if `zenity` cannot be started, or if the helper fails another way, the error is `NativeError::Unavailable` with reason `no usable display or zenity file dialog`. A non-UTF-8 path is `NativeError::Message`. Do not open displays `:1` or `:2`. Windows still returns `Unsupported` for `files.open_dialog` and `files.save_dialog` (issue #45). Rust can open the selected path with normal filesystem APIs. The TypeScript bridge returns the same path string and does not yet read that file.
+`Files::open_dialog` and `Files::save_dialog` on Linux run `zenity --file-selection` from `src/linux_dialog.rs`. Save also passes `--save --confirm-overwrite`. No new crate. A chosen file is `Ok(Some(path))` only when the path is absolute. Cancel (zenity exit code 1 and empty stderr) is `Ok(None)`. If both `DISPLAY` and `WAYLAND_DISPLAY` are missing or empty, if `zenity` cannot be started, or if the helper fails another way, the error is `NativeError::Unavailable` with reason `no usable display or zenity file dialog`. A non-UTF-8 path is `NativeError::Message`. Do not open displays `:1` or `:2`. Rust can open the selected path with normal filesystem APIs. The TypeScript bridge returns the same path string and does not yet read that file.
+
+## Windows open and save dialogs
+
+`Files::open_dialog` and `Files::save_dialog` on Windows call `GetOpenFileNameW` and `GetSaveFileNameW` from `comdlg32` (`src/windows_dialog.rs`). No extra crate. The struct is `OPENFILENAMEW`. Flags are `OFN_EXPLORER`, `OFN_HIDEREADONLY`, `OFN_NOCHANGEDIR`, and `OFN_PATHMUSTEXIST`. Open also sets `OFN_FILEMUSTEXIST`. Save also sets `OFN_OVERWRITEPROMPT` (same idea as zenity `--confirm-overwrite`). The filter is all files. The path buffer is 32768 UTF-16 units. A chosen file is `Ok(Some(path))` only when the path is a drive path (`C:\...`) or a UNC path (`\\server\share\...`). Cancel is `Get*FileNameW` returning false and `CommDlgExtendedError` returning 0, which is `Ok(None)`. Any other dialog error is `NativeError::Unavailable` with reason `Windows common file dialog is unavailable` (no interactive desktop, initialization failure, or a buffer the API rejects). A path that is not absolute uses reason `file dialog did not return an absolute path`. A UTF-16 sequence that is not Unicode is `NativeError::Message`. The call blocks on the thread that invokes it. It does not change the process directory. Headless and non-Windows builds do not call this API. There is no Windows runtime test; this host did not open a dialog. Compile-check only:
+
+```bash
+cargo check --target x86_64-pc-windows-gnu -p tekto-native
+```
+
+That command does not link or run on Windows. Issue #45 stays open until a Windows machine shows the dialog, confirms cancel, and confirms overwrite.
 
 ## Windows file sandbox
 
