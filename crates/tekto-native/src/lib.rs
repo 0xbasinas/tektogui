@@ -308,6 +308,14 @@ mod tests {
         if std::env::var_os("TEKTO_CLIPBOARD_LIVE").is_some() && !linux::skip_live_clipboard() {
             let probe = "tektogui-clipboard-probe";
             native().set_text(probe).expect("set clipboard text");
+            // A second arboard handle must still see the text after `set_text`
+            // returns. Dropping the owner on X11 clears the selection when no
+            // clipboard manager is running.
+            let got_fresh = arboard::Clipboard::new()
+                .expect("second clipboard")
+                .get_text()
+                .expect("text still owned after set");
+            assert_eq!(got_fresh, probe);
             let got = native().get_text().expect("get clipboard text");
             assert_eq!(got, probe);
             let via = apply_native_op(&NativeOp::ClipboardGetText)
