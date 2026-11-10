@@ -13,6 +13,9 @@ pub use tekto_mcp::{
     SharedTreeHandle,
 };
 pub use tekto_native::{current_platform, native, Clipboard, Files, NativeError, Notifications};
+pub use tekto_platform::lifecycle::{
+    handle_lifecycle, on_resumed, on_suspended, surface_is_live, AppLifecycle,
+};
 pub use tekto_platform::{
     run_headless, run_windowed, start_handle, AppRuntime, PlatformError, Viewport, WindowOptions,
 };

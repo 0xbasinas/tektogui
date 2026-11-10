@@ -93,8 +93,27 @@ TEKTO_BLESS=1 cargo test -p tekto --test headless_snapshot
 
 Commit the updated reference PNG. Do not bless a change you did not mean to make.
 
+## Profiles
+
+- `cargo test` / `cargo run` uses `dev` (incremental, `debug = 1`).
+- `cargo run --profile dev-fast -p notes` turns on `opt-level = 1` for a slightly snappier local window.
+- `cargo build --release -p notes` is for a small binary (`thin` LTO).
+
+See [dev-builds.md](dev-builds.md) for default features, what is *not* in the default crate graph, and recorded CI compile times.
+
 ## Targets
 
-- Linux and Windows: windowed + headless.
-- Android: compile the CPU core (`cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu`). Running on a device comes later.
+- Linux: windowed + headless. This is what everyday CI runs.
+- Windows: the CPU window path (`winit` + `softbuffer` + `tiny-skia`) is the same code as Linux. Check it with `cargo check --target x86_64-pc-windows-msvc` (the MSVC target, not MinGW). To *run* a window you need a Windows machine with the Visual Studio Build Tools (MSVC + Windows SDK) and a linker. MinGW is not used. A real window has not been run from this Linux box; see issue #3.
+- Android: compile the CPU core and the Notes skeleton (no desktop/winit shell):
+
+  ```bash
+  source ~/.android-env.sh   # if present; sets ANDROID_HOME and a JDK
+  rustup target add aarch64-linux-android
+  cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu
+  cargo check -p notes-android --target aarch64-linux-android
+  # or: cargo ndk -t arm64-v8a check -p notes-android
+  ```
+
+  SDK root is `~/Android/Sdk` (or `$ANDROID_HOME`). This repo uses NDK `27.1.12297006`. `Resumed` / `Suspended` hooks are stubbed in `tekto` (`on_resumed` / `on_suspended`) and as `tekto_on_resumed` / `tekto_on_suspended` in `examples/notes-android`. There is no Activity/APK yet, so the app cannot be installed on a device from this crate alone. Details: [examples/notes-android/README.md](../examples/notes-android/README.md).
 - Web: not built yet; the platform and JS layers are shaped so a WASM + canvas / WebGPU backend can plug in.

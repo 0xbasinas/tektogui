@@ -54,7 +54,7 @@ Apps never call tiny-skia or wgpu directly.
 `tekto-platform` hides the host:
 
 - **Desktop (Windows, Linux, macOS):** winit window, softbuffer presents CPU frames.
-- **Android:** the same `AppRuntime` and headless path compile today; the window / activity shell is a later issue. Handle `Resumed` / `Suspended` when the shell lands (drop the GPU or window surface on pause).
+- **Android:** the same `AppRuntime` and headless path compile today (`examples/notes-android` is a `cdylib` for `aarch64-linux-android`). `Resumed` / `Suspended` hooks are stubbed and must drop the window or GPU surface when a real Activity lands.
 - **Web:** planned. The Rust core builds to WASM. Painting uses WebGPU / WebGL2 (GPU backend) or the CPU renderer to a `<canvas>`. TypeScript runs in the **browser JS engine**, not QuickJS. The public API stays the same; no DOM in app code.
 
 ## Agents
