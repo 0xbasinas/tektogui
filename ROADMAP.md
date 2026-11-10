@@ -32,7 +32,7 @@ Still in Month 1:
 - TS hot reload on desktop
 - Live edits write back to source where we can
 - Android window / activity, `Resumed` / `Suspended` handled safely
-- More widgets (button, field, list start)
+- More widgets (button and a basic text field are in; list is still to do). Full IME stays in Month 3
 - Clipboard and basic file read/write on Windows and Linux
 - Faster incremental builds; investigate Rust dylib / hot-patch
 - Scroll container (basic)
