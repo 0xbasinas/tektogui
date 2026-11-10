@@ -17,6 +17,23 @@ pub use store::{StateInfo, Store, StoreError};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::Arc;
+
+/// A committed user action on a tree node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TreeEvent {
+    Click(NodeId),
+    Changed(NodeId),
+}
+
+type EventCallback = dyn Fn(&mut Tree, TreeEvent) + Send + Sync;
+#[derive(Clone)]
+struct EventHandler(Arc<EventCallback>);
+impl fmt::Debug for EventHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("EventHandler")
+    }
+}
 
 /// Stable id of a scene node. Never reused for the life of a [`Tree`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
@@ -495,6 +512,7 @@ impl std::error::Error for TreeError {}
 /// The scene tree.
 #[derive(Clone, Debug)]
 pub struct Tree {
+    event_handler: Option<EventHandler>,
     next_id: u64,
     root: Option<NodeId>,
     nodes: HashMap<NodeId, Node>,
@@ -519,6 +537,7 @@ impl Default for Tree {
 impl Tree {
     pub fn new() -> Self {
         Self {
+            event_handler: None,
             next_id: 1,
             root: None,
             nodes: HashMap::new(),
@@ -529,6 +548,20 @@ impl Tree {
             reduced_motion: false,
             gesture: None,
             flings: Vec::new(),
+        }
+    }
+
+    /// Install a synchronous handler for clicks and committed field changes.
+    pub fn set_event_handler(
+        &mut self,
+        handler: impl Fn(&mut Tree, TreeEvent) + Send + Sync + 'static,
+    ) {
+        self.event_handler = Some(EventHandler(Arc::new(handler)));
+    }
+
+    fn emit(&mut self, event: TreeEvent) {
+        if let Some(handler) = self.event_handler.clone() {
+            (handler.0)(self, event);
         }
     }
 
@@ -737,6 +770,7 @@ impl Tree {
                 node.caret = node.text.as_deref().unwrap_or("").chars().count();
             }
         }
+        self.emit(TreeEvent::Click(id));
         Ok(())
     }
 
@@ -837,6 +871,7 @@ impl Tree {
         node.preedit_cursor = None;
         node.text = Some(plain);
         node.caret = caret;
+        self.emit(TreeEvent::Changed(id));
         Ok(true)
     }
 
@@ -934,6 +969,9 @@ impl Tree {
         }
         node.text = Some(chars.into_iter().collect());
         node.caret = caret;
+        if current != node.text.as_deref().unwrap_or("") {
+            self.emit(TreeEvent::Changed(id));
+        }
         Ok(())
     }
 
@@ -1007,6 +1045,7 @@ impl Tree {
     }
 
     pub fn patch(&mut self, id: NodeId, patch: NodePatch) -> Result<(), TreeError> {
+        let changed_text = patch.text.is_some();
         let node = self.nodes.get_mut(&id).ok_or_else(|| TreeError {
             message: format!("unknown node {id}"),
         })?;
@@ -1047,6 +1086,9 @@ impl Tree {
         }
         if let Some(gap) = patch.gap {
             node.layout.gap = gap;
+        }
+        if changed_text {
+            self.emit(TreeEvent::Changed(id));
         }
         Ok(())
     }
