@@ -86,10 +86,8 @@ pub fn text(
         n.name = Some(content.into());
         n.color = Some(color);
         n.font_size = size;
-        n.layout = LayoutStyle {
-            height: (size * 1.4).max(16.0),
-            ..LayoutStyle::default()
-        };
+        // Height is left unset so Taffy can measure the line box with Parley.
+        n.layout = LayoutStyle::default();
     }
     Ok(id)
 }
