@@ -45,7 +45,8 @@ pub struct AndroidFieldSync {
     seen_tree: String,
     seen_tree_caret: i32,
     /// Tree text posted to the overlay and not yet seen in a poll.
-    /// A poll of the previous native value is not user input while this is set.
+    /// While this is set, only a sample equal to it is an acknowledgment.
+    /// Any other sample stays out of the tree.
     pending_push: Option<(String, i32)>,
 }
 
@@ -174,10 +175,11 @@ pub fn overlay_suppresses_keys(class_ready: bool, text_field_focused: bool) -> b
 /// Decide the overlay command and whether the tree should take the native string.
 ///
 /// A new focus pushes the tree value. That push stays pending until a poll
-/// shows it: `FieldOverlay.sync` runs on the UI thread, so the next poll can
-/// still be the previous field. A pending push is not user input.
-/// After the push lands, a native change wins (the user typed). A tree change
-/// the native field has not shown yet is pushed (an agent patch) the same way.
+/// matches it. `FieldOverlay.sync` runs on the UI thread, so a poll can still
+/// be the previous field, the text left in a hidden overlay, or an earlier
+/// push that a later tree change replaced. None of those samples are user
+/// input. After the push lands, a native change wins (the user typed). A tree
+/// change the native field has not shown yet is pushed (an agent patch).
 pub fn step_android_field(
     sync: &mut AndroidFieldSync,
     focused: Option<&FocusedField>,
@@ -193,19 +195,14 @@ pub fn step_android_field(
     let tree_text = plain_text(&field.text);
     let tree_caret = clamp_scalar(&tree_text, field.caret as i32);
     if sync.focus != Some(field.id) {
-        let seen_native = sync.seen_native.clone();
-        let seen_caret = sync.seen_caret;
         *sync = AndroidFieldSync {
             focus: Some(field.id),
-            seen_native,
-            seen_caret,
             seen_tree: tree_text.clone(),
             seen_tree_caret: tree_caret,
             pending_push: Some((tree_text.clone(), tree_caret)),
+            ..AndroidFieldSync::default()
         };
-        return show(field, true, tree_text, tree_caret, None);
-    }
-    if tree_text != sync.seen_tree || tree_caret != sync.seen_tree_caret {
+    } else if tree_text != sync.seen_tree || tree_caret != sync.seen_tree_caret {
         sync.pending_push = Some((tree_text.clone(), tree_caret));
         sync.seen_tree = tree_text.clone();
         sync.seen_tree_caret = tree_caret;
@@ -221,11 +218,7 @@ pub fn step_android_field(
             sync.seen_tree_caret = native_caret;
             return show(field, false, native_text, native_caret, None);
         }
-        if native_text == sync.seen_native && native_caret == sync.seen_caret {
-            return show(field, true, pending_text, pending_caret, None);
-        }
-        // The push and a later edit can both land before the next poll.
-        sync.pending_push = None;
+        return show(field, true, pending_text, pending_caret, None);
     }
     if native_text != sync.seen_native || native_caret != sync.seen_caret {
         sync.seen_native = native_text.clone();
@@ -303,6 +296,8 @@ mod tests {
         let mut sync = AndroidFieldSync::default();
         let focused = field("Hi", 2);
         let _ = step_android_field(&mut sync, Some(&focused), &sample("", 0));
+        let ack = step_android_field(&mut sync, Some(&focused), &sample("Hi", 2));
+        assert!(ack.write.is_none());
         let step = step_android_field(&mut sync, Some(&focused), &sample("Hi你", 3));
         assert_eq!(step.write, Some(("Hi你".into(), 3)));
         match &step.command {
@@ -350,6 +345,8 @@ mod tests {
             }
             AndroidFieldCommand::Hide => panic!("expected show"),
         }
+        let ack = step_android_field(&mut fresh, Some(&dirty), &sample("ab", 2));
+        assert!(ack.write.is_none());
         let step = step_android_field(&mut fresh, Some(&dirty), &sample("a\u{1}b", 1));
         assert_eq!(step.write.as_ref().map(|(t, _)| t.as_str()), Some("ab"));
     }
@@ -439,6 +436,66 @@ mod tests {
         let step = step_android_field(&mut sync, Some(&focused), &sample("😀a", 2));
         assert_eq!(step.write, Some(("😀a".into(), 1)));
         assert_eq!(show_text(&step).2, 2);
+    }
+
+    #[test]
+    fn stale_overlay_after_blur_does_not_clobber_the_new_field() {
+        let mut sync = AndroidFieldSync::default();
+        let old = field("old", 3);
+        let _ = step_android_field(&mut sync, Some(&old), &sample("", 0));
+        let ack = step_android_field(&mut sync, Some(&old), &sample("old", 3));
+        assert!(ack.write.is_none());
+        let hidden = step_android_field(&mut sync, None, &sample("old", 3));
+        assert_eq!(hidden.command, AndroidFieldCommand::Hide);
+
+        let mut next = field("new", 3);
+        next.id = 8;
+        let step = step_android_field(&mut sync, Some(&next), &sample("old", 3));
+        assert!(step.write.is_none());
+        let (push, text, caret) = show_text(&step);
+        assert!(push);
+        assert_eq!(text, "new");
+        assert_eq!(caret, 3);
+        let step = step_android_field(&mut sync, Some(&next), &sample("old", 3));
+        assert!(
+            step.write.is_none(),
+            "a second poll of the hidden overlay must not write `old`"
+        );
+        let (push, text, _) = show_text(&step);
+        assert!(push);
+        assert_eq!(text, "new");
+        let step = step_android_field(&mut sync, Some(&next), &sample("new", 3));
+        assert!(step.write.is_none());
+        assert!(!show_text(&step).0);
+    }
+
+    #[test]
+    fn intermediate_queued_push_is_not_user_input() {
+        let mut sync = AndroidFieldSync::default();
+        let first = field("a", 1);
+        let ack = step_android_field(&mut sync, Some(&first), &sample("a", 1));
+        assert!(ack.write.is_none());
+
+        let mid = field("b", 1);
+        let step = step_android_field(&mut sync, Some(&mid), &sample("a", 1));
+        assert!(step.write.is_none());
+        assert_eq!(show_text(&step).1, "b");
+
+        let latest = field("c", 1);
+        let step = step_android_field(&mut sync, Some(&latest), &sample("b", 1));
+        assert!(
+            step.write.is_none(),
+            "the previously queued `b` is not the latest tree value"
+        );
+        let (push, text, _) = show_text(&step);
+        assert!(push);
+        assert_eq!(text, "c");
+        let step = step_android_field(&mut sync, Some(&latest), &sample("b", 1));
+        assert!(step.write.is_none());
+        assert_eq!(show_text(&step).1, "c");
+        let step = step_android_field(&mut sync, Some(&latest), &sample("c", 1));
+        assert!(step.write.is_none());
+        assert!(!show_text(&step).0);
     }
 
     #[test]
