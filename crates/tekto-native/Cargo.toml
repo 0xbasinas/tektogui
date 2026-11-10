@@ -12,10 +12,17 @@ publish = false
 # Linux StatusNotifierItem tray. Off by default so apps that do not show a
 # tray do not compile this client. No extra crate (MIT in-tree D-Bus only).
 tray = []
+# Linux X11 global shortcuts (x11rb). Off by default so apps that do not
+# register shortcuts do not compile this client. Windows stays unsupported.
+shortcuts = ["dep:x11rb"]
 
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
+# x11rb 0.13.2 is MIT OR Apache-2.0. Pure Rust X11 (no libxcb). Used only
+# for the optional `shortcuts` feature. Default features off so the XCB FFI
+# and extensions stay out.
+x11rb = { version = "0.13.2", optional = true, default-features = false }
 
 # arboard 3.7.0 is MIT OR Apache-2.0. Text only (no image-data). Wayland uses
 # `wayland-data-control` (wl-clipboard-rs, MIT OR Apache-2.0). X11 uses x11rb

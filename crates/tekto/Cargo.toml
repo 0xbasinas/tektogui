@@ -19,6 +19,8 @@ js = ["dep:tekto-js"]
 quickjs = ["js", "tekto-js/quickjs"]
 # Linux system tray (StatusNotifierItem). Off by default.
 tray = ["tekto-native/tray"]
+# Linux X11 global shortcuts. Off by default. Windows stays unsupported.
+shortcuts = ["tekto-native/shortcuts", "tekto-js?/shortcuts"]
 
 [dependencies]
 tekto-tree = { workspace = true }

@@ -30,6 +30,19 @@ export function transitionOp(id, props = {}) {
   return op;
 }
 
+/**
+ * JSON for `tekto.applyNativeOp` on the desktop QuickJS host.
+ * `op` is one NativeOp object (`shortcutsRegister`, `clipboardGetText`, …).
+ * The host returns a string or null, and throws when the platform
+ * cannot run the call (`not available` or `not implemented`).
+ */
+export function nativeOpJson(op) {
+  if (!op || typeof op !== "object" || typeof op.op !== "string" || op.op.length === 0) {
+    throw new TypeError("native op needs an op name");
+  }
+  return JSON.stringify(op);
+}
+
 export function createEffect(fn) {
   const run = () => {
     current = run;
