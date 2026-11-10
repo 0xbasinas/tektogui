@@ -14,6 +14,7 @@ Or run the windowed Notes example. The process writes a small file (default: `$X
 ## CLI tools (same server as MCP)
 
 ```bash
+cargo run -p tekto-cli -- inspect  # print the browser inspector URL
 cargo run -p tekto-cli -- tree
 cargo run -p tekto-cli -- screenshot /tmp/shot.png
 cargo run -p tekto-cli -- patch 4 --text "New title"
@@ -22,6 +23,10 @@ cargo run -p tekto-cli -- click 4
 ```
 
 `tree` prints the scene / AccessKit tree with stable ids, roles, names, and bounds. The id is positional (`tekto patch 4`, not `--id`).
+
+The inspector at `GET /inspector` shows the live tree. Select a node, choose properties, and apply a patch. Refresh the tree after changes from elsewhere. `tekto inspect` discovers the server through the same endpoint file as `tekto tree`.
+
+Agents can use the same HTTP server directly: `GET /health` checks availability, `GET /tree` returns JSON with `pretty` and `dump` (including node ids and children), and `GET /tree.txt` returns the readable tree. `POST /patch` accepts a JSON object with the node `id` and properties to change, and returns the updated node and any writeback result. Errors return a JSON `error` and an HTTP error status.
 
 ## MCP
 
