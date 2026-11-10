@@ -62,6 +62,10 @@ pub fn window(
 }
 
 /// Dark banner used as a simple header surface.
+///
+/// Pass a non-finite `width` (the usual case) so the banner stretches to
+/// the parent's content box and stays inside the window after a resize.
+/// A finite width is a fixed size and will not shrink with the viewport.
 pub fn banner(
     tree: &mut Tree,
     parent: NodeId,
@@ -127,9 +131,11 @@ pub fn title_on_banner(
 pub fn notes_tree(width: f32, height: f32) -> Result<Tree, WidgetError> {
     let mut tree = Tree::new();
     let root = window(&mut tree, "Notes", width, height)?;
-    let banner_w = (width - PAGE_PADDING * 2.0).max(80.0);
-    let b = banner(&mut tree, root, banner_w, BANNER_HEIGHT)?;
-    title_on_banner(&mut tree, b, "Notes", banner_w)?;
+    // Do not bake the construction-time width into the banner; a later
+    // relayout (phone-sized Android window, desktop resize) must be able
+    // to shrink it to the new content box.
+    let b = banner(&mut tree, root, f32::NAN, BANNER_HEIGHT)?;
+    title_on_banner(&mut tree, b, "Notes", f32::NAN)?;
     text(&mut tree, root, "Hello from Tekto", BODY_SIZE, Color::INK)?;
     Ok(tree)
 }
