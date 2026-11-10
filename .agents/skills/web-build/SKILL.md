@@ -1,23 +1,26 @@
 ---
 name: web-build
-description: How to check the Tekto WASM core, the browser HostOp glue, and the CPU canvas blit. Use when touching wasm, tekto-wasm, @tektogui/wasm, or the web platform path.
+description: How to check the Tekto WASM core, the browser HostOp glue, the CPU canvas blit, and the optional WebGPU fallback. Use when touching wasm, tekto-wasm, @tektogui/wasm, or the web platform path.
 ---
 
 # Web build
 
 The Rust core builds for `wasm32-unknown-unknown`. TypeScript talks to it through the same `HostOp` JSON as desktop. The browser JS engine runs the app. QuickJS is not in this graph. The public app API (`@tektogui/core`, `@tektogui/jsx-runtime`, `@tektogui/wasm` entry) has no HTML, CSS, or DOM types.
 
-CPU paint is in. `@tektogui/wasm/canvas` (`paintCanvas`, `resizeCanvas`, `blitPng`) decodes the tiny-skia PNG and calls `putImageData`. That module is host glue. It takes a structural canvas (`getContext("2d")`), not a DOM type in the app API. WebGPU is still `#42`.
+CPU paint is the default. `@tektogui/wasm/canvas` (`paintCanvas`, `resizeCanvas`, `blitPng`) decodes the tiny-skia PNG and calls `putImageData`. `@tektogui/wasm/gpu` (`paintPreferred`, `choosePaintBackend`, `detectWebGpu`) is host glue too. Both take a structural canvas, not a DOM type in the app API. WebGPU is off unless the page passes `gpu: true` and the wasm file was built with `--features gpu`. Otherwise paint falls back to the CPU blit. WebGL2 is detected on a detached canvas and still uses that blit: Vello needs compute shaders. The paint canvas is not probed. If WebGPU takes a context and then fails, `paintPreferred` replaces that canvas so `getContext("2d")` can succeed. `PaintResult.surface` is the element that was painted.
 
 ## What builds
 
-- `crates/tekto-wasm` — tree, layout, text, CPU renderer (`tiny-skia`), `HostOp` / `apply_ops`. No `quickjs`, no `gpu`.
+- `crates/tekto-wasm` — tree, layout, text, CPU renderer (`tiny-skia`), `HostOp` / `apply_ops`. No `quickjs`. `gpu` is optional and off by default.
 - `packages/wasm` (`@tektogui/wasm`) — `connectWasm`, `applyOps`, `renderPng`, and `create` / `setText` / `setProp` / `append` / `remove` for `mount`. No DOM.
 - `packages/wasm/src/canvas.js` (`@tektogui/wasm/canvas`) — blit and basic resize. No new crates.
-- `packages/wasm/dev.js` — one-command host page for a TSX entry (default Notes). `applyUiPatch` (`@tektogui/wasm/patch`) is the live patch hook. No new crates and no npm packages.
+- `packages/wasm/src/gpu.js` (`@tektogui/wasm/gpu`) — feature detect and CPU fallback. No new npm packages.
+- `packages/wasm/dev.js` — one-command host page for a TSX entry (default Notes). `applyUiPatch` (`@tektogui/wasm/patch`) is the live patch hook. No new crates and no npm packages. The dev page uses the CPU blit.
 - `cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js` — the app facade without the desktop shell.
 
-No new crates were added for the ABI (no `wasm-bindgen`). Direct deps added for this path stay MIT / Apache-2.0 / BSD / zlib. The text stack (Parley / ICU) already pulls Unicode License v3 crates into both the default host tree and `tekto-wasm`: `icu_segmenter`, `icu_normalizer`, `icu_provider`, `zerovec`, `writeable`, `yoke`, `tinystr`, and the other `icu_*` data crates, plus `unicode-ident` (`(MIT OR Apache-2.0) AND Unicode-3.0`). Unicode-3.0 is permissive. It is not MIT, Apache-2.0, BSD, or zlib, and it is not GPL or LGPL. Do not add a new direct dependency outside MIT / Apache-2.0 / BSD / zlib. Do not rip out the text stack to drop these transitives. The canvas path adds no npm packages.
+The default ABI adds no `wasm-bindgen` (the host calls the `tekto_*` exports directly). Direct deps on that default path stay MIT / Apache-2.0 / BSD / zlib. The text stack (Parley / ICU) already pulls Unicode License v3 crates into both the default host tree and `tekto-wasm`: `icu_segmenter`, `icu_normalizer`, `icu_provider`, `zerovec`, `writeable`, `yoke`, `tinystr`, and the other `icu_*` data crates, plus `unicode-ident` (`(MIT OR Apache-2.0) AND Unicode-3.0`). Unicode-3.0 is permissive. It is not MIT, Apache-2.0, BSD, or zlib, and it is not GPL or LGPL. Do not add a new direct dependency outside MIT / Apache-2.0 / BSD / zlib. Do not rip out the text stack to drop these transitives. The canvas path adds no npm packages.
+
+The optional wasm GPU build adds direct deps only when `--features gpu` is on: `wasm-bindgen` 0.2.130 and `wasm-bindgen-futures` 0.4.80 (both MIT OR Apache-2.0) and `web-sys` 0.3.107 (MIT OR Apache-2.0, `HtmlCanvasElement`). wgpu's `webgpu` feature pulls `js-sys` under the same license. Do not enable this feature on PR CI. It is a large compile. `hexf-parse` (CC0-1.0) and the Unicode-3.0 ICU crates can show up through the existing desktop GPU and text stacks. They are not GPL or LGPL. Do not add a crate to remove them.
 
 ## Check
 
@@ -38,6 +41,18 @@ node --test packages/wasm/test.js
 
 `RUSTFLAGS=-D warnings` is set in CI. Do not enable `quickjs` or `gpu` on these commands.
 
+`node --test packages/wasm/test.js` also stubs WebGPU and WebGL2. No browser and no GPU. The flag-off path, a null adapter, WebGL2, a missing `paintWebGpu` export, and a thrown WebGPU paint all end on the CPU blit. One stub allows only one context type per canvas. Probes use `document.createElement`, not the paint canvas. A GPU context that then throws is replaced before the blit.
+
+Optional WebGPU wasm module (not CI, not the default file):
+
+```bash
+cargo build -p tekto-wasm --target wasm32-unknown-unknown --features gpu
+# Then wasm-bindgen on that wasm if you want to call `tekto_gpu_frame`.
+# Install the glue as `host.paintWebGpu` and pass `{ gpu: true }` to paintPreferred.
+```
+
+Without that module, `packages/wasm/gpu.html` (open with `?gpu=1`) still loads the default wasm and blits the CPU PNG. Leave the query off and it does not ask for WebGPU at all.
+
 ## One-command dev
 
 ```bash
@@ -57,6 +72,7 @@ cargo build -p tekto-wasm --target wasm32-unknown-unknown
 cp "$CARGO_TARGET_DIR/wasm32-unknown-unknown/debug/tekto_wasm.wasm" packages/wasm/tekto_wasm.wasm
 # from packages/wasm: python3 -m http.server 8080
 # open http://127.0.0.1:8080/notes.html   (Notes at 640×400, resize buttons)
+# open http://127.0.0.1:8080/gpu.html     (CPU blit; ?gpu=1 tries WebGPU, then the blit)
 # open http://127.0.0.1:8080/smoke.html   (one text node, PNG in an img)
 ```
 
@@ -64,7 +80,7 @@ Do not commit `tekto_wasm.wasm`. `notes.html` is a host page. It is not the app 
 
 ## Design that must stay true
 
-- CPU first: `renderPng` is the tiny-skia path. The host blits that PNG. WebGPU / WebGL2 stays behind `gpu` (`#42`). Fall back to this canvas path if WebGPU is missing.
+- CPU first: `renderPng` is the tiny-skia path. The host blits that PNG. WebGPU stays behind `tekto-wasm`'s `gpu` feature and `paintPreferred({ gpu: true })`. Missing WebGPU, WebGL2-only, or a failed GPU paint falls back to this canvas path. App ops are unchanged.
 - Desktop QuickJS stays behind `--features quickjs` (off by default, not on PR CI).
 - `tekto-platform` keeps the desktop shell cfg'd out on `target_arch = "wasm32"`.
 - Apps never see DOM types. `paintCanvas` lives in the host glue only.

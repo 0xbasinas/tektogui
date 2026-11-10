@@ -25,3 +25,12 @@ vello = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 png = { workspace = true, optional = true }
+
+# Desktop adapters. Not compiled into the wasm crate.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["vulkan", "gles", "metal"] }
+
+# Browser WebGPU. WebGL2 is detected in the host and falls back to the CPU
+# blit: Vello needs compute shaders, which WebGL2 does not have.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["webgpu"] }

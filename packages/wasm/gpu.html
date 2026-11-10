@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Tekto Notes (paint backend)</title>
+<p>
+  Host page only. Default paint is the CPU canvas blit.
+  Add <code>?gpu=1</code> to try WebGPU. If the browser has no adapter,
+  or this page was not given a <code>paintWebGpu</code> export from a
+  <code>--features gpu</code> wasm build, the page blits the CPU PNG.
+  WebGL2 is checked on a throwaway canvas and still uses that blit (Vello needs compute).
+  A failed WebGPU context is replaced so the blit can still take a 2D context.
+</p>
+<canvas id="view" width="640" height="400" style="border:1px solid #ccc; max-width:100%"></canvas>
+<pre id="log"></pre>
+<script type="module">
+import { mount } from "../jsx-runtime/src/index.js";
+import { connectWasm } from "./src/index.js";
+import { paintPreferred } from "./src/gpu.js";
+import { Notes } from "../jsx-runtime/notes-app.js";
+
+const canvas = document.querySelector("#view");
+const log = document.querySelector("#log");
+const gpu = new URLSearchParams(location.search).get("gpu") === "1";
+
+try {
+  const host = await connectWasm("./tekto_wasm.wasm");
+  // A `--features gpu` build can install `host.paintWebGpu` here after
+  // `wasm-bindgen` generates the glue. The default module has no such export.
+  host.reset();
+  mount(Notes(), host);
+  const frame = await paintPreferred(host, canvas, { gpu, width: 640, height: 400 });
+  const view = frame.surface || canvas;
+  log.textContent = `used ${frame.used} (${frame.reason || "ok"}) ${view.width}×${view.height}`;
+} catch (err) {
+  log.textContent = String(err && err.stack ? err.stack : err);
+}
+</script>

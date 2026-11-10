@@ -17,6 +17,11 @@
       "import": "./src/canvas.js",
       "default": "./src/canvas.js"
     },
+    "./gpu": {
+      "types": "./src/gpu.d.ts",
+      "import": "./src/gpu.js",
+      "default": "./src/gpu.js"
+    },
     "./patch": {
       "types": "./src/patch.d.ts",
       "import": "./src/patch.js",
@@ -26,7 +31,8 @@
   "files": [
     "src",
     "smoke.html",
-    "notes.html"
+    "notes.html",
+    "gpu.html"
   ],
   "scripts": {
     "test": "node --test test.js"

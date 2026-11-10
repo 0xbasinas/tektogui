@@ -5,8 +5,8 @@
  * `@tektogui/jsx-runtime`) still has no DOM types. The page that owns
  * the `<canvas>` calls `paintCanvas` / `resizeCanvas`.
  *
- * Paint is the existing tiny-skia PNG from `host.renderPng`. WebGPU is
- * not used here.
+ * Paint is the existing tiny-skia PNG from `host.renderPng`. WebGPU, when
+ * the host asks for it, lives in `./gpu.js` and falls back to this blit.
  */
 
 const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];

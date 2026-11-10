@@ -17,6 +17,10 @@ use vello::peniko::{Fill, FontData};
 use vello::{wgpu, Renderer as VelloRenderer};
 use vello::{AaConfig, AaSupport, Glyph, RenderParams, RendererOptions, Scene};
 
+/// Canvas type for the wasm WebGPU present path.
+#[cfg(target_arch = "wasm32")]
+pub type WebCanvas = wgpu::web_sys::HtmlCanvasElement;
+
 struct Inner {
     width: u32,
     height: u32,
@@ -38,6 +42,9 @@ pub struct GpuRenderer {
 }
 
 impl GpuRenderer {
+    /// Desktop (and any host with a blocking executor). The browser path is
+    /// [`paint_tree_webgpu`]: `pollster` cannot wait on a WebGPU adapter.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(width: u32, height: u32) -> Result<Self, RenderError> {
         let width = width.max(1);
         let height = height.max(1);
@@ -50,15 +57,27 @@ impl GpuRenderer {
         }))
         .map_err(|err| RenderError::msg(format!("no GPU adapter: {err}")))?;
         let adapter_name = adapter.get_info().name;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("tekto-gpu"),
-            required_features: wgpu::Features::empty(),
-            required_limits: adapter.limits(),
-            experimental_features: wgpu::ExperimentalFeatures::disabled(),
-            memory_hints: wgpu::MemoryHints::Performance,
-            trace: wgpu::Trace::Off,
-        }))
-        .map_err(|err| RenderError::msg(format!("GPU device: {err}")))?;
+        let desc = device_desc(&adapter);
+        let (device, queue) = pollster::block_on(adapter.request_device(&desc))
+            .map_err(|err| RenderError::msg(format!("GPU device: {err}")))?;
+        Self::from_device(width, height, device, queue, adapter_name)
+    }
+
+    /// Sync setup is the desktop path. The wasm host calls [`paint_tree_webgpu`].
+    #[cfg(target_arch = "wasm32")]
+    pub fn new(_width: u32, _height: u32) -> Result<Self, RenderError> {
+        Err(RenderError::msg(
+            "WebGPU paint is async; call paint_tree_webgpu from the host",
+        ))
+    }
+
+    fn from_device(
+        width: u32,
+        height: u32,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter_name: String,
+    ) -> Result<Self, RenderError> {
         let renderer = VelloRenderer::new(
             &device,
             RendererOptions {
@@ -85,6 +104,21 @@ impl GpuRenderer {
                 pixels: None,
             }),
         })
+    }
+
+    /// Rasterize the recorded scene and copy it onto `target` (a surface texture).
+    pub fn present_to(
+        &self,
+        target: &wgpu::Texture,
+        target_format: wgpu::TextureFormat,
+    ) -> Result<(), RenderError> {
+        let mut inner = self.inner.borrow_mut();
+        while inner.clip_depth > 0 {
+            inner.scene.pop_layer();
+            inner.clip_depth -= 1;
+        }
+        let src = color_target(&mut inner)?;
+        blit_texture(&inner, &src, target, target_format)
     }
 
     pub fn set_scale(&mut self, scale: f32) {
@@ -256,7 +290,18 @@ fn draw_glyph_run(
         .draw(Fill::NonZero, glyphs.into_iter());
 }
 
-fn readback(inner: &mut Inner) -> Result<Vec<u8>, RenderError> {
+fn device_desc(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'_> {
+    wgpu::DeviceDescriptor {
+        label: Some("tekto-gpu"),
+        required_features: wgpu::Features::empty(),
+        required_limits: adapter.limits(),
+        experimental_features: wgpu::ExperimentalFeatures::disabled(),
+        memory_hints: wgpu::MemoryHints::Performance,
+        trace: wgpu::Trace::Off,
+    }
+}
+
+fn color_target(inner: &mut Inner) -> Result<wgpu::Texture, RenderError> {
     let width = inner.width;
     let height = inner.height;
     let texture = inner.device.create_texture(&wgpu::TextureDescriptor {
@@ -270,7 +315,9 @@ fn readback(inner: &mut Inner) -> Result<Vec<u8>, RenderError> {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -289,6 +336,158 @@ fn readback(inner: &mut Inner) -> Result<Vec<u8>, RenderError> {
             },
         )
         .map_err(|err| RenderError::msg(format!("vello render: {err}")))?;
+    Ok(texture)
+}
+
+const BLIT_WGSL: &str = r#"
+struct VsOut {
+  @builtin(position) pos: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> VsOut {
+  // One oversized triangle. NDC y is up; uv y 0 is the top of the texture.
+  var clip = array<vec2<f32>, 3>(
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>(3.0, -1.0),
+    vec2<f32>(-1.0, 3.0),
+  );
+  var out: VsOut;
+  out.pos = vec4<f32>(clip[i], 0.0, 1.0);
+  out.uv = vec2<f32>((clip[i].x + 1.0) * 0.5, (1.0 - clip[i].y) * 0.5);
+  return out;
+}
+
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_samp: sampler;
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+  return textureSample(src_tex, src_samp, in.uv);
+}
+"#;
+
+fn blit_texture(
+    inner: &Inner,
+    src: &wgpu::Texture,
+    target: &wgpu::Texture,
+    target_format: wgpu::TextureFormat,
+) -> Result<(), RenderError> {
+    let device = &inner.device;
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("tekto-blit"),
+        source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()),
+    });
+    let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("tekto-blit"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("tekto-blit"),
+        bind_group_layouts: &[Some(&bind_layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("tekto-blit"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    let view = src.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("tekto-blit"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..wgpu::SamplerDescriptor::default()
+    });
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("tekto-blit"),
+        layout: &bind_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    });
+    let dest = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("tekto-gpu-present-blit"),
+    });
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("tekto-blit"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &dest,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind, &[]);
+        pass.draw(0..3, 0..1);
+    }
+    inner.queue.submit([encoder.finish()]);
+    Ok(())
+}
+
+fn readback(inner: &mut Inner) -> Result<Vec<u8>, RenderError> {
+    let width = inner.width;
+    let height = inner.height;
+    let texture = color_target(inner)?;
 
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let unpadded = width.saturating_mul(4);
@@ -374,6 +573,72 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, RenderErr
         .map_err(|err| RenderError::msg(err.to_string()))?;
     drop(writer);
     Ok(out)
+}
+
+/// Paint `tree` with the same Vello path as desktop, onto a browser canvas.
+///
+/// Returns an error when WebGPU has no adapter so the host can blit the CPU
+/// PNG instead. WebGL2 is not used here: Vello needs compute shaders.
+#[cfg(target_arch = "wasm32")]
+pub async fn paint_tree_webgpu(
+    tree: &tekto_tree::Tree,
+    canvas: WebCanvas,
+    width: u32,
+    height: u32,
+    clear: TektoColor,
+) -> Result<(), RenderError> {
+    if width == 0 || height == 0 {
+        return Err(RenderError::msg("width and height must be non-zero"));
+    }
+    if !wgpu::util::is_browser_webgpu_supported().await {
+        return Err(RenderError::msg("no WebGPU adapter"));
+    }
+    canvas.set_width(width);
+    canvas.set_height(height);
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let surface = instance
+        .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+        .map_err(|err| RenderError::msg(format!("webgpu surface: {err}")))?;
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+        })
+        .await
+        .map_err(|err| RenderError::msg(format!("no WebGPU adapter: {err}")))?;
+    let adapter_name = adapter.get_info().name;
+    let desc = device_desc(&adapter);
+    let (device, queue) = adapter
+        .request_device(&desc)
+        .await
+        .map_err(|err| RenderError::msg(format!("GPU device: {err}")))?;
+    let config = surface
+        .get_default_config(&adapter, width, height)
+        .ok_or_else(|| RenderError::msg("canvas surface is not supported"))?;
+    surface.configure(&device, &config);
+    let mut renderer = GpuRenderer::from_device(width, height, device, queue, adapter_name)?;
+    crate::paint_tree(&mut renderer, tree, clear);
+    let frame = match surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(frame)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+        wgpu::CurrentSurfaceTexture::Timeout => {
+            return Err(RenderError::msg("surface timeout"));
+        }
+        wgpu::CurrentSurfaceTexture::Occluded => {
+            return Err(RenderError::msg("surface occluded"));
+        }
+        wgpu::CurrentSurfaceTexture::Outdated => {
+            return Err(RenderError::msg("surface outdated"));
+        }
+        wgpu::CurrentSurfaceTexture::Lost => return Err(RenderError::msg("surface lost")),
+        wgpu::CurrentSurfaceTexture::Validation => {
+            return Err(RenderError::msg("surface validation"));
+        }
+    };
+    renderer.present_to(&frame.texture, config.format)?;
+    frame.present();
+    Ok(())
 }
 
 #[cfg(test)]
