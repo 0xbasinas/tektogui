@@ -601,7 +601,7 @@ mod tests {
         let bad = native().register("Nope", "search").expect_err("bad chord");
         assert!(matches!(bad, NativeError::Message(_)), "{bad}");
         let display = std::env::var("DISPLAY").unwrap_or_default();
-        let reserved = matches!(display.as_str(), ":1" | ":2" | ":1.0" | ":2.0");
+        let reserved = linux_shortcuts::display_is_reserved(&display);
         assert!(
             !reserved || std::env::var_os("TEKTO_SHORTCUTS_LIVE").is_none(),
             "refusing shortcuts on reserved display {display}"
