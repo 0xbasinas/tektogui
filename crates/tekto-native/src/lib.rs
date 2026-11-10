@@ -2,8 +2,7 @@
 //!
 //! Each capability is a small trait so platforms can be filled in one
 //! at a time (Windows, Linux, Android, later macOS, iOS, and web).
-//! Linux text clipboard is implemented (X11 and Wayland). Other platforms
-//! still return a clear "not yet" error for clipboard. The API is stable
+//! Text clipboard is implemented on Linux and Windows. The API is stable
 //! for apps and for the JS [`NativeOp`] hook.
 
 use serde::{Deserialize, Serialize};
@@ -11,6 +10,8 @@ use thiserror::Error;
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "windows")]
+mod windows;
 
 #[derive(Debug, Error)]
 pub enum NativeError {
@@ -161,7 +162,11 @@ impl Files for StubNative {
         {
             linux::read_file(path)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            windows::read_file(path)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             let _ = path;
             Err(unsupported("files.read"))
@@ -173,7 +178,11 @@ impl Files for StubNative {
         {
             linux::write_file(path, contents)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            windows::write_file(path, contents)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             let _ = (path, contents);
             Err(unsupported("files.write"))
@@ -195,7 +204,11 @@ impl Clipboard for StubNative {
         {
             linux::get_text()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            windows::get_text()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             Err(unsupported("clipboard.get"))
         }
@@ -205,7 +218,11 @@ impl Clipboard for StubNative {
         {
             linux::set_text(text)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            windows::set_text(text)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             let _ = text;
             Err(unsupported("clipboard.set"))
@@ -425,7 +442,7 @@ mod tests {
             );
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             let err = native().get_text().expect_err("stub");
             assert!(matches!(
