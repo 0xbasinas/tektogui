@@ -224,6 +224,14 @@ impl ApplicationHandler<AppEvent> for App {
             _ => {}
         }
     }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // The commit echo, when the OS sends one, is already in this burst.
+        // A key after the queue goes idle is the user's next keystroke.
+        if let Some(state) = self.state.as_mut() {
+            crate::expire_ime_echo(&mut state.last_ime_commit);
+        }
+    }
 }
 
 fn publish_accesskit(
@@ -517,8 +525,9 @@ fn apply_ime(state: &mut State, ime: Ime) {
 /// Printable characters and Backspace on the focused text field.
 ///
 /// Ctrl, Alt, and Super chords are left alone. While a preedit is active,
-/// the tree ignores these keys. A key string that repeats the latest IME
-/// commit is dropped once (Windows can echo the commit).
+/// printable text goes through [`Tree::type_keyboard_text`] and is ignored.
+/// A key string that repeats the latest IME commit is dropped only until
+/// the event queue goes idle (Windows can echo the commit in that burst).
 fn apply_field_key(state: &mut State, event: &KeyEvent) {
     if event.state != ElementState::Pressed {
         return;
@@ -546,11 +555,7 @@ fn apply_field_key(state: &mut State, event: &KeyEvent) {
         if is_backspace {
             tree.apply_field_key(FieldKey::Backspace).unwrap_or(false)
         } else if let Some(plain) = plain.as_deref() {
-            if let Some(id) = tree.focus {
-                tree.insert_text(id, plain).is_ok()
-            } else {
-                false
-            }
+            tree.type_keyboard_text(plain).unwrap_or(false)
         } else {
             false
         }

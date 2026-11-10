@@ -323,3 +323,34 @@ fn text_field_ime_preedit_commit_updates_accesskit() {
     assert_eq!(ak.value.as_deref(), Some("Hié你"));
     assert_eq!(dump.focus, field.raw());
 }
+
+#[test]
+fn keyboard_text_during_preedit_does_not_commit_and_focus_clears_it() {
+    let mut tree = tekto::Tree::new();
+    let root = tekto::window(&mut tree, "Notes", 320.0, 200.0).unwrap();
+    let field = tekto::text_field(&mut tree, root, "Title", "Hi").unwrap();
+    tree.set_focus(field).unwrap();
+    tree.apply_ime(tekto::ImeEvent::Preedit {
+        text: "あ".into(),
+        cursor: Some((3, 3)),
+    })
+    .unwrap();
+    assert!(!tree.type_keyboard_text("x").unwrap());
+    layout_tree(&mut tree, 320.0, 200.0);
+    assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hi"));
+    assert_eq!(tree.get(field).unwrap().composed_text(), "Hiあ");
+    let dump = accesskit_dump(&tree).unwrap();
+    let ak = dump.nodes.iter().find(|n| n.id == field.raw()).unwrap();
+    assert_eq!(ak.value.as_deref(), Some("Hiあ"));
+
+    let button = tekto::button(&mut tree, root, "Save").unwrap();
+    tree.set_focus(button).unwrap();
+    assert!(!tree.apply_ime(tekto::ImeEvent::Disabled).unwrap());
+    layout_tree(&mut tree, 320.0, 200.0);
+    assert!(tree.get(field).unwrap().preedit.is_empty());
+    assert_eq!(tree.get(field).unwrap().composed_text(), "Hi");
+    let dump = accesskit_dump(&tree).unwrap();
+    let ak = dump.nodes.iter().find(|n| n.id == field.raw()).unwrap();
+    assert_eq!(ak.value.as_deref(), Some("Hi"));
+    assert_eq!(dump.focus, button.raw());
+}

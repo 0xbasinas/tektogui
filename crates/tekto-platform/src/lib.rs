@@ -237,8 +237,10 @@ pub use winit::platform::android::activity::AndroidApp;
 /// Whether a `KeyboardInput` string should be inserted after an IME commit.
 ///
 /// Returns false once when `text` repeats `last_ime_commit`, then clears it.
-/// Windows can deliver the committed string again as a key event. Linux
-/// usually does not. Any other string is accepted and the latch is cleared.
+/// Windows can deliver the committed string again as a key event in the same
+/// burst. Call [`expire_ime_echo`] when the event queue goes idle so a later
+/// press of the same string is real typing (Linux usually has no echo).
+/// Any other string is accepted and the latch is cleared.
 pub fn accept_keyboard_text(last_ime_commit: &mut Option<String>, text: &str) -> bool {
     if last_ime_commit.as_deref() == Some(text) {
         *last_ime_commit = None;
@@ -246,6 +248,11 @@ pub fn accept_keyboard_text(last_ime_commit: &mut Option<String>, text: &str) ->
     }
     *last_ime_commit = None;
     !text.is_empty()
+}
+
+/// Drop a pending IME echo. A matching key after this is genuine.
+pub fn expire_ime_echo(last_ime_commit: &mut Option<String>) {
+    *last_ime_commit = None;
 }
 
 pub fn logical_from_physical(x: f64, y: f64, scale_factor: f64) -> (f32, f32) {
@@ -259,7 +266,7 @@ pub fn logical_from_physical(x: f64, y: f64, scale_factor: f64) -> (f32, f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{accept_keyboard_text, logical_from_physical};
+    use super::{accept_keyboard_text, expire_ime_echo, logical_from_physical};
 
     #[test]
     fn ime_commit_echo_is_dropped_once() {
@@ -270,6 +277,16 @@ mod tests {
         let mut latch = Some("啊不".to_string());
         assert!(accept_keyboard_text(&mut latch, "a"));
         assert!(latch.is_none());
+    }
+
+    #[test]
+    fn genuine_key_after_idle_is_not_swallowed_by_ime_commit() {
+        // Commit of "a" with no echo in the burst, then a real "a".
+        let mut latch = Some("a".to_string());
+        expire_ime_echo(&mut latch);
+        assert!(latch.is_none());
+        assert!(accept_keyboard_text(&mut latch, "a"));
+        assert_eq!(latch, None);
     }
 
     #[test]

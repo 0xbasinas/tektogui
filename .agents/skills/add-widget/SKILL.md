@@ -44,7 +44,7 @@ Still open:
 - No marked-range highlight. A preedit cursor `None` hides our caret. A byte range places the caret at the end of that range, not a selection.
 - No Android soft keyboard (`set_ime_allowed` on Android would show one later; do not start an emulator for this).
 - No Windows runtime IME session in CI. The same `desktop.rs` match is what Windows builds use.
-- A keyboard string equal to the last IME commit is dropped once, so a Windows echo does not insert twice. A real double-press of that same string with no other event in between is also dropped once.
+- A keyboard string equal to the last IME commit is dropped only until the event queue goes idle (`about_to_wait`). That catches a Windows echo in the same burst. A later press of the same string is inserted. Printable keys call `Tree::type_keyboard_text`, which does nothing while a preedit is showing. `set_focus` clears the previous field's preedit.
 - No selection, arrow keys, copy, or paste
 - `ui.type` does not send Backspace or a composition
 

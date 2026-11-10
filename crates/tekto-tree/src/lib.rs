@@ -528,11 +528,18 @@ impl Tree {
     }
 
     /// Set AccessKit / keyboard focus. The id must already be in the tree.
+    ///
+    /// Leaving a text field drops its preedit. The composition is not committed.
     pub fn set_focus(&mut self, id: NodeId) -> Result<(), TreeError> {
         if !self.nodes.contains_key(&id) {
             return Err(TreeError {
                 message: format!("unknown node {id}"),
             });
+        }
+        if self.focus != Some(id) {
+            if let Some(prev) = self.focus {
+                self.clear_field_preedit(prev);
+            }
         }
         self.focus = Some(id);
         Ok(())
@@ -552,13 +559,50 @@ impl Tree {
         Ok(())
     }
 
+    fn clear_field_preedit(&mut self, id: NodeId) {
+        let Some(node) = self.nodes.get_mut(&id) else {
+            return;
+        };
+        if node.kind != NodeKind::TextField {
+            return;
+        }
+        node.preedit.clear();
+        node.preedit_cursor = None;
+    }
+
+    /// Printable keyboard text for the focused text field.
+    ///
+    /// This is the desktop `KeyboardInput` path. Returns `Ok(false)` when
+    /// focus is not a text field, `text` has no printable characters, or a
+    /// preedit is showing. A preedit is left as it is (not committed, not
+    /// cleared). [`Tree::insert_text`] is the agent path and does drop a preedit.
+    pub fn type_keyboard_text(&mut self, text: &str) -> Result<bool, TreeError> {
+        let Some(id) = self.focus else {
+            return Ok(false);
+        };
+        if self.get(id).is_some_and(|n| n.kind != NodeKind::TextField) {
+            return Ok(false);
+        }
+        if self.get(id).is_some_and(|n| !n.preedit.is_empty()) {
+            return Ok(false);
+        }
+        let plain: String = text.chars().filter(|c| !c.is_control()).collect();
+        if plain.is_empty() {
+            return Ok(false);
+        }
+        for ch in plain.chars() {
+            self.apply_on_field(id, FieldKey::Insert(ch))?;
+        }
+        Ok(true)
+    }
+
     /// Insert plain text at the caret of a text field and focus it.
     ///
     /// Control characters are skipped. An in-progress preedit is dropped
     /// (not committed). Composition goes through [`Tree::apply_ime`].
     pub fn insert_text(&mut self, id: NodeId, text: &str) -> Result<(), TreeError> {
         self.ensure_field(id)?;
-        self.focus = Some(id);
+        self.set_focus(id)?;
         if let Some(node) = self.nodes.get_mut(&id) {
             node.preedit.clear();
             node.preedit_cursor = None;
@@ -1125,6 +1169,68 @@ mod tests {
         let other = tree.add(NodeKind::Button, Some(root)).unwrap();
         tree.set_focus(other).unwrap();
         assert!(!tree.apply_ime(ImeEvent::Commit("nope".into())).unwrap());
+    }
+
+    #[test]
+    fn keyboard_text_is_ignored_while_preedit_is_showing() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        tree.get_mut(field).unwrap().text = Some("Hi".into());
+        tree.get_mut(field).unwrap().caret = 2;
+        tree.set_focus(field).unwrap();
+        tree.apply_ime(ImeEvent::Preedit {
+            text: "あ".into(),
+            cursor: Some((3, 3)),
+        })
+        .unwrap();
+        assert!(!tree.type_keyboard_text("x").unwrap());
+        assert!(!tree.type_keyboard_text("ab").unwrap());
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hi"));
+        assert_eq!(tree.get(field).unwrap().preedit, "あ");
+        assert_eq!(tree.get(field).unwrap().composed_text(), "Hiあ");
+        // Agent insert still drops the preedit. The desktop path does not.
+        tree.insert_text(field, "z").unwrap();
+        assert!(tree.get(field).unwrap().preedit.is_empty());
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hiz"));
+    }
+
+    #[test]
+    fn focus_change_clears_the_previous_fields_preedit() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        tree.get_mut(field).unwrap().text = Some("Hi".into());
+        tree.get_mut(field).unwrap().caret = 2;
+        tree.set_focus(field).unwrap();
+        tree.apply_ime(ImeEvent::Preedit {
+            text: "ん".into(),
+            cursor: Some((3, 3)),
+        })
+        .unwrap();
+        let button = tree.add(NodeKind::Button, Some(root)).unwrap();
+        tree.set_focus(button).unwrap();
+        assert!(tree.get(field).unwrap().preedit.is_empty());
+        assert!(tree.get(field).unwrap().preedit_cursor.is_none());
+        assert_eq!(tree.get(field).unwrap().composed_text(), "Hi");
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hi"));
+        // Disabled follows the new focus and must not leave the old field dirty.
+        assert!(!tree.apply_ime(ImeEvent::Disabled).unwrap());
+        assert!(tree.get(field).unwrap().preedit.is_empty());
+        assert_eq!(tree.get(field).unwrap().composed_text(), "Hi");
+
+        tree.set_focus(field).unwrap();
+        tree.apply_ime(ImeEvent::Preedit {
+            text: "か".into(),
+            cursor: None,
+        })
+        .unwrap();
+        let other = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        tree.get_mut(other).unwrap().text = Some("".into());
+        tree.set_focus(other).unwrap();
+        assert!(tree.get(field).unwrap().preedit.is_empty());
+        assert_eq!(tree.get(field).unwrap().composed_text(), "Hi");
+        assert!(tree.get(other).unwrap().preedit.is_empty());
     }
 
     #[test]
