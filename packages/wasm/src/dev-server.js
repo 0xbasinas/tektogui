@@ -9,12 +9,13 @@
  */
 
 import { spawn } from "node:child_process";
-import { createReadStream, existsSync, statSync, watch } from "node:fs";
+import { createReadStream, existsSync, mkdtempSync, rmSync, statSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, extname, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { bundleApp, esbuildBin, esbuildWatchArgs, repoRoot } from "./bundle-app.js";
+import { bundleApp, esbuildBin, esbuildWatchArgs } from "./bundle-app.js";
 
 const srcDir = dirname(fileURLToPath(import.meta.url));
 
@@ -89,18 +90,42 @@ function pipeFile(res, path, type) {
 /**
  * @param {{ entry: string, wasmPath: string, port?: number, forwardUrl?: string, watch?: boolean }} opts
  */
-export function startDevServer(opts) {
+export async function startDevServer(opts) {
   const entry = opts.entry;
   const wasmPath = opts.wasmPath;
   const forwardUrl = opts.forwardUrl || "";
-  const outfile = resolve(repoRoot(), "packages/wasm/.dev/app.js");
-  bundleApp(entry, outfile);
-
+  const dir = mkdtempSync(resolve(tmpdir(), "tekto-web-server-"));
+  const outfile = resolve(dir, "app.js");
   let watchChild = null;
-  if (opts.watch !== false) {
-    watchChild = spawn(esbuildBin(), esbuildWatchArgs(entry, outfile), {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+  try {
+    bundleApp(entry, outfile);
+    if (opts.watch !== false) {
+      watchChild = spawn(esbuildBin(), esbuildWatchArgs(entry, outfile), {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      await new Promise((ready, reject) => {
+        let output = "";
+        const onError = (err) => reject(err);
+        const onExit = (code) => reject(new Error(`esbuild watcher exited before ready (${code}): ${output}`));
+        watchChild.once("error", onError);
+        watchChild.once("exit", onExit);
+        const onData = (chunk) => {
+          output += chunk;
+          if (!output.includes("[watch] build finished, watching for changes...")) return;
+          watchChild.removeListener("error", onError);
+          watchChild.removeListener("exit", onExit);
+          watchChild.stderr.removeListener("data", onData);
+          watchChild.stderr.resume();
+          if (output.includes("[ERROR]")) reject(new Error(`esbuild watcher failed: ${output}`));
+          else ready();
+        };
+        watchChild.stderr.on("data", onData);
+      });
+    }
+  } catch (err) {
+    if (watchChild) watchChild.kill();
+    rmSync(dir, { recursive: true, force: true });
+    throw err;
   }
 
   const clients = new Set();
@@ -196,7 +221,12 @@ export function startDevServer(opts) {
 
   const port = opts.port ?? 0;
   return new Promise((resolveListen, reject) => {
-    server.once("error", reject);
+    server.once("error", (err) => {
+      if (watcher) watcher.close();
+      if (watchChild) watchChild.kill();
+      rmSync(dir, { recursive: true, force: true });
+      reject(err);
+    });
     server.listen(port, "127.0.0.1", () => {
       const address = server.address();
       const bound = typeof address === "object" && address ? address.port : port;
@@ -207,7 +237,10 @@ export function startDevServer(opts) {
           if (watcher) watcher.close();
           if (watchChild) watchChild.kill();
           for (const client of clients) client.end();
-          return new Promise((done) => server.close(() => done()));
+          return new Promise((done) => server.close(() => {
+            rmSync(dir, { recursive: true, force: true });
+            done();
+          }));
         },
       });
     });
