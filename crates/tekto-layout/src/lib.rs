@@ -113,7 +113,7 @@ fn measure_text(
     };
     if !matches!(
         node.kind,
-        NodeKind::Text | NodeKind::Button | NodeKind::TextField
+        NodeKind::Text | NodeKind::Button | NodeKind::TextField | NodeKind::ListItem
     ) {
         return Size::ZERO;
     }
@@ -217,7 +217,7 @@ fn build(
         let is_text = tree.get(id).is_some_and(|n| {
             matches!(
                 n.kind,
-                NodeKind::Text | NodeKind::Button | NodeKind::TextField
+                NodeKind::Text | NodeKind::Button | NodeKind::TextField | NodeKind::ListItem
             )
         });
         if is_text {

@@ -65,7 +65,9 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
         let color = node.color.unwrap_or(Color::INK);
         let inset = if matches!(
             node.kind,
-            tekto_tree::NodeKind::Button | tekto_tree::NodeKind::TextField
+            tekto_tree::NodeKind::Button
+                | tekto_tree::NodeKind::TextField
+                | tekto_tree::NodeKind::ListItem
         ) {
             node.layout.padding
         } else {

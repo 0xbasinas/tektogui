@@ -171,6 +171,111 @@ pub fn scroll(
     Ok(id)
 }
 
+/// Space between list rows.
+pub const LIST_GAP: f32 = 8.0;
+/// Inset of a row label inside its box.
+pub const LIST_ROW_PADDING: f32 = 10.0;
+
+/// One labeled row. `height` is the row box in logical pixels (variable per row).
+#[derive(Clone, Copy, Debug)]
+pub struct ListRow<'a> {
+    pub label: &'a str,
+    pub height: f32,
+}
+
+/// Ids for a list. `scroll` is set only when the rows are taller than the viewport.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListIds {
+    pub list: NodeId,
+    pub scroll: Option<NodeId>,
+}
+
+/// A vertical list of variable-height rows.
+///
+/// Each row is a [`NodeKind::ListItem`] with a stable scene id. The list node
+/// is [`NodeKind::List`]. Rows are not virtualized.
+///
+/// When `viewport_height` is finite and the stacked rows are taller than that
+/// viewport, the list is parented under [`scroll`]. A shorter list, or a
+/// non-finite viewport, is a direct child of `parent` and is not clipped.
+/// Add further rows with [`list_item`] on `ListIds::list` (that does not
+/// recompute the scroll parent).
+pub fn list(
+    tree: &mut Tree,
+    parent: NodeId,
+    width: f32,
+    viewport_height: f32,
+    rows: &[ListRow<'_>],
+) -> Result<ListIds, WidgetError> {
+    let content = stacked_height(rows);
+    let use_scroll = viewport_height.is_finite() && content > viewport_height;
+    let host = if use_scroll {
+        scroll(tree, parent, width, viewport_height)?
+    } else {
+        parent
+    };
+    let list_id = tree.add(NodeKind::List, Some(host))?;
+    if let Some(n) = tree.get_mut(list_id) {
+        n.name = Some("list".into());
+        n.layout = LayoutStyle {
+            width,
+            height: f32::NAN,
+            padding: 0.0,
+            gap: LIST_GAP,
+            column: true,
+            justify_center: false,
+        };
+    }
+    for row in rows {
+        list_item(tree, list_id, row.label, row.height)?;
+    }
+    Ok(ListIds {
+        list: list_id,
+        scroll: if use_scroll { Some(host) } else { None },
+    })
+}
+
+fn stacked_height(rows: &[ListRow<'_>]) -> f32 {
+    if rows.is_empty() {
+        return 0.0;
+    }
+    let mut total = 0.0;
+    for row in rows {
+        if !row.height.is_finite() || row.height < 0.0 {
+            return f32::INFINITY;
+        }
+        total += row.height;
+    }
+    total + LIST_GAP * (rows.len() - 1) as f32
+}
+
+/// One list row. `label` is the accessible name and the painted text.
+/// A finite `height` is the row box; a non-finite height hugs the label.
+/// The returned id is stable for the life of the tree.
+pub fn list_item(
+    tree: &mut Tree,
+    list: NodeId,
+    label: &str,
+    height: f32,
+) -> Result<NodeId, WidgetError> {
+    let id = tree.add(NodeKind::ListItem, Some(list))?;
+    if let Some(n) = tree.get_mut(id) {
+        n.name = Some(label.into());
+        n.text = Some(label.into());
+        n.color = Some(Color::INK);
+        n.font_size = BODY_SIZE;
+        n.layout = LayoutStyle {
+            width: f32::NAN,
+            height,
+            padding: LIST_ROW_PADDING,
+            gap: 0.0,
+            column: true,
+            justify_center: false,
+        };
+    }
+    Ok(id)
+}
+
 /// Title text drawn on the dark banner.
 pub fn title_on_banner(
     tree: &mut Tree,
@@ -227,5 +332,62 @@ mod tests {
         assert_eq!(node.text.as_deref(), Some("Milk"));
         assert_eq!(node.caret, 4);
         assert_eq!(node.fill, Some(Color::FIELD));
+    }
+
+    #[test]
+    fn tall_list_uses_scroll_and_keeps_row_ids() {
+        let mut tree = Tree::new();
+        let root = window(&mut tree, "Items", 320.0, 400.0).unwrap();
+        let rows = [
+            ListRow {
+                label: "Short",
+                height: 36.0,
+            },
+            ListRow {
+                label: "Tall note",
+                height: 96.0,
+            },
+            ListRow {
+                label: "Last",
+                height: 48.0,
+            },
+        ];
+        let built = list(&mut tree, root, f32::NAN, 100.0, &rows).unwrap();
+        let scroll_id = built.scroll.expect("taller than viewport");
+        assert_eq!(tree.get(scroll_id).unwrap().kind, NodeKind::Scroll);
+        assert_eq!(tree.get(built.list).unwrap().parent, Some(scroll_id));
+        assert_eq!(tree.get(built.list).unwrap().kind, NodeKind::List);
+        let children = tree.get(built.list).unwrap().children.clone();
+        assert_eq!(children.len(), 3);
+        assert_eq!(
+            tree.get(children[0]).unwrap().text.as_deref(),
+            Some("Short")
+        );
+        assert_eq!(tree.get(children[1]).unwrap().layout.height, 96.0);
+        assert_eq!(tree.get(children[2]).unwrap().layout.height, 48.0);
+        assert_eq!(tree.get(children[0]).unwrap().kind, NodeKind::ListItem);
+        let extra = list_item(&mut tree, built.list, "More", 40.0).unwrap();
+        assert_ne!(extra, children[0]);
+        assert!(tree.get(children[0]).is_some());
+        assert_eq!(tree.get(extra).unwrap().parent, Some(built.list));
+    }
+
+    #[test]
+    fn short_list_is_not_scrolled() {
+        let mut tree = Tree::new();
+        let root = window(&mut tree, "Items", 320.0, 400.0).unwrap();
+        let built = list(
+            &mut tree,
+            root,
+            200.0,
+            200.0,
+            &[ListRow {
+                label: "Only",
+                height: 40.0,
+            }],
+        )
+        .unwrap();
+        assert!(built.scroll.is_none());
+        assert_eq!(tree.get(built.list).unwrap().parent, Some(root));
     }
 }

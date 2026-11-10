@@ -43,6 +43,10 @@ pub enum NodeKind {
     TextField,
     /// Vertical clip of overflowing children. `scroll_y` shifts them up.
     Scroll,
+    /// Vertical collection of [`NodeKind::ListItem`] rows. Not virtualized.
+    List,
+    /// One row in a [`NodeKind::List`]. Height is per row.
+    ListItem,
 }
 
 /// Logical pixels one mouse-wheel notch moves a scroll container.
@@ -59,10 +63,12 @@ impl NodeKind {
             NodeKind::Button => "button",
             NodeKind::TextField => "text_field",
             NodeKind::Scroll => "scroll",
+            NodeKind::List => "list",
+            NodeKind::ListItem => "list_item",
         }
     }
 
-    /// Parse a kind name (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`).
+    /// Parse a kind name (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`, `list`, `list_item`).
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "window" => Some(Self::Window),
@@ -72,6 +78,8 @@ impl NodeKind {
             "button" => Some(Self::Button),
             "text_field" => Some(Self::TextField),
             "scroll" => Some(Self::Scroll),
+            "list" => Some(Self::List),
+            "list_item" => Some(Self::ListItem),
             _ => None,
         }
     }
@@ -836,6 +844,8 @@ mod tests {
             NodeKind::Button,
             NodeKind::TextField,
             NodeKind::Scroll,
+            NodeKind::List,
+            NodeKind::ListItem,
         ] {
             assert_eq!(NodeKind::from_name(kind.as_str()), Some(kind));
         }
