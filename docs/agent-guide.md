@@ -20,6 +20,8 @@ cargo run -p tekto-cli -- screenshot /tmp/shot.png
 cargo run -p tekto-cli -- patch 4 --text "New title"
 cargo run -p tekto-cli -- patch 4 --color "#2c333a" --font-size 20 --padding 24
 cargo run -p tekto-cli -- click 4
+cargo run -p tekto-cli -- states
+cargo run -p tekto-cli -- restore 0
 ```
 
 `tree` prints the scene / AccessKit tree with stable ids, roles, names, and bounds. The id is positional (`tekto patch 4`, not `--id`).
@@ -46,7 +48,9 @@ Tools in the first slice:
 | `ui.click` | Click a node id (focus + last_click; a real window click uses the same hit test) |
 | `ui.type` | Insert plain characters at the caret of a text field and focus it. Not an IME |
 | `ui.patch` | Live-edit text, name, fill, color, or fontSize on a running node. Returns `{ ok, node }`. |
-| `app.state` | Opt-in JSON state (empty for now) |
+| `app.state` | Focus and last click as JSON |
+| `app.states` | List time-travel frames. `enabled` is false unless the app opted in |
+| `app.restore` | Jump that store to a recorded `index` |
 | `app.logs` | Recent log lines |
 | `app.components` | JSON schema of widgets, props, and events. No running app required |
 
@@ -101,3 +105,17 @@ use the callback to lay it out after each action so pointer coordinates see the
 current bounds. The helper records actions passed to it; it does not automatically
 capture a live window or dev-server session, run app callbacks, or write patches
 back to source. See `crates/tekto/tests/record_replay.rs` and its JSON fixture. Linux CI runs that test and the Notes PNG compare as part of `cargo test --workspace --all-targets`.
+
+### Opt-in store time-travel
+
+`tekto::Store::new` keeps one value and does not grow. `Store::recording(initial, limit)`
+keeps that many frames. `set` records the new value and drops the redo branch.
+`undo`, `redo`, and `jump(index)` move the cursor. The scene tree is unchanged
+until the app paints from `get()`.
+
+Attach the same `Arc<Mutex<Store<serde_json::Value>>>` to `SharedTreeHandle.history`
+if agents should see it. `GET /states` and `app.states` list `{ enabled, cursor, states: [{ index, label, current }] }`.
+`POST /states/restore` with `{ "index": N }` (MCP `app.restore`, CLI `tekto restore N`)
+jumps there and returns the JSON value. With no store attached, `enabled` is false
+and restore returns an error. `examples/time-travel` records a counter, steps back,
+and jumps forward. It does not open a window.

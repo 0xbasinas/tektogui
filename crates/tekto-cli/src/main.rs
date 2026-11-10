@@ -78,6 +78,10 @@ enum Command {
         #[arg(long)]
         gap: Option<f32>,
     },
+    /// List time-travel frames from the dev server (`enabled` is false if the app did not opt in).
+    States,
+    /// Jump an opted-in store to a recorded index.
+    Restore { index: u64 },
     /// Speak the Model Context Protocol on stdio (proxies to the dev server).
     Mcp,
 }
@@ -187,6 +191,19 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
         Command::Inspect => {
             let ep = read_endpoint()?;
             println!("{}/inspector", ep.base_url());
+        }
+        Command::States => {
+            let ep = read_endpoint()?;
+            let (_, body) = http_get(&format!("{}/states", ep.base_url()))?;
+            println!("{}", String::from_utf8_lossy(&body));
+        }
+        Command::Restore { index } => {
+            let ep = read_endpoint()?;
+            let (_, body) = http_post(
+                &format!("{}/states/restore", ep.base_url()),
+                &serde_json::json!({"index": index}),
+            )?;
+            println!("{}", String::from_utf8_lossy(&body));
         }
         Command::Click { id } => {
             let ep = read_endpoint()?;

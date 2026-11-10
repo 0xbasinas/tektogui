@@ -6,10 +6,12 @@
 
 mod animate;
 mod recording;
+mod store;
 pub use animate::{
     ease_smoothstep, reduced_motion_requested, StyleTransition, DEFAULT_TRANSITION_MS,
 };
 pub use recording::{Action, RecordedKey, Recording};
+pub use store::{StateInfo, Store, StoreError};
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

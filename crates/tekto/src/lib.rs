@@ -32,8 +32,8 @@ pub use tekto_render::{
 };
 pub use tekto_tree::{
     ease_smoothstep, reduced_motion_requested, Action, Color, FieldKey, ImeEvent, LayoutStyle,
-    Node, NodeId, NodeKind, NodePatch, RecordedKey, Recording, Rect, StyleTransition, Tree,
-    TreeDump, DEFAULT_TRANSITION_MS, LIST_OVERSCAN_PX, SCROLL_WHEEL_LINE,
+    Node, NodeId, NodeKind, NodePatch, RecordedKey, Recording, Rect, StateInfo, Store, StoreError,
+    StyleTransition, Tree, TreeDump, DEFAULT_TRANSITION_MS, LIST_OVERSCAN_PX, SCROLL_WHEEL_LINE,
 };
 
 pub use tekto_widgets::{
