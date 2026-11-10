@@ -195,25 +195,54 @@ pub fn start_dev_server(handle: Arc<dyn AppHandle>) -> Result<DevEndpoint, McpEr
     Ok(ep)
 }
 
-fn handle_client(mut stream: TcpStream, handle: Arc<dyn AppHandle>) -> Result<(), McpError> {
-    let mut buf = [0u8; 8192];
-    let n = stream.read(&mut buf)?;
-    if n == 0 {
-        return Ok(());
+fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, String), McpError> {
+    let mut data = Vec::new();
+    let mut tmp = [0u8; 2048];
+    let header_end = loop {
+        let n = stream.read(&mut tmp)?;
+        if n == 0 {
+            return Err(McpError::msg("empty HTTP request"));
+        }
+        data.extend_from_slice(&tmp[..n]);
+        if let Some(pos) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos;
+        }
+        if data.len() > 64 * 1024 {
+            return Err(McpError::msg("request headers too large"));
+        }
+    };
+    let headers = String::from_utf8_lossy(&data[..header_end]).into_owned();
+    let mut content_len = 0usize;
+    for line in headers.lines() {
+        let lower = line.to_ascii_lowercase();
+        if let Some(v) = lower.strip_prefix("content-length:") {
+            content_len = v.trim().parse().unwrap_or(0);
+        }
     }
-    let raw = String::from_utf8_lossy(&buf[..n]);
-    let mut lines = raw.split("\r\n");
-    let request_line = lines.next().unwrap_or("");
+    let body_start = header_end + 4;
+    while data.len() < body_start + content_len {
+        let n = stream.read(&mut tmp)?;
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&tmp[..n]);
+        if data.len() > 2 * 1024 * 1024 {
+            return Err(McpError::msg("request body too large"));
+        }
+    }
+    let request_line = headers.lines().next().unwrap_or("");
     let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or("GET");
-    let path = parts.next().unwrap_or("/");
-    let body = raw
-        .split("\r\n\r\n")
-        .nth(1)
-        .unwrap_or("")
-        .trim_end_matches('\0');
+    let method = parts.next().unwrap_or("GET").to_string();
+    let path = parts.next().unwrap_or("/").to_string();
+    let end = (body_start + content_len).min(data.len());
+    let body = String::from_utf8_lossy(&data[body_start..end]).into_owned();
+    Ok((method, path, body))
+}
 
-    let (status, content_type, body_bytes) = match dispatch(handle.as_ref(), method, path, body) {
+fn handle_client(mut stream: TcpStream, handle: Arc<dyn AppHandle>) -> Result<(), McpError> {
+    let (method, path, body) = read_http_request(&mut stream)?;
+    let (status, content_type, body_bytes) = match dispatch(handle.as_ref(), &method, &path, &body)
+    {
         Ok(v) => v,
         Err(e) => error_response(e),
     };
@@ -348,10 +377,10 @@ fn http_request(
     };
     let req =
         format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n{extra}\r\n");
-    stream.write_all(req.as_bytes())?;
-    if !payload.is_empty() {
-        stream.write_all(&payload)?;
-    }
+    // One write so the server cannot reply before the POST body arrives.
+    let mut msg = req.into_bytes();
+    msg.extend_from_slice(&payload);
+    stream.write_all(&msg)?;
     let mut resp = Vec::new();
     stream.read_to_end(&mut resp)?;
     let header_end = resp
