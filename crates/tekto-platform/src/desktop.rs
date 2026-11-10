@@ -17,12 +17,15 @@ use std::time::{Duration, Instant};
 use tekto_layout::layout_tree;
 use tekto_mcp::{AppHandle, SharedTreeHandle};
 use tekto_render::{paint_tree, CpuRenderer, Renderer};
-use tekto_tree::{FieldKey, NodeId, Tree, SCROLL_WHEEL_LINE};
+use tekto_tree::{FieldKey, ImeEvent, NodeId, Tree, SCROLL_WHEEL_LINE};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::dpi::{LogicalPosition, LogicalSize};
+use winit::event::{
+    ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{ImePurpose, Window, WindowId};
 
 /// Wakes the window when the dev server patches the tree.
 #[derive(Clone, Copy, Debug)]
@@ -47,6 +50,10 @@ struct State {
     drag_last_y: f32,
     dragged: bool,
     modifiers: Modifiers,
+    /// `Window::set_ime_allowed` follows text-field focus.
+    ime_allowed: bool,
+    /// Last IME commit, so a following key event does not insert it again.
+    last_ime_commit: Option<String>,
     handle: Option<Arc<SharedTreeHandle>>,
     viewport: Arc<Mutex<Viewport>>,
     /// Origin for [`Tree::advance`]. Zero at the first frame of this surface.
@@ -115,6 +122,8 @@ impl ApplicationHandler<AppEvent> for App {
             drag_last_y: 0.0,
             dragged: false,
             modifiers: Modifiers::default(),
+            ime_allowed: false,
+            last_ime_commit: None,
             handle: self.handle.clone(),
             viewport: Arc::clone(&self.viewport),
             anim_origin: Instant::now(),
@@ -133,6 +142,11 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // The commit echo, when the OS sends one, is already in this burst.
+        // A key after the queue goes idle is the user's next keystroke.
+        if let Some(state) = self.state.as_mut() {
+            crate::expire_ime_echo(&mut state.last_ime_commit);
+        }
         let running = self
             .state
             .as_ref()
@@ -219,14 +233,21 @@ impl ApplicationHandler<AppEvent> for App {
                     state.modifiers = modifiers;
                 }
             }
-            // Committed characters and Backspace only. `WindowEvent::Ime`
-            // (preedit, commit from a composition, candidates) is ignored.
+            // Plain keys, plus IME preedit / commit when a text field is focused.
+            // The candidate window is only positioned (`set_ime_cursor_area`);
+            // drawing that popup is the OS input method's job.
             WindowEvent::KeyboardInput { event, .. } => {
                 if let Some(state) = self.state.as_mut() {
                     apply_field_key(state, &event);
+                    sync_ime(state);
                 }
             }
-            WindowEvent::Ime(_) => {}
+            WindowEvent::Ime(ime) => {
+                if let Some(state) = self.state.as_mut() {
+                    apply_ime(state, ime);
+                    sync_ime(state);
+                }
+            }
             _ => {}
         }
     }
@@ -310,6 +331,7 @@ fn redraw(state: &mut State) {
         }
         let _ = buf.present();
     }
+    sync_ime(state);
 }
 
 #[cfg(feature = "a11y-os")]
@@ -458,33 +480,105 @@ fn apply_pointer_click(state: &mut State, x: f32, y: f32) {
     state.window.request_redraw();
 }
 
+/// Turn the platform IME on only while a text field is focused, and tell it
+/// where the caret is so a candidate window can sit nearby.
+///
+/// Shared by the Linux and Windows winit backends (this file). Android still
+/// has no soft keyboard. The candidate popup itself is drawn by the OS.
+fn sync_ime(state: &mut State) {
+    let focused_field = state.tree.lock().ok().and_then(|tree| {
+        let id = tree.focus?;
+        let node = tree.get(id)?;
+        if node.kind != tekto_tree::NodeKind::TextField {
+            return None;
+        }
+        let inset = node.layout.padding;
+        let x = node.bounds.x + inset + node.caret_x;
+        let y = node.bounds.y + inset;
+        let h = (node.bounds.height - 2.0 * inset).max(1.0);
+        Some((x, y, h))
+    });
+    let allow = focused_field.is_some();
+    if state.ime_allowed != allow {
+        state.window.set_ime_allowed(allow);
+        if allow {
+            state.window.set_ime_purpose(ImePurpose::Normal);
+        }
+        state.ime_allowed = allow;
+        if !allow {
+            state.last_ime_commit = None;
+        }
+    }
+    if let Some((x, y, h)) = focused_field {
+        state.window.set_ime_cursor_area(
+            LogicalPosition::new(x as f64, y as f64),
+            LogicalSize::new(1.0, h as f64),
+        );
+    }
+}
+
+fn apply_ime(state: &mut State, ime: Ime) {
+    let event = match ime {
+        Ime::Enabled => ImeEvent::Enabled,
+        Ime::Disabled => ImeEvent::Disabled,
+        Ime::Preedit(text, cursor) => {
+            state.last_ime_commit = None;
+            ImeEvent::Preedit { text, cursor }
+        }
+        Ime::Commit(text) => {
+            if !text.is_empty() {
+                state.last_ime_commit = Some(text.clone());
+            }
+            ImeEvent::Commit(text)
+        }
+    };
+    let changed = state
+        .tree
+        .lock()
+        .ok()
+        .and_then(|mut tree| tree.apply_ime(event).ok())
+        .unwrap_or(false);
+    if changed {
+        state.window.request_redraw();
+    }
+}
+
 /// Printable characters and Backspace on the focused text field.
 ///
-/// Ctrl, Alt, and Super chords are left alone. This is not an input method:
-/// there is no preedit string, marked range, or candidate window.
+/// Ctrl, Alt, and Super chords are left alone. While a preedit is active,
+/// printable text goes through [`Tree::type_keyboard_text`] and is ignored.
+/// A key string that repeats the latest IME commit is dropped only until
+/// the event queue goes idle (Windows can echo the commit in that burst).
 fn apply_field_key(state: &mut State, event: &KeyEvent) {
     if event.state != ElementState::Pressed {
         return;
     }
-    let changed = if let Ok(mut tree) = state.tree.lock() {
-        if event.logical_key == Key::Named(NamedKey::Backspace) {
-            tree.apply_field_key(FieldKey::Backspace).unwrap_or(false)
+    let is_backspace = event.logical_key == Key::Named(NamedKey::Backspace);
+    let plain = if is_backspace {
+        state.last_ime_commit = None;
+        None
+    } else {
+        let mods = state.modifiers.state();
+        if mods.control_key() || mods.alt_key() || mods.super_key() {
+            None
         } else {
-            let mods = state.modifiers.state();
-            if mods.control_key() || mods.alt_key() || mods.super_key() {
-                false
-            } else if let Some(text) = event.text.as_deref() {
-                let plain: String = text.chars().filter(|c| !c.is_control()).collect();
-                if plain.is_empty() {
-                    false
-                } else if let Some(id) = tree.focus {
-                    tree.insert_text(id, &plain).is_ok()
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
+            event
+                .text
+                .as_deref()
+                .map(|text| text.chars().filter(|c| !c.is_control()).collect::<String>())
+        }
+    };
+    let plain = match plain {
+        Some(text) if !crate::accept_keyboard_text(&mut state.last_ime_commit, &text) => return,
+        other => other,
+    };
+    let changed = if let Ok(mut tree) = state.tree.lock() {
+        if is_backspace {
+            tree.apply_field_key(FieldKey::Backspace).unwrap_or(false)
+        } else if let Some(plain) = plain.as_deref() {
+            tree.type_keyboard_text(plain).unwrap_or(false)
+        } else {
+            false
         }
     } else {
         false
