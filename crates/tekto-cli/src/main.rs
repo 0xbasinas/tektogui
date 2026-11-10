@@ -1,6 +1,8 @@
 //! `tekto` command line.
 
 use clap::{Parser, Subcommand};
+
+mod scaffold;
 use std::path::PathBuf;
 use tekto::{notes_tree, render_headless_to_file, run, WindowOptions};
 use tekto_mcp::{http_get, http_post, read_endpoint, run_stdio_mcp};
@@ -14,7 +16,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a new Tekto app (scaffold is still small).
+    /// Create a new Notes-style Tekto app (Rust + a TSX sketch).
     New { name: String },
     /// Run the Notes example. Default is a window; use --headless for a PNG.
     Dev {
@@ -61,14 +63,10 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
         Command::New { name } => {
-            std::fs::create_dir_all(&name)?;
-            std::fs::write(
-                PathBuf::from(&name).join("README.md"),
-                format!(
-                    "# {name}\n\nA Tekto app. Run `tekto dev` from the tektogui repo for now.\n"
-                ),
-            )?;
-            println!("created ./{name}");
+            let dest = scaffold::scaffold_new(&name)?;
+            println!("created {}", dest.display());
+            println!("  cargo run -- --headless --out app.png   # PNG + tree");
+            println!("  cargo run                               # window + dev server");
         }
         Command::Dev { headless, out } => {
             let tree = notes_tree(640.0, 400.0)?;
