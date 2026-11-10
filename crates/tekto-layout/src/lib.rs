@@ -646,4 +646,100 @@ mod tests {
         assert!((again.height - end.height).abs() < 0.01);
         assert_child_follows(&tree, "later layout");
     }
+
+    /// A child that already has a stored absolute position must move with a
+    /// parent translation. The next layout must not restore the old absolute.
+    #[test]
+    fn persisted_child_stays_with_parent_after_transition() {
+        use tekto_tree::StyleTransition;
+
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        tree.get_mut(root).unwrap().layout = LayoutStyle {
+            width: 200.0,
+            height: 120.0,
+            padding: 0.0,
+            gap: 0.0,
+            column: true,
+            justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
+        };
+        let parent = tree.add(NodeKind::Rect, Some(root)).unwrap();
+        tree.get_mut(parent).unwrap().layout = LayoutStyle::sized(80.0, 40.0);
+        let child = tree.add(NodeKind::Rect, Some(parent)).unwrap();
+        tree.get_mut(child).unwrap().layout = LayoutStyle::sized(20.0, 10.0);
+        layout_tree(&mut tree, 200.0, 120.0);
+
+        tree.transition(
+            child,
+            StyleTransition {
+                x: Some(10.0),
+                duration_ms: Some(0.0),
+                ..StyleTransition::default()
+            },
+        )
+        .unwrap();
+        layout_tree(&mut tree, 200.0, 120.0);
+        let parent_start = tree.get(parent).unwrap().bounds;
+        let child_start = tree.get(child).unwrap().bounds;
+        assert!(
+            parent_start.x.abs() < 0.01,
+            "parent start x {}",
+            parent_start.x
+        );
+        assert!(
+            (child_start.x - 10.0).abs() < 0.01,
+            "child start x {}",
+            child_start.x
+        );
+
+        tree.transition(
+            parent,
+            StyleTransition {
+                x: Some(40.0),
+                duration_ms: Some(100.0),
+                ..StyleTransition::default()
+            },
+        )
+        .unwrap();
+
+        layout_tree(&mut tree, 200.0, 120.0);
+        assert!(tree.advance(0.0));
+        assert!((tree.get(parent).unwrap().bounds.x - 0.0).abs() < 0.01);
+        assert!((tree.get(child).unwrap().bounds.x - 10.0).abs() < 0.01);
+
+        layout_tree(&mut tree, 200.0, 120.0);
+        assert!(tree.advance(50.0));
+        assert!(
+            (tree.get(parent).unwrap().bounds.x - 20.0).abs() < 0.01,
+            "mid parent {}",
+            tree.get(parent).unwrap().bounds.x
+        );
+        assert!(
+            (tree.get(child).unwrap().bounds.x - 30.0).abs() < 0.01,
+            "mid child {}",
+            tree.get(child).unwrap().bounds.x
+        );
+
+        layout_tree(&mut tree, 200.0, 120.0);
+        assert!(!tree.advance(100.0));
+        assert!((tree.get(parent).unwrap().bounds.x - 40.0).abs() < 0.01);
+        assert!((tree.get(child).unwrap().bounds.x - 50.0).abs() < 0.01);
+
+        layout_tree(&mut tree, 200.0, 120.0);
+        let parent_again = tree.get(parent).unwrap().bounds;
+        let child_again = tree.get(child).unwrap().bounds;
+        assert!(
+            (parent_again.x - 40.0).abs() < 0.01,
+            "later parent {}",
+            parent_again.x
+        );
+        assert!(
+            (child_again.x - 50.0).abs() < 0.01,
+            "later child {} detached from parent",
+            child_again.x
+        );
+        assert!((child_again.y - child_start.y).abs() < 0.01);
+    }
 }

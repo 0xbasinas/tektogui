@@ -279,18 +279,33 @@ fn push_channel(out: &mut Vec<Channel>, kind: ChannelKind, to: Option<f32>, from
 }
 
 /// Finished position and size stay in layout so the next layout pass keeps them.
+///
+/// Persisted descendant positions are absolute. A parent translation has to
+/// move those stored coordinates by the same delta, or the next layout puts
+/// the child back at the pre-move point.
 fn commit_layout_targets(tree: &mut Tree, id: NodeId, channels: &[Channel]) {
     let Some(node) = tree.nodes.get_mut(&id) else {
         return;
     };
+    let mut dx = 0.0;
+    let mut dy = 0.0;
     for channel in channels {
         match channel.kind {
             ChannelKind::Opacity => {}
-            ChannelKind::X => node.layout.x = channel.to,
-            ChannelKind::Y => node.layout.y = channel.to,
+            ChannelKind::X => {
+                node.layout.x = channel.to;
+                dx += channel.to - channel.from;
+            }
+            ChannelKind::Y => {
+                node.layout.y = channel.to;
+                dy += channel.to - channel.from;
+            }
             ChannelKind::Width => node.layout.width = channel.to,
             ChannelKind::Height => node.layout.height = channel.to,
         }
+    }
+    if dx != 0.0 || dy != 0.0 {
+        shift_persisted_descendant_positions(tree, id, dx, dy);
     }
 }
 
@@ -346,6 +361,28 @@ fn shift_descendants(tree: &mut Tree, id: NodeId, dx: f32, dy: f32) {
             node.bounds.y += dy;
         }
         shift_descendants(tree, child, dx, dy);
+    }
+}
+
+fn shift_persisted_descendant_positions(tree: &mut Tree, id: NodeId, dx: f32, dy: f32) {
+    if !dx.is_finite() || !dy.is_finite() || (dx == 0.0 && dy == 0.0) {
+        return;
+    }
+    let children = tree
+        .nodes
+        .get(&id)
+        .map(|node| node.children.clone())
+        .unwrap_or_default();
+    for child in children {
+        if let Some(node) = tree.nodes.get_mut(&child) {
+            if node.layout.x.is_finite() {
+                node.layout.x += dx;
+            }
+            if node.layout.y.is_finite() {
+                node.layout.y += dy;
+            }
+        }
+        shift_persisted_descendant_positions(tree, child, dx, dy);
     }
 }
 
