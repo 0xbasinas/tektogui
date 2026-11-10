@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tekto_tree::{NodeId, NodePatch, Store, Tree};
 
+mod http_policy;
 mod writeback;
 pub use writeback::{
     app_root, apply, apply_in, find_app_root, prefer_from_env, Prefer, Snapshot, WritebackReport,
@@ -378,7 +379,7 @@ pub fn start_dev_server(handle: Arc<dyn AppHandle>) -> Result<DevEndpoint, McpEr
     Ok(ep)
 }
 
-fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, String), McpError> {
+fn read_http_request(stream: &mut impl Read) -> Result<Option<(String, String, String)>, McpError> {
     let mut data = Vec::new();
     let mut tmp = [0u8; 2048];
     let header_end = loop {
@@ -395,6 +396,9 @@ fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, String),
         }
     };
     let headers = String::from_utf8_lossy(&data[..header_end]).into_owned();
+    if !http_policy::trusted(&headers) {
+        return Ok(None);
+    }
     let mut content_len = 0usize;
     for line in headers.lines() {
         let lower = line.to_ascii_lowercase();
@@ -419,23 +423,33 @@ fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, String),
     let path = parts.next().unwrap_or("/").to_string();
     let end = (body_start + content_len).min(data.len());
     let body = String::from_utf8_lossy(&data[body_start..end]).into_owned();
-    Ok((method, path, body))
+    Ok(Some((method, path, body)))
 }
 
 fn handle_client(mut stream: TcpStream, handle: Arc<dyn AppHandle>) -> Result<(), McpError> {
-    let (method, path, body) = read_http_request(&mut stream)?;
-    let (status, content_type, body_bytes) = match dispatch(handle.as_ref(), &method, &path, &body)
-    {
-        Ok(v) => v,
-        Err(e) => error_response(e),
-    };
+    let request = read_http_request(&mut stream)?;
+    let (status, content_type, body_bytes) = process_http_request(handle.as_ref(), request);
     let header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body_bytes.len()
     );
     stream.write_all(header.as_bytes())?;
     stream.write_all(&body_bytes)?;
     Ok(())
+}
+
+fn process_http_request(
+    handle: &dyn AppHandle,
+    request: Option<(String, String, String)>,
+) -> (&'static str, &'static str, Vec<u8>) {
+    let Some((method, path, body)) = request else {
+        return (
+            "403 Forbidden",
+            "application/json",
+            br#"{"error":"untrusted host or origin"}"#.to_vec(),
+        );
+    };
+    dispatch(handle, &method, &path, &body).unwrap_or_else(error_response)
 }
 
 fn states_value(history: &Mutex<Option<Arc<Mutex<Store<Value>>>>>) -> Value {
@@ -643,7 +657,20 @@ fn http_request_bytes(
         .ok_or_else(|| McpError::msg("only http:// is supported"))?;
     let (host, path) = url.split_once('/').unwrap_or((url, ""));
     let path = format!("/{path}");
-    let (host_only, port) = if let Some((h, p)) = host.split_once(':') {
+    let (host_only, port) = if let Some(rest) = host.strip_prefix('[') {
+        let (ip, suffix) = rest
+            .split_once(']')
+            .ok_or_else(|| McpError::msg("invalid IPv6 URL"))?;
+        let port = if suffix.is_empty() {
+            80
+        } else {
+            suffix
+                .strip_prefix(':')
+                .and_then(|p| p.parse().ok())
+                .ok_or_else(|| McpError::msg("invalid port"))?
+        };
+        (ip, port)
+    } else if let Some((h, p)) = host.split_once(':') {
         (h, p.parse().unwrap_or(80))
     } else {
         (host, 80u16)
@@ -878,6 +905,106 @@ fn write_lsp_message(w: &mut impl Write, v: &Value) -> Result<(), McpError> {
 mod tests {
     use super::*;
     use tekto_tree::{NodeKind, NodePatch};
+
+    fn http_test_handle() -> SharedTreeHandle {
+        let mut tree = Tree::new();
+        tree.add(NodeKind::Window, None).unwrap();
+        SharedTreeHandle {
+            tree: Arc::new(Mutex::new(tree)),
+            render: Arc::new(|_| Ok(Vec::new())),
+            logs: Arc::new(Mutex::new(Vec::new())),
+            on_change: Mutex::new(None),
+            pending_js: Mutex::new(None),
+            apply_js: Mutex::new(Some(Arc::new(|_| Ok(())))),
+            last_writeback: Mutex::new(None),
+            history: Mutex::new(None),
+        }
+    }
+
+    #[test]
+    fn http_policy_covers_all_routes_and_trusted_mutations() {
+        let handle = http_test_handle();
+        for (method, path) in [
+            ("GET", "/health"),
+            ("GET", "/inspector"),
+            ("GET", "/tree"),
+            ("GET", "/tree.txt"),
+            ("GET", "/screenshot"),
+            ("GET", "/accesskit"),
+            ("GET", "/state"),
+            ("GET", "/states"),
+            ("GET", "/logs"),
+            ("GET", "/components"),
+            ("POST", "/states/restore"),
+            ("POST", "/patch"),
+            ("POST", "/click"),
+            ("POST", "/type"),
+            ("POST", "/reload"),
+        ] {
+            for headers in [
+                "Host: evil.test",
+                "Host: localhost:3000\r\nOrigin: http://evil.test",
+            ] {
+                let raw =
+                    format!("{method} {path} HTTP/1.1\r\n{headers}\r\nContent-Length: 100\r\n\r\n");
+                let request = read_http_request(&mut raw.as_bytes()).unwrap();
+                assert_eq!(
+                    process_http_request(&handle, request).0,
+                    "403 Forbidden",
+                    "{path}"
+                );
+            }
+        }
+        for (path, body, origin) in [
+            (
+                "/patch",
+                r#"{"id":1,"text":"changed"}"#,
+                "Origin: http://localhost:3000\r\n",
+            ),
+            ("/reload", "console.log(1)", ""),
+        ] {
+            let raw = format!("POST {path} HTTP/1.1\r\nHost: localhost:3000\r\n{origin}Content-Length: {}\r\n\r\n{body}", body.len());
+            let response =
+                process_http_request(&handle, read_http_request(&mut raw.as_bytes()).unwrap());
+            assert_eq!(
+                response.0,
+                "200 OK",
+                "{path}: {:?}",
+                String::from_utf8_lossy(&response.2)
+            );
+        }
+        assert_eq!(
+            handle.pending_js.lock().unwrap().as_deref(),
+            Some("console.log(1)")
+        );
+    }
+
+    #[test]
+    fn http_socket_integration_response_and_cli() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let worker = thread::spawn(move || {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                handle_client(stream, Arc::new(http_test_handle())).unwrap();
+            }
+        });
+        let (status, _) = http_get(&format!("http://127.0.0.1:{port}/tree")).unwrap();
+        assert!(status.contains("200"));
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            stream,
+            "GET /state HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://evil.test\r\n\r\n"
+        )
+        .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 403"));
+        assert!(!response
+            .to_ascii_lowercase()
+            .contains("access-control-allow-origin"));
+        worker.join().unwrap();
+    }
 
     #[test]
     fn click_sets_focus_and_is_logged() {
