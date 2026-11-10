@@ -58,7 +58,7 @@ Do not start a display or an emulator for these tests.
 
 ## Long lists
 
-`layout_tree` windows a `list` inside `scroll`. After layout, only rows that meet the viewport plus `LIST_OVERSCAN_PX` (64) are children, so paint walks that window. Other rows keep the ids `list_item` returned. `scroll_extent` is still the full stack. Set `scroll_y`, lay out again, and assert the offset did not move and the rows for that offset are the children. `crates/tekto/tests/list_virtual.rs` is the pattern. CPU `paint_tree` is enough. GPU uses the same walk when the `gpu` feature is on.
+`layout_tree` windows a `list` inside `scroll`. After layout, only rows that meet the viewport plus `LIST_OVERSCAN_PX` (64) are children, so paint walks that window. `scroll_y` is the scroll box. Subtract the list's offset (scroll padding plus earlier siblings) before picking rows. Other rows keep the ids `list_item` returned until `Tree::remove` drops the list (that also drops spacers) or `append` moves the row. `scroll_extent` is still the full stack. Set `scroll_y`, lay out again, and assert the offset did not move and the rows for that offset are the children. Cover a list that is not at the top of the scroll. `crates/tekto/tests/list_virtual.rs` is the pattern. CPU `paint_tree` is enough. GPU uses the same walk when the `gpu` feature is on.
 
 ## Motion
 

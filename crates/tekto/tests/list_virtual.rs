@@ -1,8 +1,8 @@
 //! Long lists lay out a window of rows. Scroll extent stays the full stack.
 
 use tekto::{
-    layout_tree, list, list_item, paint_tree, window, Color, CpuRenderer, ListRow, NodeKind,
-    Renderer, LIST_OVERSCAN_PX,
+    layout_tree, list, list_item, paint_tree, scroll, window, Color, CpuRenderer, ListRow,
+    NodeKind, Renderer, LIST_OVERSCAN_PX,
 };
 
 const ROW_H: f32 = 40.0;
@@ -130,6 +130,106 @@ fn long_list_lays_out_a_window_and_keeps_a_jump() {
             start < jump + reach && start + ROW_H > jump - LIST_OVERSCAN_PX
         }),
         "a laid-out row sits outside the overscan window"
+    );
+}
+
+#[test]
+fn shared_scroll_shows_the_list_top_below_a_header() {
+    let mut tree = tekto::Tree::new();
+    let root = window(&mut tree, "Shared", 240.0, 400.0).unwrap();
+    tree.get_mut(root).unwrap().layout.padding = 0.0;
+    tree.get_mut(root).unwrap().layout.gap = 0.0;
+    let scroll_id = scroll(&mut tree, root, 240.0, VIEW_H).unwrap();
+    tree.get_mut(scroll_id).unwrap().layout.padding = 24.0;
+    let header = tree.add(NodeKind::Rect, Some(scroll_id)).unwrap();
+    tree.get_mut(header).unwrap().layout = tekto::LayoutStyle::sized(240.0, 456.0);
+    let rows: Vec<ListRow> = (0..40)
+        .map(|index| ListRow {
+            label: leak_label(index),
+            height: ROW_H,
+        })
+        .collect();
+    let built = list(&mut tree, scroll_id, 240.0, f32::NAN, &rows).unwrap();
+    assert_eq!(built.scroll, Some(scroll_id));
+    assert_eq!(tree.get(built.list).unwrap().parent, Some(scroll_id));
+    let ids = tree.get(built.list).unwrap().children.clone();
+    // Padding 24 plus a 456px header puts the first row at content y 480.
+    layout_tree(&mut tree, 240.0, 400.0);
+    let applied = tree.set_scroll_y(scroll_id, 480.0).unwrap();
+    assert!((applied - 480.0).abs() < 1.0, "scroll landed at {applied}");
+    layout_tree(&mut tree, 240.0, 400.0);
+    layout_tree(&mut tree, 240.0, 400.0);
+    let offset = tree.get(scroll_id).unwrap().scroll_y;
+    assert!((offset - 480.0).abs() < 0.5, "offset drifted to {offset}");
+
+    let shown = list_items(&tree, built.list);
+    assert!(shown.contains(&ids[0]), "first row missing: {shown:?}");
+    assert!(
+        !shown.contains(&ids[10]),
+        "row 10 is 480px into the list and should be detached"
+    );
+    let row = tree.get(ids[0]).unwrap().bounds;
+    let view = tree.get(scroll_id).unwrap().bounds;
+    assert!(
+        row.y < view.y + view.height && row.y + row.height > view.y,
+        "first row {:?} outside {:?}",
+        row,
+        view
+    );
+    let mut renderer = CpuRenderer::new(240, 400).unwrap();
+    paint_tree(&mut renderer, &tree, Color::PAGE);
+    assert!(renderer.to_png().unwrap().starts_with(b"\x89PNG"));
+}
+
+#[test]
+fn removing_a_virtualized_list_drops_offscreen_rows_and_spacers() {
+    let (mut tree, list_id, scroll_id, ids) = build();
+    layout_tree(&mut tree, 240.0, 320.0);
+    let off = ids[ROWS - 1];
+    assert_ne!(tree.get(off).unwrap().parent, Some(list_id));
+    let pads: Vec<tekto::NodeId> = tree
+        .ids()
+        .filter(|id| {
+            tree.get(*id)
+                .and_then(|node| node.name.as_deref())
+                .is_some_and(|name| name.starts_with("list-pad"))
+        })
+        .collect();
+    assert!(!pads.is_empty(), "a tall list keeps a spacer");
+    tree.remove(list_id).unwrap();
+    assert!(tree.get(list_id).is_none());
+    assert!(tree.get(scroll_id).is_some());
+    for id in ids {
+        assert!(tree.get(id).is_none(), "row {id} survived remove");
+    }
+    for id in pads {
+        assert!(tree.get(id).is_none(), "spacer {id} survived remove");
+    }
+}
+
+#[test]
+fn reparenting_an_offscreen_row_does_not_reattach_it() {
+    let (mut tree, list_id, scroll_id, ids) = build();
+    layout_tree(&mut tree, 240.0, 320.0);
+    let off = ids[ROWS - 1];
+    assert!(tree.get(off).unwrap().parent.is_none());
+    let root = tree.get(scroll_id).unwrap().parent.unwrap();
+    tree.append(root, off).unwrap();
+    assert!(!tree.get(list_id).unwrap().list_slots.contains(&off));
+    let jump = row_start(ROWS - 1);
+    tree.set_scroll_y(scroll_id, jump).unwrap();
+    layout_tree(&mut tree, 240.0, 320.0);
+    assert_eq!(tree.get(off).unwrap().parent, Some(root));
+    assert!(!tree.get(list_id).unwrap().children.contains(&off));
+    assert!(!tree.get(list_id).unwrap().list_slots.contains(&off));
+    assert_eq!(
+        tree.get(root)
+            .unwrap()
+            .children
+            .iter()
+            .filter(|id| **id == off)
+            .count(),
+        1
     );
 }
 

@@ -12,7 +12,7 @@ pub use animate::{
 pub use recording::{Action, RecordedKey, Recording};
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// Stable id of a scene node. Never reused for the life of a [`Tree`].
@@ -278,6 +278,23 @@ pub struct Node {
     /// Paint multiplier for this node and its children. 1 is solid, 0 is hidden.
     #[serde(default = "default_opacity")]
     pub opacity: f32,
+}
+
+/// A detached row or spacer still belongs to `list_id`. A row whose parent
+/// lives outside the removed subtree does not.
+fn claim_with_list(
+    nodes: &HashMap<NodeId, Node>,
+    queued: &HashSet<NodeId>,
+    list_id: NodeId,
+    id: NodeId,
+) -> bool {
+    if id.raw() == 0 || !nodes.contains_key(&id) {
+        return false;
+    }
+    match nodes[&id].parent {
+        None => true,
+        Some(parent) => parent == list_id || queued.contains(&parent),
+    }
 }
 
 fn default_opacity() -> f32 {
@@ -546,6 +563,13 @@ impl Tree {
                 old_node.children.retain(|c| *c != child);
             }
         }
+        // A virtualized row can be off the child list and still sit in `list_slots`.
+        // Drop that slot so the next layout does not attach it under the old list.
+        for node in self.nodes.values_mut() {
+            if node.kind == NodeKind::List {
+                node.list_slots.retain(|id| *id != child);
+            }
+        }
         self.nodes.get_mut(&parent).unwrap().children.push(child);
         self.nodes.get_mut(&child).unwrap().parent = Some(parent);
         Ok(())
@@ -566,18 +590,77 @@ impl Tree {
                 p.children.retain(|c| *c != id);
             }
         }
+        // Offscreen list rows and spacers have no parent, so a child walk
+        // would leave them in the tree. Take those that still belong to a
+        // list inside this subtree. A row already reparented elsewhere stays.
+        let mut queued = HashSet::new();
         let mut stack = vec![id];
+        queued.insert(id);
         while let Some(cur) = stack.pop() {
-            if let Some(node) = self.nodes.remove(&cur) {
-                stack.extend(node.children);
+            let (children, kind, slots, pad_top, pad_bottom) = {
+                let Some(node) = self.nodes.get(&cur) else {
+                    continue;
+                };
+                (
+                    node.children.clone(),
+                    node.kind,
+                    node.list_slots.clone(),
+                    node.list_pad_top,
+                    node.list_pad_bottom,
+                )
+            };
+            let mut extra = Vec::new();
+            if kind == NodeKind::List {
+                for slot in slots {
+                    if claim_with_list(&self.nodes, &queued, cur, slot) {
+                        extra.push(slot);
+                    }
+                }
+                if pad_top != 0 {
+                    let pad = NodeId::from_raw(pad_top);
+                    if claim_with_list(&self.nodes, &queued, cur, pad) {
+                        extra.push(pad);
+                    }
+                }
+                if pad_bottom != 0 {
+                    let pad = NodeId::from_raw(pad_bottom);
+                    if claim_with_list(&self.nodes, &queued, cur, pad) {
+                        extra.push(pad);
+                    }
+                }
             }
-            if self.focus == Some(cur) {
+            for child in children.into_iter().chain(extra) {
+                if queued.insert(child) {
+                    stack.push(child);
+                }
+            }
+        }
+        for cur in &queued {
+            self.nodes.remove(cur);
+            if self.focus == Some(*cur) {
                 self.focus = self.root;
             }
-            if self.last_click == Some(cur) {
+            if self.last_click == Some(*cur) {
                 self.last_click = None;
             }
-            self.drop_transitions(cur);
+            self.drop_transitions(*cur);
+        }
+        for node in self.nodes.values_mut() {
+            node.children.retain(|child| !queued.contains(child));
+            if node.parent.is_some_and(|parent| queued.contains(&parent)) {
+                node.parent = None;
+            }
+            if node.kind == NodeKind::List {
+                node.list_slots.retain(|slot| !queued.contains(slot));
+                if node.list_pad_top != 0 && queued.contains(&NodeId::from_raw(node.list_pad_top)) {
+                    node.list_pad_top = 0;
+                }
+                if node.list_pad_bottom != 0
+                    && queued.contains(&NodeId::from_raw(node.list_pad_bottom))
+                {
+                    node.list_pad_bottom = 0;
+                }
+            }
         }
         Ok(())
     }

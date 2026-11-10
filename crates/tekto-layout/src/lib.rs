@@ -342,7 +342,15 @@ fn virtualize_list(tree: &mut Tree, text: &mut TextEngine, list_id: NodeId) {
             slots.push(*child);
         }
     }
-    slots.retain(|id| tree.get(*id).is_some_and(|n| n.kind == NodeKind::ListItem));
+    slots.retain(|id| {
+        tree.get(*id).is_some_and(|node| {
+            node.kind == NodeKind::ListItem
+                && match node.parent {
+                    None => true,
+                    Some(parent) => parent == list_id,
+                }
+        })
+    });
     if slots.is_empty() {
         if let Some(node) = tree.get_mut(list_id) {
             node.list_slots.clear();
@@ -389,8 +397,12 @@ fn virtualize_list(tree: &mut Tree, text: &mut TextEngine, list_id: NodeId) {
     } else {
         0.0
     };
-    let window_top = (scroll_y - LIST_OVERSCAN_PX).max(0.0);
-    let window_bottom = scroll_y + viewport + LIST_OVERSCAN_PX;
+    // `scroll_y` is the scroll box, not the list. Padding and earlier
+    // siblings move the list down inside that box.
+    let origin = list_content_origin(tree, text, scroll_id, list_id);
+    let local = scroll_y - origin;
+    let window_top = (local - LIST_OVERSCAN_PX).max(0.0);
+    let window_bottom = local + viewport + LIST_OVERSCAN_PX;
 
     let mut first = None;
     let mut last = None;
@@ -404,7 +416,18 @@ fn virtualize_list(tree: &mut Tree, text: &mut TextEngine, list_id: NodeId) {
         }
     }
     let (Some(first), Some(last)) = (first, last) else {
-        reattach_all(tree, list_id, &slots);
+        // The list is entirely outside the viewport. Keep its height with one
+        // spacer so the scroll extent does not collapse, and leave rows detached.
+        detach_pad(tree, list_id, false);
+        let mut children = Vec::new();
+        if total > 0.5 {
+            if let Some(id) = ensure_pad(tree, list_id, true, total, list_width) {
+                children.push(id);
+            }
+        } else {
+            detach_pad(tree, list_id, true);
+        }
+        assign_list_children(tree, list_id, &slots, &children);
         return;
     };
 
@@ -436,6 +459,92 @@ fn virtualize_list(tree: &mut Tree, text: &mut TextEngine, list_id: NodeId) {
         detach_pad(tree, list_id, false);
     }
     assign_list_children(tree, list_id, &slots, &children);
+}
+
+/// Y of the list's content box inside the scroll border box, before `scroll_y`.
+fn list_content_origin(
+    tree: &Tree,
+    text: &mut TextEngine,
+    scroll_id: NodeId,
+    list_id: NodeId,
+) -> f32 {
+    let Some(scroll) = tree.get(scroll_id) else {
+        return 0.0;
+    };
+    let pad = finite_nonneg(scroll.layout.padding);
+    let list_pad = tree
+        .get(list_id)
+        .map(|node| finite_nonneg(node.layout.padding))
+        .unwrap_or(0.0);
+    if !scroll.layout.column {
+        return pad + list_pad;
+    }
+    let gap = finite_nonneg(scroll.layout.gap);
+    let mut y = pad;
+    for child in &scroll.children {
+        if *child == list_id {
+            return y + list_pad;
+        }
+        y += border_height(tree, text, *child, 0);
+        y += gap;
+    }
+    pad + list_pad
+}
+
+fn finite_nonneg(value: f32) -> f32 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
+}
+
+/// Border-box height from style, before this layout pass writes bounds.
+fn border_height(tree: &Tree, text: &mut TextEngine, id: NodeId, depth: u8) -> f32 {
+    if depth > 16 {
+        return 0.0;
+    }
+    let Some(node) = tree.get(id) else {
+        return 0.0;
+    };
+    if node.layout.height.is_finite() && node.layout.height >= 0.0 {
+        return node.layout.height;
+    }
+    if matches!(
+        node.kind,
+        NodeKind::Text | NodeKind::Button | NodeKind::TextField | NodeKind::ListItem
+    ) {
+        let width = node.layout.width;
+        return row_box_height(tree, text, id, width);
+    }
+    let pad = finite_nonneg(node.layout.padding);
+    let gap = finite_nonneg(node.layout.gap);
+    if node.children.is_empty() {
+        let previous = node.bounds.height;
+        return if previous.is_finite() && previous > 0.0 {
+            previous
+        } else {
+            0.0
+        };
+    }
+    let children = node.children.clone();
+    let column = node.layout.column;
+    if column {
+        let mut total = 0.0;
+        for child in &children {
+            total += border_height(tree, text, *child, depth + 1);
+        }
+        if children.len() > 1 {
+            total += gap * (children.len() - 1) as f32;
+        }
+        total + 2.0 * pad
+    } else {
+        let mut tallest = 0.0_f32;
+        for child in &children {
+            tallest = tallest.max(border_height(tree, text, *child, depth + 1));
+        }
+        tallest + 2.0 * pad
+    }
 }
 
 fn list_viewport_px(tree: &Tree, list_id: NodeId) -> f32 {
@@ -609,6 +718,14 @@ fn assign_list_children(tree: &mut Tree, list_id: NodeId, slots: &[NodeId], chil
         node.children = children.to_vec();
     }
     for id in children {
+        let previous = tree.get(*id).and_then(|node| node.parent);
+        if let Some(previous) = previous {
+            if previous != list_id {
+                if let Some(parent) = tree.get_mut(previous) {
+                    parent.children.retain(|child| child != id);
+                }
+            }
+        }
         if let Some(node) = tree.get_mut(*id) {
             node.parent = Some(list_id);
         }
