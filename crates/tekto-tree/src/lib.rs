@@ -41,7 +41,13 @@ pub enum NodeKind {
     Button,
     /// Single-line editable value. `name` is the label; `text` is the value.
     TextField,
+    /// Vertical clip of overflowing children. `scroll_y` shifts them up.
+    Scroll,
 }
+
+/// Logical pixels one mouse-wheel notch moves a scroll container.
+/// A notch is a short step, not a page.
+pub const SCROLL_WHEEL_LINE: f32 = 48.0;
 
 impl NodeKind {
     pub fn as_str(self) -> &'static str {
@@ -52,10 +58,11 @@ impl NodeKind {
             NodeKind::Text => "text",
             NodeKind::Button => "button",
             NodeKind::TextField => "text_field",
+            NodeKind::Scroll => "scroll",
         }
     }
 
-    /// Parse a kind name (`window`, `group`, `rect`, `text`, `button`, `text_field`).
+    /// Parse a kind name (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`).
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "window" => Some(Self::Window),
@@ -64,6 +71,7 @@ impl NodeKind {
             "text" => Some(Self::Text),
             "button" => Some(Self::Button),
             "text_field" => Some(Self::TextField),
+            "scroll" => Some(Self::Scroll),
             _ => None,
         }
     }
@@ -205,6 +213,14 @@ pub struct Node {
     /// Caret x inside the content box, in logical pixels. Layout fills this in.
     #[serde(default)]
     pub caret_x: f32,
+    /// Vertical offset of a [`NodeKind::Scroll`] container, in logical pixels.
+    /// Zero shows the top of the content. Layout clamps this to the content.
+    #[serde(default)]
+    pub scroll_y: f32,
+    /// Distance from the scroll box top to the bottom of its content, before
+    /// `scroll_y` is applied. Layout writes this. Zero until the first layout.
+    #[serde(default)]
+    pub scroll_extent: f32,
 }
 
 impl Node {
@@ -223,6 +239,8 @@ impl Node {
             children: Vec::new(),
             caret: 0,
             caret_x: 0.0,
+            scroll_y: 0.0,
+            scroll_extent: 0.0,
         }
     }
 
@@ -510,6 +528,64 @@ impl Tree {
         Ok(())
     }
 
+    /// Set the vertical offset of a scroll container. Clamped to the content
+    /// from the last layout. There is no overscroll.
+    pub fn set_scroll_y(&mut self, id: NodeId, y: f32) -> Result<f32, TreeError> {
+        self.write_scroll(id, y, false)
+    }
+
+    /// Move a scroll container by `delta_y` logical pixels (positive reveals
+    /// content below). Clamped to the content. One wheel notch should pass
+    /// about [`SCROLL_WHEEL_LINE`], not a page.
+    pub fn scroll_by(&mut self, id: NodeId, delta_y: f32) -> Result<f32, TreeError> {
+        let current = self
+            .nodes
+            .get(&id)
+            .ok_or_else(|| TreeError {
+                message: format!("unknown node {id}"),
+            })?
+            .scroll_y;
+        self.write_scroll(id, current + delta_y, true)
+    }
+
+    /// Scroll the innermost scroll container under `(x, y)`, if any.
+    pub fn scroll_at(&mut self, x: f32, y: f32, delta_y: f32) -> Option<f32> {
+        let id = self.scroll_target_at(x, y)?;
+        self.scroll_by(id, delta_y).ok()
+    }
+
+    /// Innermost [`NodeKind::Scroll`] whose bounds contain `(x, y)`.
+    pub fn scroll_target_at(&self, x: f32, y: f32) -> Option<NodeId> {
+        let mut id = self.hit(x, y)?;
+        loop {
+            let node = self.nodes.get(&id)?;
+            if node.kind == NodeKind::Scroll && node.bounds.contains(x, y) {
+                return Some(id);
+            }
+            id = node.parent?;
+        }
+    }
+
+    fn write_scroll(&mut self, id: NodeId, y: f32, add: bool) -> Result<f32, TreeError> {
+        let node = self.nodes.get_mut(&id).ok_or_else(|| TreeError {
+            message: format!("unknown node {id}"),
+        })?;
+        if node.kind != NodeKind::Scroll {
+            return Err(TreeError {
+                message: format!("node {id} is not a scroll container"),
+            });
+        }
+        let next = if y.is_finite() {
+            y
+        } else if add {
+            node.scroll_y
+        } else {
+            0.0
+        };
+        node.scroll_y = next;
+        Ok(clamp_scroll(node))
+    }
+
     /// Hit-test `(x, y)` in logical pixels, then [`click`] the node.
     pub fn click_at(&mut self, x: f32, y: f32) -> Option<NodeId> {
         let id = self.hit(x, y)?;
@@ -662,6 +738,15 @@ impl Tree {
     }
 }
 
+fn clamp_scroll(node: &mut Node) -> f32 {
+    let max = (node.scroll_extent - node.bounds.height).max(0.0);
+    if !node.scroll_y.is_finite() {
+        node.scroll_y = 0.0;
+    }
+    node.scroll_y = node.scroll_y.clamp(0.0, max);
+    node.scroll_y
+}
+
 fn escape_quotes(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -750,6 +835,7 @@ mod tests {
             NodeKind::Text,
             NodeKind::Button,
             NodeKind::TextField,
+            NodeKind::Scroll,
         ] {
             assert_eq!(NodeKind::from_name(kind.as_str()), Some(kind));
         }

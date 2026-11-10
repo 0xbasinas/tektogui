@@ -74,6 +74,16 @@ test("mount talks to a host by id, not through Notes-only APIs", () => {
   ]);
 });
 
+test("scroll lowers to a scroll container", () => {
+  const ops = renderToOps(
+    jsx("scroll", { width: 200, height: 120, children: [jsx("rect", { height: 400 })] }),
+  );
+  assert.equal(ops[0].op, "create");
+  assert.equal(ops[0].kind, "scroll");
+  assert.ok(ops.some((o) => o.op === "setProp" && o.key === "height" && o.value === "120"));
+  assert.ok(ops.some((o) => o.op === "append" && o.parent === 1 && o.child === 2));
+});
+
 test("text_field lowers to a labeled value", () => {
   const ops = renderToOps(jsx("text_field", { name: "Title", children: "Hello" }));
   assert.deepEqual(ops, [

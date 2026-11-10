@@ -6,8 +6,8 @@
 use std::cell::RefCell;
 use taffy::compute_leaf_layout;
 use taffy::prelude::{
-    AvailableSpace, Dimension, Display, FlexDirection, JustifyContent, LengthPercentage, Rect,
-    Size, Style, TaffyTree,
+    AvailableSpace, Dimension, Display, FlexDirection, JustifyContent, LengthPercentage,
+    LengthPercentageAuto, Rect, Size, Style, TaffyTree,
 };
 use tekto_text::TextEngine;
 use tekto_tree::{NodeId, NodeKind, Tree};
@@ -173,8 +173,26 @@ fn style_for(tree: &Tree, id: NodeId, is_root: bool) -> Style {
         } else {
             JustifyContent::START
         },
+        // A scroll viewport has a fixed height. Children keep their own
+        // height and paint past the bottom; the renderer clips them.
+        flex_shrink: if parent_is_scroll(tree, id) { 0.0 } else { 1.0 },
+        min_size: Size {
+            width: LengthPercentageAuto::auto(),
+            height: if parent_is_scroll(tree, id) && ls.is_height_set() {
+                LengthPercentageAuto::length(ls.height)
+            } else {
+                LengthPercentageAuto::auto()
+            },
+        },
         ..Style::DEFAULT
     }
+}
+
+fn parent_is_scroll(tree: &Tree, id: NodeId) -> bool {
+    tree.get(id)
+        .and_then(|n| n.parent)
+        .and_then(|p| tree.get(p))
+        .is_some_and(|p| p.kind == NodeKind::Scroll)
 }
 
 fn length(value: f32) -> Rect<LengthPercentage> {
@@ -236,8 +254,33 @@ fn write_bounds(
         node.bounds = tekto_tree::Rect::new(x, y, layout.size.width, layout.size.height);
     }
     let children: Vec<NodeId> = tree.get(id).map(|n| n.children.clone()).unwrap_or_default();
+    // Shift descendants of a scroll container. Taffy still laid them out at
+    // the unshifted positions, so the extent is measured from those.
+    let mut child_origin_y = y;
+    if tree.get(id).is_some_and(|n| n.kind == NodeKind::Scroll) {
+        let pad = tree.get(id).map(|n| n.layout.padding).unwrap_or(0.0);
+        let mut bottom = 0.0_f32;
+        for child in &children {
+            let Some((_, tid)) = map.iter().find(|(n, _)| n == child) else {
+                continue;
+            };
+            let Ok(child_layout) = taffy.layout(*tid) else {
+                continue;
+            };
+            bottom = bottom.max(child_layout.location.y + child_layout.size.height + pad);
+        }
+        if let Some(node) = tree.get_mut(id) {
+            node.scroll_extent = bottom.max(node.bounds.height);
+            let max = (node.scroll_extent - node.bounds.height).max(0.0);
+            if !node.scroll_y.is_finite() {
+                node.scroll_y = 0.0;
+            }
+            node.scroll_y = node.scroll_y.clamp(0.0, max);
+            child_origin_y = y - node.scroll_y;
+        }
+    }
     for child in children {
-        write_bounds(taffy, tree, child, x, y, map);
+        write_bounds(taffy, tree, child, x, child_origin_y, map);
     }
 }
 

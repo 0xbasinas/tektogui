@@ -146,6 +146,31 @@ pub fn text_field(
     Ok(id)
 }
 
+/// A vertical scroll container. Children are clipped to this box and shifted
+/// by [`tekto_tree::Node::scroll_y`]. Wheel and drag change that offset;
+/// there is no rubber-band. `height` is the viewport (a non-finite height
+/// grows with the content and will not scroll).
+pub fn scroll(
+    tree: &mut Tree,
+    parent: NodeId,
+    width: f32,
+    height: f32,
+) -> Result<NodeId, WidgetError> {
+    let id = tree.add(NodeKind::Scroll, Some(parent))?;
+    if let Some(n) = tree.get_mut(id) {
+        n.name = Some("scroll".into());
+        n.layout = LayoutStyle {
+            width,
+            height,
+            padding: 0.0,
+            gap: 0.0,
+            column: true,
+            justify_center: false,
+        };
+    }
+    Ok(id)
+}
+
 /// Title text drawn on the dark banner.
 pub fn title_on_banner(
     tree: &mut Tree,
