@@ -173,14 +173,21 @@ impl CpuRenderer {
     }
 
     fn clip_mask(&self) -> Option<Mask> {
-        let rect = match self.clip_bounds() {
-            Some(Some(rect)) => rect,
-            _ => return None,
-        };
+        // `None`: no clip. `Some(None)`: the intersection is empty, so every
+        // later draw (including text, which only consults this mask) paints
+        // nothing. A zero mask is that clip. Returning `None` here would mean
+        // "no mask" to tiny-skia and would let glyphs escape the viewport.
+        let bounds = self.clip_bounds()?;
         let mut mask = Mask::new(self.pixmap.width(), self.pixmap.height())?;
+        let Some(rect) = bounds else {
+            return Some(mask);
+        };
         let s = self.scale;
-        let r =
-            tiny_skia::Rect::from_xywh(rect.x * s, rect.y * s, rect.width * s, rect.height * s)?;
+        let Some(r) =
+            tiny_skia::Rect::from_xywh(rect.x * s, rect.y * s, rect.width * s, rect.height * s)
+        else {
+            return Some(mask);
+        };
         let path = PathBuilder::from_rect(r);
         mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
         Some(mask)
