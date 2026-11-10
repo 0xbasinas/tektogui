@@ -70,7 +70,7 @@ Hot reload (rebuild or reload TypeScript) and live patches (change a running nod
 
 ## TypeScript
 
-Packages under `packages/` (`@tektogui/core`, `@tektogui/jsx-runtime`, `create-tektogui`) must work with **pnpm, npm, and bun**. We use a standard `workspaces` field. Do not use pnpm-only fields in published `package.json` files.
+Packages under `packages/` (`@tektogui/core`, `@tektogui/jsx-runtime`, `create-tektogui`) must work with **pnpm, npm, and bun**. We use a standard `workspaces` field. Do not use pnpm-only fields in published `package.json` files. `@tektogui/jsx-runtime` `mount` / `renderToOps` lower a general-purpose JSX tree to the same `HostOp` protocol QuickJS and the web target use. There are no Notes-only APIs in the runtime.
 
 `tekto-js` embeds QuickJS-ng (via `rquickjs`, both MIT) on desktop behind the `quickjs` feature. It is off by default because it is slow to compile. A JS script talks to the Rust tree through the `HostOp` protocol (`tekto.create` / `setText` / `setProp` / `append` / `remove`); the web target will call the same ops from the browser later. Do not enable `quickjs` on PR CI.
 

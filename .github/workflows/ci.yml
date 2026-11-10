@@ -38,6 +38,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test (includes headless snapshot)
         run: cargo test --workspace --all-targets
+      - name: JS package tests
+        run: node --test packages/core/test.js packages/jsx-runtime/test.js
 
   windows:
     name: Windows compile
