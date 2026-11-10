@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { renderToOps } from "../jsx-runtime/src/index.js";
 import { Notes } from "../jsx-runtime/notes-app.js";
 import { blitPng, decodePng, resizeCanvas } from "./src/canvas.js";
+import { choosePaintBackend, detectWebGl2, detectWebGpu, paintPreferred } from "./src/gpu.js";
 import { connectWasm } from "./src/index.js";
 
 const wasmPath =
@@ -98,3 +99,148 @@ test("notes at 640x400 matches the headless PNG and blits on resize", async (t) 
   assert.equal(roundTrip.data.length, expected.length > 0 ? 640 * 400 * 4 : 0);
   assert.equal(roundTrip.data[0], 0xf4);
 });
+
+test("WebGPU feature detect falls back to the CPU blit", async () => {
+  assert.deepEqual(choosePaintBackend({ gpuFlag: false, webgpu: true, webgl2: true }), {
+    backend: "cpu",
+    reason: "flag-off",
+  });
+  assert.deepEqual(choosePaintBackend({ gpuFlag: true, webgpu: true, webgl2: true }), {
+    backend: "webgpu",
+    reason: "",
+  });
+  assert.deepEqual(choosePaintBackend({ gpuFlag: true, webgpu: false, webgl2: true }), {
+    backend: "cpu",
+    reason: "webgl2-no-compute",
+  });
+  assert.deepEqual(choosePaintBackend({ gpuFlag: true, webgpu: false, webgl2: false }), {
+    backend: "cpu",
+    reason: "no-adapter",
+  });
+
+  assert.equal(await detectWebGpu(undefined), false);
+  assert.equal(await detectWebGpu({ gpu: {} }), false);
+  assert.equal(
+    await detectWebGpu({
+      gpu: {
+        requestAdapter: async () => null,
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    await detectWebGpu({
+      gpu: {
+        requestAdapter: async () => {
+          throw new Error("blocked");
+        },
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    await detectWebGpu({
+      gpu: {
+        requestAdapter: async () => ({ name: "stub" }),
+      },
+    }),
+    true,
+  );
+
+  const contexts = [];
+  const canvas = {
+    width: 8,
+    height: 4,
+    getContext(kind) {
+      contexts.push(kind);
+      if (kind === "webgl2") return { stub: true };
+      if (kind !== "2d") return null;
+      return {
+        createImageData(w, h) {
+          return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+        },
+        putImageData(imageData) {
+          canvas.frames.push(imageData);
+        },
+      };
+    },
+    frames: [],
+  };
+  assert.equal(detectWebGl2(canvas), true);
+  assert.equal(detectWebGl2({ getContext: () => null }), false);
+
+  const host = {
+    renderPng() {
+      // 1×1 RGBA PNG. The blit only needs a real CPU-renderer payload.
+      return PNG_1X1;
+    },
+  };
+
+  const flaggedOff = await paintPreferred(host, canvas, {
+    gpu: false,
+    detect: { webgpu: true, webgl2: true },
+    width: 2,
+    height: 2,
+  });
+  assert.equal(flaggedOff.used, "cpu");
+  assert.equal(flaggedOff.reason, "flag-off");
+  assert.equal(flaggedOff.png[0], 0x89);
+
+  const noExport = await paintPreferred(host, canvas, {
+    gpu: true,
+    detect: { webgpu: true, webgl2: false },
+    width: 2,
+    height: 2,
+  });
+  assert.equal(noExport.used, "cpu");
+  assert.equal(noExport.reason, "no-paint-export");
+
+  const webglOnly = await paintPreferred(host, canvas, {
+    gpu: true,
+    detect: { webgpu: false, webgl2: true },
+    width: 2,
+    height: 2,
+  });
+  assert.equal(webglOnly.used, "cpu");
+  assert.equal(webglOnly.reason, "webgl2-no-compute");
+
+  let gpuCalls = 0;
+  const gpuHost = {
+    ...host,
+    async paintWebGpu(target, w, h) {
+      gpuCalls += 1;
+      target.width = w;
+      target.height = h;
+    },
+  };
+  const gpu = await paintPreferred(gpuHost, canvas, {
+    gpu: true,
+    detect: { webgpu: true, webgl2: false },
+    width: 3,
+    height: 3,
+  });
+  assert.equal(gpu.used, "webgpu");
+  assert.equal(gpuCalls, 1);
+  assert.equal(canvas.width, 3);
+
+  const broke = await paintPreferred(
+    {
+      ...host,
+      async paintWebGpu() {
+        throw new Error("device lost");
+      },
+    },
+    canvas,
+    { gpu: true, detect: { webgpu: true }, width: 2, height: 2 },
+  );
+  assert.equal(broke.used, "cpu");
+  assert.equal(broke.reason, "webgpu-failed");
+  assert.match(broke.error, /device lost/);
+  assert.ok(canvas.frames.length > 0);
+});
+
+const PNG_1X1 = new Uint8Array([
+  137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0,
+  0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0, 5, 0, 1,
+  255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+]);

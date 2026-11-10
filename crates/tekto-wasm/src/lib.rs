@@ -2,14 +2,20 @@
 //!
 //! The browser JavaScript engine sends the same [`tekto_js::HostOp`] JSON
 //! that desktop QuickJS uses, then asks for a CPU-renderer PNG. This crate
-//! does not link QuickJS, wgpu, or any HTML/CSS/DOM type. The host page
-//! blits those PNG bytes with `@tektogui/wasm/canvas` (`paintCanvas`).
+//! does not link QuickJS. The default build does not link wgpu. The host
+//! page blits those PNG bytes with `@tektogui/wasm/canvas` (`paintCanvas`).
+//! `@tektogui/wasm/gpu` (`paintPreferred`) can ask a `--features gpu` build
+//! to paint the same tree on a WebGPU canvas, and otherwise uses that blit.
 //!
 //! On `wasm32-unknown-unknown` the cdylib exports a tiny C ABI
 //! (`tekto_alloc`, `tekto_apply_ops`, `tekto_render_png`, `tekto_reset`,
 //! `tekto_out_ptr`, `tekto_out_len`). `@tektogui/wasm` is the JS side.
 //! Copy `tekto_out_*` bytes before the next call; the module reuses one
 //! output buffer.
+//!
+//! `--features gpu` (wasm32 only, not the default) also exports
+//! `tekto_gpu_frame` through wasm-bindgen. That call paints the same tree
+//! with Vello on a WebGPU canvas. If it fails, the host blits the CPU PNG.
 
 use std::cell::RefCell;
 
@@ -136,6 +142,33 @@ mod ffi {
         }
         let bytes = std::slice::from_raw_parts(ptr, len as usize);
         String::from_utf8(bytes.to_vec()).map_err(|err| err.to_string())
+    }
+}
+
+/// WebGPU present. Compiled only with `--features gpu` on wasm32.
+/// The default module has no GPU imports, so `connectWasm` stays the same.
+#[cfg(all(feature = "gpu", target_arch = "wasm32"))]
+mod web_gpu {
+    use wasm_bindgen::prelude::*;
+
+    use super::*;
+
+    /// Paint the current scene onto `canvas` with wgpu's WebGPU backend.
+    /// The error string is the cue for the host to use the CPU blit.
+    #[wasm_bindgen]
+    pub async fn tekto_gpu_frame(
+        canvas: web_sys::HtmlCanvasElement,
+        width: u32,
+        height: u32,
+    ) -> Result<(), JsValue> {
+        let laid = TREE.with(|tree| {
+            let mut laid = tree.borrow().clone();
+            layout_tree(&mut laid, width as f32, height as f32);
+            laid
+        });
+        tekto_render::paint_tree_webgpu(&laid, canvas, width, height, Color::PAGE)
+            .await
+            .map_err(|err| JsValue::from_str(&err.to_string()))
     }
 }
 

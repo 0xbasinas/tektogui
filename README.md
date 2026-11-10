@@ -20,7 +20,7 @@ This is very early. The first slice can:
 - Open a **window on Linux** (and it should compile for Windows too)
 - Serve `tekto tree`, `tekto screenshot`, `tekto patch`, and MCP `ui.tree` from the same dev server
 
-Android and Windows are compile-checked from day one. The WASM core, HostOp bridge, and CPU canvas blit are in. WebGPU is still later. See [ROADMAP.md](ROADMAP.md).
+Android and Windows are compile-checked from day one. The WASM core, HostOp bridge, and CPU canvas blit are in. WebGPU paint is an opt-in wasm feature and falls back to that blit. See [ROADMAP.md](ROADMAP.md).
 
 ## Repo branches
 
