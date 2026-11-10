@@ -56,7 +56,7 @@ Rebuilds only the JS bundle and swaps it into the running QuickJS runtime. The R
 cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx --headless --out /tmp/notes-js.png
 ```
 
-Saving the `.tsx` prints `js reload Nms`. JS remounts from source, so signal state resets. Failures go to stderr and `app.logs`. `POST /reload` accepts a JS bundle (or JSON `{"js":"..."}`) so a host can push over `adb forward`; the current Android APK has no QuickJS, so that hook waits for a later APK.
+Saving the `.tsx` prints `js reload Nms`. JS remounts from source, so signal state resets. Failures go to stderr and `app.logs`. `POST /reload` accepts a JS bundle (or JSON `{"js":"..."}`) so a host can push over `adb forward`. On Android, `tekto dev --js examples/notes/src/app.tsx --android` builds the APK with `-F quickjs` and posts the bundle (the host CLI does not need `--features quickjs`). The default APK stays without QuickJS so nightly Android CI stays lean.
 
 ## Headless tests
 

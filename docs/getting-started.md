@@ -76,7 +76,7 @@ The Notes TSX entry is `examples/notes/src/app.tsx`. The signals package already
 cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx --headless --out /tmp/notes-js.png
 ```
 
-Saving the `.tsx` rebuilds the JS bundle and swaps it into the running QuickJS runtime. The Rust core stays up. JS remounts from source, so signal state resets.
+Saving the `.tsx` rebuilds the JS bundle and swaps it into the running QuickJS runtime. The Rust core stays up. JS remounts from source, so signal state resets. The same entry can run on a device or AVD with `cargo run -p tekto-cli -- dev --js examples/notes/src/app.tsx --android` (the APK is built with `-F quickjs`; the host CLI does not need that feature).
 
 ## Tests
 

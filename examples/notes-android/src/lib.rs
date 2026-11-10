@@ -5,7 +5,8 @@
 //! ```bash
 //! source ~/.android-env.sh   # if present
 //! cargo apk2 build -p notes-android
-//! # or: cargo run -p tekto-cli -- build --target android
+//! # JS reload on a device/AVD: cargo apk2 build -p notes-android -F quickjs
+//! # or: cargo run -p tekto-cli -- dev --js examples/notes/src/app.tsx --android
 //! ```
 
 use tekto::{
@@ -58,16 +59,35 @@ fn android_main(app: tekto::AndroidApp) {
         }
     };
     let runtime = tekto::AppRuntime::new(tree, "Notes");
-    if let Err(err) = tekto::run_android(
-        runtime,
-        tekto::WindowOptions {
-            title: "Notes".into(),
-            width: 640,
-            height: 400,
-            dev_server: true,
-        },
-        app,
-    ) {
+    let opts = tekto::WindowOptions {
+        title: "Notes".into(),
+        width: 640,
+        height: 400,
+        dev_server: true,
+    };
+    // When built with `--features quickjs`, attach a JS reload hook so
+    // `tekto dev --js --android` can POST a bundle over adb forward.
+    #[cfg(feature = "quickjs")]
+    {
+        match tekto::start_handle(&runtime, opts.width, opts.height) {
+            Ok((handle, ep, viewport)) => {
+                tekto::install_js_runtime(&handle, &viewport);
+                if let Err(err) = tekto::run_android_with_session(
+                    runtime,
+                    opts,
+                    app,
+                    Some((handle, ep, viewport)),
+                ) {
+                    eprintln!("notes-android: {err}");
+                }
+                return;
+            }
+            Err(err) => {
+                eprintln!("notes-android: dev server failed ({err}); starting without JS reload")
+            }
+        }
+    }
+    if let Err(err) = tekto::run_android(runtime, opts, app) {
         eprintln!("notes-android: {err}");
     }
 }

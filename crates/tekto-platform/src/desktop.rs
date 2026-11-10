@@ -282,7 +282,19 @@ pub fn run_android(
     opts: WindowOptions,
     android_app: winit::platform::android::activity::AndroidApp,
 ) -> Result<(), PlatformError> {
-    run_event_loop(runtime, opts, Some(android_app), None)
+    run_android_with_session(runtime, opts, android_app, None)
+}
+
+/// Same as [`run_android`], but attaches an existing dev-server session so
+/// the NativeActivity can accept `POST /reload` JS bundles over adb forward.
+#[cfg(target_os = "android")]
+pub fn run_android_with_session(
+    runtime: AppRuntime,
+    opts: WindowOptions,
+    android_app: winit::platform::android::activity::AndroidApp,
+    session: Option<crate::DevSession>,
+) -> Result<(), PlatformError> {
+    run_event_loop(runtime, opts, Some(android_app), session)
 }
 
 pub fn run_windowed(runtime: AppRuntime, opts: WindowOptions) -> Result<(), PlatformError> {

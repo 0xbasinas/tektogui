@@ -50,8 +50,108 @@ fn require_cmd(name: &str) -> Result<(), String> {
     ))
 }
 
+/// rquickjs bindgen needs host libclang. The NDK ships one under
+/// `toolchains/llvm/prebuilt/<host>/musl/lib`; use it when LIBCLANG_PATH is unset.
+fn maybe_set_ndk_libclang() {
+    if std::env::var_os("LIBCLANG_PATH").is_some() {
+        return;
+    }
+    let ndk = std::env::var_os("ANDROID_NDK_HOME")
+        .or_else(|| std::env::var_os("ANDROID_NDK_ROOT"))
+        .or_else(|| {
+            std::env::var_os("ANDROID_HOME")
+                .map(|h| PathBuf::from(h).join("ndk/27.1.12297006").into_os_string())
+        });
+    let Some(ndk) = ndk else { return };
+    let prebuilt = PathBuf::from(ndk).join("toolchains/llvm/prebuilt");
+    let Ok(hosts) = std::fs::read_dir(&prebuilt) else {
+        return;
+    };
+    for host in hosts.flatten() {
+        let lib = host.path().join("musl/lib");
+        if lib.join("libclang.so").exists() || lib.join("libclang.dll").exists() {
+            println!("tekto: LIBCLANG_PATH {}", lib.display());
+            std::env::set_var("LIBCLANG_PATH", lib);
+            return;
+        }
+    }
+}
+
+/// rquickjs bindgen (Android only) needs the NDK sysroot and clang builtin
+/// headers; the NDK libclang reports an empty InstalledDir otherwise.
+fn maybe_set_ndk_bindgen_args() {
+    let ndk = std::env::var_os("ANDROID_NDK_HOME")
+        .or_else(|| std::env::var_os("ANDROID_NDK_ROOT"))
+        .or_else(|| {
+            std::env::var_os("ANDROID_HOME")
+                .map(|h| PathBuf::from(h).join("ndk/27.1.12297006").into_os_string())
+        });
+    let Some(ndk) = ndk else { return };
+    let prebuilt = PathBuf::from(ndk).join("toolchains/llvm/prebuilt");
+    let Ok(hosts) = std::fs::read_dir(&prebuilt) else {
+        return;
+    };
+    for host in hosts.flatten() {
+        let root = host.path();
+        let sysroot = root.join("sysroot");
+        let clang_inc = {
+            let mut found = None;
+            if let Ok(vers) = std::fs::read_dir(root.join("lib/clang")) {
+                for ver in vers.flatten() {
+                    let inc = ver.path().join("include");
+                    if inc.join("stdbool.h").exists() {
+                        found = Some(inc);
+                        break;
+                    }
+                }
+            }
+            found
+        };
+        if !sysroot.exists() || clang_inc.is_none() {
+            continue;
+        }
+        let clang_inc = clang_inc.unwrap();
+        let pairs = [
+            ("x86_64-linux-android", "x86_64-linux-android24"),
+            ("aarch64-linux-android", "aarch64-linux-android24"),
+        ];
+        for (triple, clang_target) in pairs {
+            let args = format!(
+                "--sysroot={} --target={clang_target} -I{}",
+                sysroot.display(),
+                clang_inc.display()
+            );
+            for key in [
+                format!("BINDGEN_EXTRA_CLANG_ARGS_{triple}"),
+                format!("BINDGEN_EXTRA_CLANG_ARGS_{}", triple.replace('-', "_")),
+            ] {
+                if std::env::var_os(&key).is_none() {
+                    std::env::set_var(&key, &args);
+                }
+            }
+        }
+        println!(
+            "tekto: bindgen NDK sysroot {} include {}",
+            sysroot.display(),
+            clang_inc.display()
+        );
+        return;
+    }
+}
+
 /// Build the Notes APK with cargo-apk2. Returns the path to the APK.
 pub fn build_apk(release: bool) -> Result<PathBuf, String> {
+    build_apk_with(release, &[], None)
+}
+
+/// Like [`build_apk`], with optional cargo features and a single Android target
+/// triple (e.g. `x86_64-linux-android`). `None` builds every triple listed in
+/// the package metadata (aarch64 + x86_64).
+pub fn build_apk_with(
+    release: bool,
+    features: &[&str],
+    target: Option<&str>,
+) -> Result<PathBuf, String> {
     require_cmd("cargo")?;
     // cargo apk2 is a cargo subcommand provided by cargo-apk2
     if Command::new("cargo")
@@ -69,10 +169,25 @@ pub fn build_apk(release: bool) -> Result<PathBuf, String> {
         );
     }
     let root = repo_root()?;
-    let mut args = vec!["apk2", "build", "-p", "notes-android"];
+    let mut args: Vec<String> = vec![
+        "apk2".into(),
+        "build".into(),
+        "-p".into(),
+        "notes-android".into(),
+    ];
     if release {
-        args.push("--release");
+        args.push("--release".into());
     }
+    if !features.is_empty() {
+        args.push("-F".into());
+        args.push(features.join(","));
+    }
+    if let Some(t) = target {
+        args.push("--target".into());
+        args.push(t.to_string());
+    }
+    maybe_set_ndk_libclang();
+    maybe_set_ndk_bindgen_args();
     println!("tekto: cargo {}", args.join(" "));
     let status = Command::new("cargo")
         .args(&args)
@@ -84,6 +199,29 @@ pub fn build_apk(release: bool) -> Result<PathBuf, String> {
     }
     find_apk(&root, release)
         .ok_or_else(|| "built the APK, but could not find notes.apk under target/".into())
+}
+
+/// ABI of the connected device, mapped to a Rust Android target triple.
+/// Override with `TEKTO_ANDROID_TARGET` (e.g. `x86_64-linux-android`).
+pub fn detect_android_target() -> Option<String> {
+    if let Ok(t) = std::env::var("TEKTO_ANDROID_TARGET") {
+        let t = t.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    let out = adb()
+        .args(["shell", "getprop", "ro.product.cpu.abi"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    match String::from_utf8_lossy(&out.stdout).trim() {
+        "x86_64" => Some("x86_64-linux-android".into()),
+        "arm64-v8a" | "aarch64" => Some("aarch64-linux-android".into()),
+        _ => None,
+    }
 }
 
 fn find_apk(root: &Path, release: bool) -> Option<PathBuf> {
@@ -234,5 +372,56 @@ pub fn dev_android(release: bool) -> Result<(), String> {
     wait_for_dev_server(Duration::from_secs(90))?;
     println!("dev server http://127.0.0.1:{port}");
     println!("Try: tekto tree    or    tekto screenshot    or    tekto click <id>");
+    Ok(())
+}
+
+/// Build the Notes APK with QuickJS, install it, `adb forward` the dev
+/// server, then bundle the TSX entry and `POST /reload`. The host CLI does
+/// not need `--features quickjs` (only esbuild + HTTP).
+pub fn dev_android_js(entry: &Path, watch: bool) -> Result<(), String> {
+    crate::js_dev::export_writeback_env(entry);
+    let target = detect_android_target();
+    if let Some(t) = target.as_deref() {
+        println!("tekto: android target {t}");
+    } else {
+        println!("tekto: building both Android ABIs (set TEKTO_ANDROID_TARGET to build one)");
+    }
+    let apk = build_apk_with(false, &["quickjs"], target.as_deref())?;
+    println!("tekto: apk {}", apk.display());
+    install_and_launch(&apk)?;
+    let port = forward_dev_port()?;
+    println!("tekto: adb forward tcp:{port} tcp:{port}");
+    wait_for_dev_server(Duration::from_secs(90))?;
+    println!("dev server http://127.0.0.1:{port}");
+    post_js_bundle(entry)?;
+    if watch {
+        println!("saving a .tsx / .ts / .js file reloads the JS side over adb forward; the APK stays up.");
+        let entry = entry.to_path_buf();
+        let _watcher = tekto_js::spawn_watcher(entry.clone(), move || {
+            if let Err(err) = post_js_bundle(&entry) {
+                eprintln!("js reload failed: {err}");
+            }
+        });
+        println!("server stays up until you press Enter");
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+    } else {
+        println!("Try: tekto tree    or    tekto screenshot    or    tekto click <id>");
+    }
+    Ok(())
+}
+
+fn post_js_bundle(entry: &Path) -> Result<(), String> {
+    let t0 = std::time::Instant::now();
+    let js = tekto_js::bundle(entry).map_err(|e| e.to_string())?;
+    let bundle_ms = t0.elapsed().as_millis();
+    println!("js bundle {bundle_ms}ms ({} bytes)", js.len());
+    let t1 = std::time::Instant::now();
+    let url = format!("http://127.0.0.1:{ANDROID_DEV_PORT}/reload");
+    let (_headers, body) = tekto_mcp::http_post_raw(&url, js.as_bytes(), "application/javascript")
+        .map_err(|e| e.to_string())?;
+    let post_ms = t1.elapsed().as_millis();
+    let reply = String::from_utf8_lossy(&body);
+    println!("POST /reload {post_ms}ms: {}", reply.trim());
     Ok(())
 }
