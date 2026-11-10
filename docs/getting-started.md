@@ -66,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-You can also build a tree yourself with `tekto::window`, `tekto::banner`, `tekto::text`, `tekto::button`, and `tekto::text_field`. `button(&mut tree, parent, "Save")` returns the button node id for clicks and accessibility. `text_field(&mut tree, parent, "Title", "Hello")` is a single-line field: `name` is the label, `text` is the value (read and set it with `ui.patch`). JSX also accepts `<button>Save</button>` and `<text_field name="Title">Hello</text_field>`; set style properties explicitly. The field takes printable keys and Backspace on the desktop when it is focused. It is not a full IME (no composition, marked text, or candidate window).
+You can also build a tree yourself with `tekto::window`, `tekto::banner`, `tekto::text`, `tekto::button`, `tekto::text_field`, and `tekto::scroll`. `scroll(&mut tree, parent, width, height)` clips its children to that viewport. `Tree::scroll_by` / `set_scroll_y` move them in logical pixels (clamped, no bounce). On the desktop, the wheel and a pointer drag do the same. `button(&mut tree, parent, "Save")` returns the button node id for clicks and accessibility. `text_field(&mut tree, parent, "Title", "Hello")` is a single-line field: `name` is the label, `text` is the value (read and set it with `ui.patch`). JSX also accepts `<button>Save</button>` and `<text_field name="Title">Hello</text_field>`; set style properties explicitly. The field takes printable keys and Backspace on the desktop when it is focused. It is not a full IME (no composition, marked text, or candidate window).
 
 ## TypeScript
 
