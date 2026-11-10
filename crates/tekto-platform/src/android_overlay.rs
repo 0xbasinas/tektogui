@@ -20,6 +20,7 @@ pub(crate) struct Overlay {
     /// text field is focused (`overlay_suppresses_keys`).
     pub(crate) ready: bool,
     missing_logged: bool,
+    insets_logged: bool,
     app: winit::platform::android::activity::AndroidApp,
 }
 
@@ -29,6 +30,7 @@ impl Overlay {
             sync: android_field::AndroidFieldSync::default(),
             ready: false,
             missing_logged: false,
+            insets_logged: false,
             app,
         }
     }
@@ -81,6 +83,56 @@ pub(crate) fn sync_overlay(
         eprintln!("tekto: android field overlay: {err}");
     }
     true
+}
+
+/// Safe LTRB then IME LTRB, physical pixels. Zeros when the class or the
+/// decor insets are not ready. Does not change the text-sync state.
+pub(crate) fn read_insets(overlay: &mut Overlay) -> [i32; 8] {
+    match with_env(&overlay.app, |env, activity| {
+        read_inset_array(env, activity)
+    }) {
+        Ok(px) => px,
+        Err(err) => {
+            if !overlay.insets_logged {
+                overlay.insets_logged = true;
+                eprintln!("tekto: android insets unavailable ({err})");
+            }
+            [0; 8]
+        }
+    }
+}
+
+fn read_inset_array(env: &mut jni::Env, activity: &JObject) -> Result<[i32; 8], String> {
+    let class = env
+        .find_class(jni_str!("com/tektogui/ime/FieldOverlay"))
+        .map_err(|err| format!("FieldOverlay {err}"))?;
+    let value = env
+        .call_static_method(
+            &class,
+            jni_str!("insets"),
+            jni_sig!("(Landroid/app/Activity;)[I"),
+            &[jni::JValue::Object(activity)],
+        )
+        .map_err(|err| err.to_string())?;
+    let array = match value {
+        jni::JValueOwned::Object(obj) => obj,
+        other => return Err(format!("FieldOverlay.insets returned {other:?}")),
+    };
+    if array.is_null() {
+        return Ok([0; 8]);
+    }
+    let raw = array.as_raw();
+    let jint_array = unsafe { env.as_cast_raw::<jni::objects::JIntArray>(&raw) }
+        .map_err(|err| err.to_string())?;
+    let len = jint_array.len(env).map_err(|err| err.to_string())?;
+    if len < 8 {
+        return Err(format!("FieldOverlay.insets length {len}"));
+    }
+    let mut buf = [0i32; 8];
+    jint_array
+        .get_region(env, 0, &mut buf)
+        .map_err(|err| err.to_string())?;
+    Ok(buf)
 }
 
 pub(crate) fn hide(overlay: &mut Overlay) {

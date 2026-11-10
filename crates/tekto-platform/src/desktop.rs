@@ -13,6 +13,7 @@
 //! the OS. Live patches wake the event loop so the window and AccessKit
 //! stay in sync.
 
+use crate::android_insets::{layout_with_insets, WindowInsets};
 use crate::pointer_route::{apply_pointer_op, FingerPhase, PointerOp, PointerSession};
 use crate::{
     logical_from_physical, rgba_to_u32_softbuffer, AppRuntime, PlatformError, Viewport,
@@ -23,7 +24,6 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tekto_layout::layout_tree;
 use tekto_mcp::{AppHandle, SharedTreeHandle};
 use tekto_render::{paint_tree, CpuRenderer, Renderer};
 use tekto_tree::{FieldKey, ImeEvent, Tree, SCROLL_WHEEL_LINE};
@@ -415,6 +415,20 @@ fn window_logical_and_physical(window: &Window) -> (f32, f32, f32, u32, u32) {
     (lw, lh, scale, pw, ph)
 }
 
+#[cfg(target_os = "android")]
+fn window_insets(state: &mut State, scale: f32) -> WindowInsets {
+    let Some(overlay) = state.overlay.as_mut() else {
+        return WindowInsets::default();
+    };
+    let px = crate::android_overlay::read_insets(overlay);
+    crate::android_insets::insets_from_physical(px, scale)
+}
+
+#[cfg(not(target_os = "android"))]
+fn window_insets(_state: &State, _scale: f32) -> WindowInsets {
+    WindowInsets::default()
+}
+
 fn relayout_window(state: &mut State) {
     let (lw, lh, scale, pw, ph) = window_logical_and_physical(&state.window);
     let _ = state.renderer.resize(pw, ph);
@@ -426,8 +440,12 @@ fn relayout_window(state: &mut State) {
             scale,
         };
     }
+    #[cfg(target_os = "android")]
+    let insets = window_insets(state, scale);
+    #[cfg(not(target_os = "android"))]
+    let insets = window_insets(&*state, scale);
     if let Ok(mut tree) = state.tree.lock() {
-        layout_tree(&mut tree, lw, lh);
+        layout_with_insets(&mut tree, lw, lh, insets);
         let now_ms = state.anim_origin.elapsed().as_secs_f64() * 1000.0;
         tree.advance(now_ms);
     }

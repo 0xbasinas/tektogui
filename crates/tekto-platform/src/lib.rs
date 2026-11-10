@@ -190,6 +190,8 @@ mod pointer_route;
 pub use gpu_policy::{gpu_paint_allowed, wants_gpu_paint};
 
 mod android_field;
+mod android_insets;
+pub use android_insets::{insets_from_physical, layout_with_insets, EdgeInsets, WindowInsets};
 #[cfg(target_os = "android")]
 mod android_overlay;
 #[cfg(all(
