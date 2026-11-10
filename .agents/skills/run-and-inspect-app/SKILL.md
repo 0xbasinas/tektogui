@@ -34,7 +34,7 @@ cargo run -p tekto-cli -- tree
 cargo run -p tekto-cli -- click 1
 cargo run -p tekto-cli -- screenshot /tmp/shot.png
 cargo run -p tekto-cli -- patch 4 --text "Hello from a patch"
-cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0" --font-size 20
+cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0" --font-size 20 --padding 24
 # If no server is running, `screenshot` falls back to a headless Notes PNG.
 ```
 
@@ -43,7 +43,7 @@ cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0" --font-size
 ## HTTP and MCP
 
 - `GET /tree`, `GET /tree.txt`, `GET /accesskit`, `GET /screenshot`, `GET /state`, `GET /logs`
-- `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb","fontSize":20}` — response is `{ "ok": true, "node": { ... } }` or an error
+- `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb","fontSize":20,"padding":24,"gap":20}` — response is `{ "ok": true, "node": { ... }, "writeback": { ... } }` or an error
 - `POST /click` `{"id":1}`
 - `POST /type` `{"id":4,"text":"typed"}`
 - `POST /reload` raw JS bundle, or `{"js":"…"}`
