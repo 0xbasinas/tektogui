@@ -93,6 +93,6 @@ Linux file reads and writes are confined to `$XDG_DATA_HOME/tekto` (or `$HOME/.l
 
 ## Look and feel
 
-Default widgets use a warm off-white page, charcoal ink, 24px page padding, 16px stack gap, and 20–22px text. No bright chrome. A `scroll` container clips overflowing children and shifts them by `scroll_y`. A mouse wheel notch moves 48px and a pointer drag pans by the pointer delta. The offset clamps to the content, with no rubber-band. Touch scrolling, animation, and themes come later.
+Default widgets use a warm off-white page, charcoal ink, 24px page padding, 16px stack gap, and 20–22px text. No bright chrome. A `list` is a column of variable-height `list_item` rows (stable ids, AccessKit `List` / `ListItem`). It uses a `scroll` parent only when the rows are taller than the viewport. Rows are not virtualized. A `scroll` container clips overflowing children and shifts them by `scroll_y`. A mouse wheel notch moves 48px and a pointer drag pans by the pointer delta. The offset clamps to the content, with no rubber-band. Touch scrolling, animation, and themes come later.
 
 On Linux, `Files` and `NativeOp` provide text and byte reads and writes under `$XDG_DATA_HOME/tekto` (or `$HOME/.local/share/tekto`). Paths must be relative, contain no traversal or symlinks, and intermediate directories must already exist. File dialogs and access outside this directory are not yet supported. `filesReadBytes` returns a JSON array encoded in the existing string result; `filesWriteBytes` accepts a `bytes` array.

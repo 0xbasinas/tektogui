@@ -46,6 +46,8 @@ Tools in the first slice:
 
 Live patches change the running tree immediately and do not require a reload. `POST /patch` and `ui.patch` accept JSON `{ "id", "text?", "name?", "fill?", "color?", "fontSize?", "padding?", "gap?" }` (`#rrggbb` or `#rrggbbaa`) and return the updated node, or a clear error (unknown id, bad color).
 
+A list (`kind` `list`) is a column of `list_item` rows. Each row's id is stable and is the AccessKit `ListItem` id. The list id is the AccessKit `List`. A tall list from `tekto::list` has a `scroll` parent; a short one does not. Rows are not virtualized.
+
 A text field (`kind` `text_field`) stores its value in `text` and its accessible label in `name`. `ui.patch` with `text` replaces the value and leaves `name` alone. `ui.type` inserts plain characters at the caret (control characters are skipped) and focuses that field. Backspace is a desktop key on the focused field, not part of `ui.type`. AccessKit role is `TextInput`, with the same stable id, label `name`, and value `text`.
 
 Known IME gaps (Month 3): no composition or preedit, no marked range, no candidate window, no CJK input method, no Android soft keyboard, no selection, arrow keys, copy, or paste. The desktop path uses committed characters from `KeyboardInput` plus Backspace. `WindowEvent::Ime` is ignored. A click puts the caret at the end of the value.

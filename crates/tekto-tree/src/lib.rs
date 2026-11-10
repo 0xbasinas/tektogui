@@ -43,6 +43,10 @@ pub enum NodeKind {
     TextField,
     /// Vertical clip of overflowing children. `scroll_y` shifts them up.
     Scroll,
+    /// Vertical collection of [`NodeKind::ListItem`] rows. Not virtualized.
+    List,
+    /// One row in a [`NodeKind::List`]. Height is per row.
+    ListItem,
 }
 
 /// Logical pixels one mouse-wheel notch moves a scroll container.
@@ -59,10 +63,12 @@ impl NodeKind {
             NodeKind::Button => "button",
             NodeKind::TextField => "text_field",
             NodeKind::Scroll => "scroll",
+            NodeKind::List => "list",
+            NodeKind::ListItem => "list_item",
         }
     }
 
-    /// Parse a kind name (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`).
+    /// Parse a kind name (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`, `list`, `list_item`).
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "window" => Some(Self::Window),
@@ -72,6 +78,8 @@ impl NodeKind {
             "button" => Some(Self::Button),
             "text_field" => Some(Self::TextField),
             "scroll" => Some(Self::Scroll),
+            "list" => Some(Self::List),
+            "list_item" => Some(Self::ListItem),
             _ => None,
         }
     }
@@ -221,6 +229,20 @@ pub struct Node {
     /// `scroll_y` is applied. Layout writes this. Zero until the first layout.
     #[serde(default)]
     pub scroll_extent: f32,
+    /// Viewport height, in logical pixels, for a [`NodeKind::List`] that should
+    /// scroll once its rows are taller than this. `NaN` means there is no
+    /// viewport (the list stays a direct child). The list widget sets this and
+    /// reads it when deciding whether to insert a scroll parent.
+    #[serde(default = "nan_f32", skip_serializing_if = "is_nan_f32")]
+    pub list_viewport: f32,
+}
+
+fn nan_f32() -> f32 {
+    f32::NAN
+}
+
+fn is_nan_f32(value: &f32) -> bool {
+    value.is_nan()
 }
 
 impl Node {
@@ -241,6 +263,7 @@ impl Node {
             caret_x: 0.0,
             scroll_y: 0.0,
             scroll_extent: 0.0,
+            list_viewport: f32::NAN,
         }
     }
 
@@ -836,6 +859,8 @@ mod tests {
             NodeKind::Button,
             NodeKind::TextField,
             NodeKind::Scroll,
+            NodeKind::List,
+            NodeKind::ListItem,
         ] {
             assert_eq!(NodeKind::from_name(kind.as_str()), Some(kind));
         }
