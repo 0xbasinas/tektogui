@@ -34,7 +34,7 @@ cargo run -p tekto-cli -- tree
 cargo run -p tekto-cli -- click 1
 cargo run -p tekto-cli -- screenshot /tmp/shot.png
 cargo run -p tekto-cli -- patch 4 --text "Hello from a patch"
-cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0"
+cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0" --font-size 20
 # If no server is running, `screenshot` falls back to a headless Notes PNG.
 ```
 
@@ -43,13 +43,13 @@ cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0"
 ## HTTP and MCP
 
 - `GET /tree`, `GET /tree.txt`, `GET /accesskit`, `GET /screenshot`, `GET /state`, `GET /logs`
-- `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb"}`
+- `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb","fontSize":20}` — response is `{ "ok": true, "node": { ... } }` or an error
 - `POST /click` `{"id":1}`
 - `POST /type` `{"id":4,"text":"typed"}`
 
 Stdio MCP (`cargo run -p tekto-cli -- mcp`) proxies those to the dev server. Tools: `ui.tree`, `ui.accesskit`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`.
 
-Live patches change the running tree only. Writing the change back to source is not implemented yet (issue on Month 2). Hot reload of TS is also not implemented yet; use patch plus a restart for Rust edits.
+Live patches change the running tree immediately (no reload). Writing the change back to source is issue #19. Hot reload of TS is issue #18 and is not a substitute for `ui.patch`.
 
 ## Verify
 

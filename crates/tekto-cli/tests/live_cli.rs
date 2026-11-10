@@ -131,6 +131,12 @@ fn tree_screenshot_and_patch_against_dev_server() {
         "patch text failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+    let patch_body = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        patch_body.contains("Patched hello") && patch_body.contains("\"ok\": true"),
+        "patch should return the updated node, got:
+    {patch_body}"
+    );
 
     let out = run_tekto(&dev_file, &["tree"]);
     let tree2 = String::from_utf8_lossy(&out.stdout);

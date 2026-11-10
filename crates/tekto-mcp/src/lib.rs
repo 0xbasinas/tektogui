@@ -327,7 +327,11 @@ fn dispatch(
                 .ok_or_else(|| McpError::msg("missing id"))?;
             let patch: NodePatch = serde_json::from_value(v)?;
             handle.patch(NodeId::from_raw(id), patch)?;
-            ok_json(json!({"ok": true}))
+            let tree = handle.tree();
+            let node = tree
+                .node_dump(NodeId::from_raw(id))
+                .ok_or_else(|| McpError::msg(format!("node {id} missing after patch")))?;
+            ok_json(json!({"ok": true, "node": node}))
         }
         ("POST", "/click") => {
             let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
@@ -474,7 +478,7 @@ fn tool_list() -> Value {
         {"name": "ui.screenshot", "description": "Take a PNG screenshot using the CPU renderer.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.click", "description": "Click a node by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}}, "required": ["id"]}},
         {"name": "ui.type", "description": "Type text into a node by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
-        {"name": "ui.patch", "description": "Live-edit a node: change text, name, fill, or color in the running app.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}}, "required": ["id"]}},
+        {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, or fontSize. Returns the updated node. Does not reload the app.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}}, "required": ["id"]}},
         {"name": "app.state", "description": "Read opted-in app state as JSON.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "app.logs", "description": "Read structured logs.", "inputSchema": {"type": "object", "properties": {}}}
     ])
