@@ -8,18 +8,13 @@ import { Notes } from "../jsx-runtime/notes-app.js";
 import { blitPng, decodePng, resizeCanvas } from "./src/canvas.js";
 import { choosePaintBackend, detectWebGl2, detectWebGpu, paintPreferred } from "./src/gpu.js";
 import { connectWasm } from "./src/index.js";
+import { wasmPath as findWasmPath } from "./src/wasm-path.js";
+import { requireOrSkip } from "./test-prerequisites.js";
 
-const wasmPath =
-  process.env.TEKTO_WASM ??
-  fileURLToPath(
-    new URL("../../target/wasm32-unknown-unknown/debug/tekto_wasm.wasm", import.meta.url),
-  );
+const wasmPath = findWasmPath(fileURLToPath(new URL("../..", import.meta.url)));
 
 test("wasm host applies HostOps and returns a PNG", async (t) => {
-  if (!existsSync(wasmPath)) {
-    t.skip(`no wasm module at ${wasmPath} (cargo build -p tekto-wasm --target wasm32-unknown-unknown)`);
-    return;
-  }
+  if (!requireOrSkip(t, existsSync(wasmPath), `no wasm module at ${wasmPath}`)) return;
   const host = await connectWasm(readFileSync(wasmPath));
   host.reset();
   const id = host.create("text");
@@ -60,10 +55,7 @@ function fakeCanvas(width, height) {
 }
 
 test("notes at 640x400 matches the headless PNG and blits on resize", async (t) => {
-  if (!existsSync(wasmPath)) {
-    t.skip(`no wasm module at ${wasmPath} (cargo build -p tekto-wasm --target wasm32-unknown-unknown)`);
-    return;
-  }
+  if (!requireOrSkip(t, existsSync(wasmPath), `no wasm module at ${wasmPath}`)) return;
   const referencePath = fileURLToPath(
     new URL("../../crates/tekto/tests/snapshots/notes-headless.png", import.meta.url),
   );

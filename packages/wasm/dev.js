@@ -14,12 +14,11 @@ import { resolve } from "node:path";
 
 import { repoRoot } from "./src/bundle-app.js";
 import { startDevServer } from "./src/dev-server.js";
+import { wasmPath as findWasmPath } from "./src/wasm-path.js";
 
 const root = repoRoot();
 const entry = process.argv[2] || resolve(root, "examples/notes/src/app.tsx");
-const wasmPath =
-  process.env.TEKTO_WASM ||
-  resolve(root, "target/wasm32-unknown-unknown/debug/tekto_wasm.wasm");
+const wasmPath = findWasmPath(root);
 
 if (!existsSync(wasmPath)) {
   const build = spawnSync(
