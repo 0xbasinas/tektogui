@@ -35,6 +35,7 @@ Tools in the first slice:
 | Tool | What it does |
 | --- | --- |
 | `ui.tree` | Dump the tree (pretty text + JSON) |
+| `ui.accesskit` | Dump AccessKit roles, labels, bounds, and focus (same ids) |
 | `ui.screenshot` | CPU-rendered PNG |
 | `ui.click` | Click a node id (stub until input is wired) |
 | `ui.type` | Type into a node id (stub until IME / fields land) |

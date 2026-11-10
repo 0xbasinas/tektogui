@@ -13,6 +13,10 @@ default = ["cpu"]
 cpu = ["tekto-render/cpu"]
 # Desktop window (Windows / Linux / macOS). Off for Android and wasm checks.
 desktop = ["dep:winit", "dep:softbuffer", "cpu"]
+# Publish the AccessKit tree to the OS (AT-SPI, UIA, …). Off by default so
+# everyday dev and CI builds stay lean; accesskit_winit pulls accesskit_unix
+# on Linux.
+a11y-os = ["desktop", "dep:accesskit_winit"]
 
 [dependencies]
 tekto-tree = { workspace = true }
@@ -20,8 +24,10 @@ tekto-layout = { workspace = true }
 tekto-render = { workspace = true }
 tekto-a11y = { workspace = true }
 tekto-mcp = { workspace = true }
+accesskit = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(all(not(target_os = "android"), not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 winit = { workspace = true, optional = true }
 softbuffer = { workspace = true, optional = true }
+accesskit_winit = { workspace = true, optional = true, default-features = false, features = ["rwh_06", "accesskit_unix", "async-io"] }

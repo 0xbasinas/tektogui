@@ -47,6 +47,7 @@ skrifa = "0.44"
 winit = "0.30.13"
 softbuffer = "0.4"
 accesskit = "0.21"
+accesskit_winit = { version = "0.29.2", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 
 # Fast incremental builds. Do not raise opt-level on deps here; that slows compile.

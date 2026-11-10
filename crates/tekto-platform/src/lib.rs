@@ -111,6 +111,7 @@ pub fn start_handle(
         tree,
         render,
         logs: Arc::new(Mutex::new(vec!["tekto dev server started".into()])),
+        on_change: Mutex::new(None),
     });
     let ep = tekto_mcp::start_dev_server(handle.clone())?;
     Ok((handle, ep))
