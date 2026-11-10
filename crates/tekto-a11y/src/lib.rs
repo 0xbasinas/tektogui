@@ -77,7 +77,9 @@ fn collect(scene: &SceneTree, id: tekto_tree::NodeId, out: &mut Vec<(NodeId, Nod
         if let Some(name) = src.name.as_ref().filter(|s| !s.is_empty()) {
             node.set_label(name.clone());
         }
-        node.set_value(src.text.clone().unwrap_or_default());
+        // Committed text plus the current preedit, so a screen reader sees
+        // the composition before it is committed.
+        node.set_value(src.composed_text());
     } else {
         let label = src.display_name();
         if !label.is_empty() {
@@ -163,5 +165,34 @@ mod tests {
             .nodes
             .iter()
             .any(|n| n.id == w.raw() && n.role == "Window"));
+    }
+
+    #[test]
+    fn text_field_accesskit_value_includes_preedit_then_commit() {
+        let mut scene = SceneTree::new();
+        let w = scene.add(K::Window, None).unwrap();
+        let field = scene.add(K::TextField, Some(w)).unwrap();
+        scene.get_mut(field).unwrap().name = Some("Title".into());
+        scene.get_mut(field).unwrap().text = Some("Hi".into());
+        scene.get_mut(field).unwrap().caret = 2;
+        scene.set_focus(field).unwrap();
+        scene
+            .apply_ime(tekto_tree::ImeEvent::Preedit {
+                text: "你".into(),
+                cursor: Some((3, 3)),
+            })
+            .unwrap();
+        let dump = dump(&scene).expect("dump");
+        let node = dump.nodes.iter().find(|n| n.id == field.raw()).unwrap();
+        assert_eq!(node.role, "TextInput");
+        assert_eq!(node.label.as_deref(), Some("Title"));
+        assert_eq!(node.value.as_deref(), Some("Hi你"));
+        scene
+            .apply_ime(tekto_tree::ImeEvent::Commit("你".into()))
+            .unwrap();
+        let dump = super::dump(&scene).expect("dump");
+        let node = dump.nodes.iter().find(|n| n.id == field.raw()).unwrap();
+        assert_eq!(node.value.as_deref(), Some("Hi你"));
+        assert_eq!(scene.get(field).unwrap().text.as_deref(), Some("Hi你"));
     }
 }
