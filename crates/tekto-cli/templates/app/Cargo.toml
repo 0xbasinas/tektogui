@@ -1,0 +1,11 @@
+[package]
+name = "{{package}}"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone crate, even if created inside the tektogui checkout.
+[workspace]
+
+[dependencies]
+tekto = { path = "{{tekto_path}}" }
