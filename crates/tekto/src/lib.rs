@@ -19,7 +19,7 @@ pub use tekto_platform::lifecycle::{
     handle_lifecycle, on_resumed, on_suspended, surface_is_live, AppLifecycle,
 };
 #[cfg(all(feature = "desktop", target_os = "android"))]
-pub use tekto_platform::{run_android, AndroidApp};
+pub use tekto_platform::{run_android, run_android_with_session, AndroidApp};
 pub use tekto_platform::{
     run_headless, run_windowed, run_windowed_with_session, start_handle, AppRuntime, DevSession,
     PlatformError, Viewport, WindowOptions,
@@ -68,4 +68,34 @@ mod tests {
         })
         .is_some());
     }
+}
+
+/// Install a QuickJS applier on a dev-server handle so `POST /reload`
+/// can swap the live tree for a new JS bundle without a Rust rebuild.
+#[cfg(feature = "quickjs")]
+pub fn install_js_runtime(
+    handle: &std::sync::Arc<SharedTreeHandle>,
+    viewport: &std::sync::Arc<std::sync::Mutex<Viewport>>,
+) {
+    use std::sync::Arc;
+    use std::time::Instant;
+    use tekto_js::eval_to_tree;
+
+    let tree = Arc::clone(&handle.tree);
+    let logs = Arc::clone(&handle.logs);
+    let vp = Arc::clone(viewport);
+    let apply: tekto_mcp::ApplyJsFn = Arc::new(move |js: &str| {
+        let t0 = Instant::now();
+        let mut next = eval_to_tree(js).map_err(|e| e.to_string())?;
+        let (w, h) = vp.lock().map(|g| (g.width, g.height)).unwrap_or((640, 400));
+        layout_tree(&mut next, w as f32, h as f32);
+        *tree.lock().map_err(|e| e.to_string())? = next;
+        let line = format!("js reload {}ms", t0.elapsed().as_millis());
+        eprintln!("{line}");
+        if let Ok(mut logs) = logs.lock() {
+            logs.push(line);
+        }
+        Ok(())
+    });
+    *handle.apply_js.lock().expect("apply_js") = Some(apply);
 }

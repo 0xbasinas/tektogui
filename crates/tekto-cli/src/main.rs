@@ -32,7 +32,9 @@ enum Command {
         android: bool,
         /// TypeScript/JSX entry (`.tsx` / `.ts` / `.js`). Reloads the JS
         /// bundle into the running app without rebuilding Rust.
-        /// Requires a CLI build with `--features quickjs`.
+        /// Desktop needs a CLI build with `--features quickjs`. Combined
+        /// with `--android`, the APK embeds QuickJS and the host only
+        /// needs esbuild (no host `quickjs` feature).
         #[arg(long, value_name = "ENTRY")]
         js: Option<PathBuf>,
         /// Load the JS entry once; do not watch for changes.
@@ -115,11 +117,9 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             no_watch,
         } => {
             if android {
-                if js.is_some() {
-                    return Err(
-                        "the Android APK does not embed QuickJS yet, so `dev --js --android` is not available. The HTTP hook is ready: after `adb forward tcp:8474 tcp:8474`, POST a JS bundle to http://127.0.0.1:8474/reload (see .agents/skills/run-and-inspect-app)."
-                            .into(),
-                    );
+                if let Some(entry) = js {
+                    android::dev_android_js(&entry, !no_watch)?;
+                    return Ok(());
                 }
                 android::dev_android(false)?;
                 return Ok(());

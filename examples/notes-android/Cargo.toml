@@ -17,6 +17,13 @@ crate-type = ["cdylib", "rlib"]
 # on edition 2021.
 tekto = { path = "../../crates/tekto", default-features = false, features = ["cpu"] }
 
+[features]
+default = []
+# Embeds QuickJS-ng in the APK so `tekto dev --js --android` can POST a
+# bundle over adb forward. Off by default: compiling rquickjs for two
+# Android ABIs is slow, and nightly PR-less Android CI stays lean.
+quickjs = ["tekto/quickjs"]
+
 [target.'cfg(target_os = "android")'.dependencies]
 tekto = { path = "../../crates/tekto", default-features = false, features = ["cpu", "desktop"] }
 
