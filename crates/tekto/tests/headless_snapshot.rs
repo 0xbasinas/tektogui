@@ -2,7 +2,9 @@
 //! the PNG and the scene / AccessKit tree.
 
 use std::path::PathBuf;
-use tekto::{accesskit_tree_update, layout_tree, notes_tree, render_headless_to_file};
+use tekto::{
+    accesskit_dump, accesskit_tree_update, layout_tree, notes_tree, render_headless_to_file,
+};
 
 fn shot_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("TEKTO_SHOT_DIR") {
@@ -22,6 +24,19 @@ fn notes_headless_snapshot() {
 
     let update = accesskit_tree_update(&tree).expect("accesskit");
     assert!(update.nodes.len() >= 3);
+    let root = tree.root().expect("root");
+    assert_eq!(update.focus.0, tree.focus.unwrap_or(root).raw());
+    let dump = accesskit_dump(&tree).expect("dump");
+    assert!(dump
+        .nodes
+        .iter()
+        .any(|n| n.role == "Window" && n.id == root.raw()));
+    assert!(dump.nodes.iter().any(|n| {
+        n.role == "Label"
+            && n.value.as_deref() == Some("Hello from Tekto")
+            && n.bounds[2] > n.bounds[0]
+            && n.bounds[3] > n.bounds[1]
+    }));
 
     let dir = shot_dir();
     std::fs::create_dir_all(&dir).expect("shot dir");

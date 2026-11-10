@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 tekto-tree = { workspace = true }
+tekto-a11y = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -22,6 +22,7 @@ The stdio MCP server (`tekto mcp`) is a proxy. Real work happens on the localhos
 | MCP tool | HTTP | CLI |
 |---|---|---|
 | `ui.tree` | `GET /tree` (JSON) and `GET /tree.txt` | `tekto tree` uses `/tree.txt` |
+| `ui.accesskit` | `GET /accesskit` | none |
 | `ui.screenshot` | `GET /screenshot` | `tekto screenshot [out]` |
 | `ui.click` | `POST /click` `{"id":N}` | `tekto click N` |
 | `ui.type` | `POST /type` `{"id":N,"text":"…"}` | none |

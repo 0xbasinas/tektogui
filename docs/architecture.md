@@ -59,7 +59,8 @@ Apps never call tiny-skia or wgpu directly.
 
 ## Agents
 
-`tekto-a11y` builds an AccessKit tree from the scene. That tree is what `ui.tree` returns.
+`tekto-a11y` builds an AccessKit tree from the scene (same stable ids, plus roles, labels, bounds, and focus). `GET /accesskit` and MCP `ui.accesskit` return that dump. The desktop window rebuilds it after every layout so a live patch can stay in sync. Publishing to the OS (AT-SPI / UIA / VoiceOver) is behind the optional `a11y-os` feature, which pulls in `accesskit_winit` and is off by default so compile times stay short.
+
 
 `tekto-mcp` starts a localhost HTTP server and writes `tekto-dev.json` (or `$TEKTO_DEV_FILE`). The `tekto` CLI and the stdio MCP adapter both use that server.
 
