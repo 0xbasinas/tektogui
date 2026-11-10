@@ -19,7 +19,7 @@ export function isElement(value) {
 }
 
 const INTRINSICS = new Set(["window", "group", "rect", "text", "button"]);
-const PROPS = new Set(["name", "title", "text", "fill", "color", "fontSize", "font_size"]);
+const PROPS = new Set(["name", "title", "text", "fill", "color", "fontSize", "font_size", "width", "height", "padding", "gap", "column", "justifyCenter", "justify_center"]);
 
 function childrenOf(props) {
   if (!props || props.children == null) return [];

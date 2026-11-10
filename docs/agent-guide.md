@@ -17,7 +17,7 @@ Or run the windowed Notes example. The process writes a small file (default: `$X
 cargo run -p tekto-cli -- tree
 cargo run -p tekto-cli -- screenshot /tmp/shot.png
 cargo run -p tekto-cli -- patch 4 --text "New title"
-cargo run -p tekto-cli -- patch 4 --color "#2c333a" --font-size 20
+cargo run -p tekto-cli -- patch 4 --color "#2c333a" --font-size 20 --padding 24
 cargo run -p tekto-cli -- click 4
 ```
 
@@ -44,7 +44,7 @@ Tools in the first slice:
 | `app.state` | Opt-in JSON state (empty for now) |
 | `app.logs` | Recent log lines |
 
-Live patches change the running tree immediately and do not require a reload. `POST /patch` and `ui.patch` accept JSON `{ "id", "text?", "name?", "fill?", "color?", "fontSize?" }` (`#rrggbb` or `#rrggbbaa`) and return the updated node, or a clear error (unknown id, bad color). Padding and other layout styles are not in this slice.
+Live patches change the running tree immediately and do not require a reload. `POST /patch` and `ui.patch` accept JSON `{ "id", "text?", "name?", "fill?", "color?", "fontSize?", "padding?", "gap?" }` (`#rrggbb` or `#rrggbbaa`) and return the updated node, or a clear error (unknown id, bad color).
 
 When the old text or a simple style literal (`"#rrggbb"`, `fontSize={N}`) appears once in the app project, `ui.patch` / `tekto patch` also writes that change back to source. The JSON includes a `writeback` object (`written`, `skipped`, or `partial`) and the reason if it did not write. Ambiguous literals, named colors such as `Color::BANNER`, and files outside the app project (`TEKTO_APP_ROOT`, or the `--js` entry's app folder) are left as runtime-only changes. `crates/`, `target/`, `node_modules/`, and `docs/` are never written.
 

@@ -25,6 +25,15 @@ test("Notes JSX lowers to the same tree shape as the Rust example", () => {
   assert.ok(ops.some((o) => o.op === "append" && o.parent === 1 && o.child === 2));
   assert.ok(ops.some((o) => o.op === "append" && o.parent === 2 && o.child === 3));
   assert.ok(ops.some((o) => o.op === "append" && o.parent === 1 && o.child === 4));
+  assert.ok(ops.some((o) => o.op === "setProp" && o.id === 1 && o.key === "padding" && o.value === "24"));
+  assert.ok(ops.some((o) => o.op === "setProp" && o.id === 1 && o.key === "gap" && o.value === "20"));
+  assert.ok(ops.some((o) => o.op === "setProp" && o.id === 1 && o.key === "fill" && o.value === "#f4f3f0"));
+  assert.ok(ops.some((o) => o.op === "setProp" && o.id === 2 && o.key === "fill" && o.value === "#3a424a"));
+  assert.ok(ops.some((o) => o.op === "setProp" && o.id === 2 && o.key === "height" && o.value === "64"));
+  assert.ok(ops.some((o) => o.op === "setProp" && o.id === 2 && o.key === "padding" && o.value === "20"));
+  assert.ok(ops.some((o) => o.op === "setProp" && o.id === 2 && o.key === "justifyCenter" && o.value === "true"));
+  assert.ok(ops.some((o) => o.op === "setProp" && o.id === 3 && o.key === "color" && o.value === "#f4f3f0"));
+  assert.ok(ops.some((o) => o.op === "setProp" && o.id === 4 && o.key === "color" && o.value === "#2c333a"));
 });
 
 test("mount talks to a host by id, not through Notes-only APIs", () => {
