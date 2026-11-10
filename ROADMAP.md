@@ -58,7 +58,7 @@ Still in Month 1:
 
 ## Month 5 — mobile polish and plugins
 
-- Android IME or a native text-field overlay
+- Android text input uses a native `EditText` overlay (`FieldOverlay`), not winit IME. A live type-into-field check still needs a free emulator or device
 - Safe areas and keyboard insets
 - Android GPU paint compiles behind `notes-android` feature `gpu`, but the default stays CPU (`TEKTO_ANDROID_GPU=1` to try it). Drivers were not proven here. A lost surface skips present.
 - Notifications, clipboard, and files on Android

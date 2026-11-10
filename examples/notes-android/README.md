@@ -73,7 +73,11 @@ CI runs `cargo check -p notes-android --target aarch64-linux-android` on `nightl
 
 ## Suspend / resume
 
-winit maps native-window create/destroy to `resumed` / `suspended`. The CPU softbuffer is acquired on `resumed` and dropped on `suspended` (surface first, then the window) so resume does not lock a destroyed `ANativeWindow`. IME is out of scope.
+winit maps native-window create/destroy to `resumed` / `suspended`. The CPU softbuffer is acquired on `resumed` and dropped on `suspended` (surface first, then the window) so resume does not lock a destroyed `ANativeWindow`.
+
+## Text fields
+
+A focused `text_field` shows a native `EditText` (`java/com/tektogui/ime/FieldOverlay.java`, `java_sources` in `Cargo.toml`). cargo-apk2 compiles it into the APK. The Rust loop polls the string into the Tekto tree, so `tekto tree` / AccessKit / MCP see it. winit on Android does not deliver IME commits, so this overlay is the path we use. Limits: one single-line field, the IME UI is Android's, Tekto stores no preedit (the overlay string is the value), and `adjustResize` is the only keyboard inset. A push waits until the UI thread applies it before the old native string can count as typing. The tree caret is a scalar index; the overlay uses UTF-16. Keys are ignored only while the overlay is on a text field. A live type check needs a free emulator or device. Do not start one beside a heavy build. Host tests cover the sync plan (`cargo test -p tekto-platform --lib android_field`).
 
 Host checks (no emulator):
 
