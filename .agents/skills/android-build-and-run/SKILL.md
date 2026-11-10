@@ -63,7 +63,9 @@ cargo check -p notes-android --target aarch64-linux-android
 
 ## AVD `beddcode30` (manual only)
 
-Do not put this in PR CI. Do not run heavy `cargo test` / compiles in parallel with the emulator. This machine often has `/dev/kvm` but no permission, so you **must** pass `-accel off` (TCG, software). Be patient: a cold boot can take several minutes. `-gpu swiftshader_indirect` is optional.
+Do not put this in PR CI. Do not start the emulator if another heavy build is running, and do not run heavy `cargo test` / compiles in parallel with it. This machine often has `/dev/kvm` but no permission, so you **must** pass `-accel off` (TCG, software). Be patient: a cold boot can take several minutes. `-gpu swiftshader_indirect` is optional.
+
+Build the APK first (see Package), with the emulator stopped. Reuse `target/x86_64-linux-android/debug/apk/notes.apk` when it is already current. `tekto dev --android` rebuilds the APK; do not run it while the emulator is up.
 
 ```bash
 source ~/.android-env.sh
@@ -73,21 +75,12 @@ adb wait-for-device
 adb shell getprop sys.boot_completed
 ```
 
-Then install and launch. Either:
-
-```bash
-# Builds, adb install -r, am start, adb forward tcp:8474, waits for /tree.txt
-cargo run -p tekto-cli -- dev --android
-```
-
-or by hand:
+Then install and launch the APK you already built:
 
 ```bash
 adb install -r target/x86_64-linux-android/debug/apk/notes.apk
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 adb forward tcp:8474 tcp:8474
-# Host endpoint so `tekto tree` works (the on-device tekto-dev.json is useless here):
-# tekto dev --android writes this for you.
 ```
 
 The APK requests `android.permission.INTERNET` so the dev server can bind `127.0.0.1:8474` (`ANDROID_DEV_PORT`, overridable with `TEKTO_DEV_HOST` / `TEKTO_DEV_PORT`). After `adb forward`:
@@ -120,13 +113,12 @@ Do not use a broad `pkill`.
 The default APK does **not** enable `quickjs` (keeps nightly Android CI lean). `tekto dev --js --android` builds with `-F quickjs`, installs, forwards port 8474, bundles the TSX entry with esbuild, and `POST /reload`. The host CLI does **not** need `--features quickjs`.
 
 ```bash
-# Prefer a single ABI. beddcode30 is x86_64. Or let the CLI detect it.
-export TEKTO_ANDROID_TARGET=x86_64-linux-android
-# AVD should already be up; do not compile the APK and run the emulator in parallel.
-cargo run -p tekto-cli -- dev --js examples/notes/src/app.tsx --android
+# Emulator stopped. Prefer one ABI. beddcode30 is x86_64.
+cargo apk2 build -p notes-android -F quickjs --target x86_64-linux-android
+# Start beddcode30 only after that APK exists, then adb install, am start, and
+# adb forward tcp:8474. Host esbuild + POST /reload do not need --features quickjs.
+# `tekto dev --js --android` rebuilds the APK; do not run it while the emulator is up.
 ```
-
-Equivalent APK-only command: `cargo apk2 build -p notes-android -F quickjs --target x86_64-linux-android`.
 
 The first painted frame may be the Rust `notes_tree`; the posted bundle then replaces it. Saving the `.tsx` rebuilds and posts again. `POST /reload` still works by hand after `adb forward tcp:8474 tcp:8474`.
 
@@ -136,7 +128,48 @@ Judge QuickJS cost on the `.so` / release size delta, not the raw debug APK (deb
 
 ## Lifecycle
 
-`android_main` in `examples/notes-android` calls `tekto::run_android` (or `run_android_with_session` when the `quickjs` feature is on, so `POST /reload` has a hook). That builds the winit event loop with `with_android_app`. The window/surface is created on `resumed` and dropped on `suspended`. The C symbols `tekto_on_resumed` / `tekto_on_suspended` stay for a later Java Activity if we ever need one. IME is later.
+`android_main` in `examples/notes-android` calls `tekto::run_android` (or `run_android_with_session` when the `quickjs` feature is on, so `POST /reload` has a hook). That builds the winit event loop with `with_android_app`.
+
+winit turns `InitWindow` into `ApplicationHandler::resumed` and `TerminateWindow` into `suspended`. `resumed` creates the winit window and the softbuffer CPU surface and records one [`SurfaceEpoch`](../../../crates/tekto-platform/src/lifecycle.rs). `suspended` retires that epoch, drops the softbuffer surface, then drops the window. A redraw after suspend returns without `buffer_mut` / `present`. A second `resumed` drops any held surface first so a replaced `ANativeWindow` cannot leak or be locked. IME is later.
+
+Host-only proof (no emulator):
+
+```bash
+cargo test -p tekto-platform --lib lifecycle
+cargo test -p notes-android
+```
+
+### Prove suspend / resume on AVD `beddcode30` when it is free
+
+Do not start the emulator while another heavy build is running. Do not use displays `:1` or `:2`. Stop only with `adb emu kill`.
+
+```bash
+source ~/.android-env.sh
+export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/27.1.12297006}"
+
+# Build (or reuse) the APK first. Do not compile alongside the emulator.
+cargo apk2 build -p notes-android --target x86_64-linux-android
+
+emulator -avd beddcode30 -no-window -memory 2048 -accel off &
+adb wait-for-device
+until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done
+
+adb install -r target/x86_64-linux-android/debug/apk/notes.apk
+adb shell am start -n com.tektogui.notes/android.app.NativeActivity
+sleep 3
+mkdir -p /workspace/tektogui-shots
+adb exec-out screencap -p > /workspace/tektogui-shots/notes-android-resumed.png
+
+adb shell input keyevent KEYCODE_HOME
+sleep 2
+adb shell am start -n com.tektogui.notes/android.app.NativeActivity
+sleep 3
+adb exec-out screencap -p > /workspace/tektogui-shots/notes-android-resumed-again.png
+adb logcat -d -s AndroidRuntime:E | head
+adb emu kill
+```
+
+Both screenshots should show the Notes tree, and logcat should not contain a fatal `ANativeWindow` / softbuffer error.
 
 ## CI
 
@@ -144,6 +177,6 @@ The Android job in `.github/workflows/ci.yml` runs only on `push` to `nightly` o
 
 ## Verify
 
-- Host: `cargo test -p notes-android` (lifecycle stubs + headless Notes PNG).
+- Host: `cargo test -p notes-android` (lifecycle flag cycles + headless Notes PNG) and `cargo test -p tekto-platform --lib lifecycle` (one live surface epoch; suspend retires it; resume replaces it).
 - APK: `cargo apk2 build -p notes-android` exits 0 and writes `notes.apk`.
 - Device: package is installed, `am start` does not print `Error type`, `adb exec-out screencap -p` shows the Notes UI, and `tekto tree` over `adb forward tcp:8474` prints a window tree.
