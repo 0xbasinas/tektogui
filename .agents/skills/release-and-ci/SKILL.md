@@ -31,11 +31,11 @@ Triggers: pull requests, pushes to `nightly` or `main`, and `workflow_dispatch`.
 | Linux check | every PR and every push | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`. That test step is the replay check and the screenshot check: `crates/tekto/tests/record_replay.rs` loads `fixtures/session.json`, and `headless_snapshot` compares PNG bytes to `tests/snapshots/notes-headless.png`. Do not add a second PR job for them. |
 | Windows compile | `push` to `nightly`, or manual dispatch with `full=true` | `cargo check --workspace --all-targets` on `windows-latest` |
 | Android compile | `push` to `nightly`, or manual dispatch with `full=true` | `cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu` |
-| WASM core check | `push` to `nightly`, or any `workflow_dispatch` | `cargo check -p tekto-wasm --target wasm32-unknown-unknown` and `cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js` |
+| WASM and QuickJS checks | `push` to `nightly`, or any `workflow_dispatch` | In one 20-minute Linux job: install pinned `esbuild@0.25.12`, `cargo build -p tekto-wasm --target wasm32-unknown-unknown`, `cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js`, `npm run test:wasm:required` (Node WASM tests, no skips), and `TEKTO_REQUIRE_ESBUILD=1 cargo test -p tekto-js --features quickjs`. Node is not a browser test. |
 
 `RUSTFLAGS=-D warnings`. Caches use Swatinem/rust-cache. Concurrency cancels older runs on the same ref.
 
-**Keep it light:** do not run Windows, Android, emulators, packaging, or wasm on every PR. Windows and Android stay on nightly or `workflow_dispatch` with `full=true`. The wasm job runs on a push to `nightly` or any `workflow_dispatch`. Timeouts are already 20–30 minutes.
+**Keep it light:** do not run Windows, Android, emulators, packaging, or wasm on every PR. Windows and Android stay on nightly or `workflow_dispatch` with `full=true`. The wasm job (WASM build, required Node tests, QuickJS tests) runs only on a push to `nightly` or any `workflow_dispatch`, never on PRs. Windows and Android conditions are unchanged. Timeouts are already 20–30 minutes.
 
 ## Packaging (local, not CI)
 

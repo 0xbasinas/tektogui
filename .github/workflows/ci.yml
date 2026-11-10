@@ -77,7 +77,7 @@ jobs:
         run: cargo check -p notes-android --target aarch64-linux-android
 
   wasm:
-    name: WASM core check
+    name: WASM and QuickJS checks
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/nightly')
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -89,7 +89,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: wasm-check
-      - name: Check WASM core and op bridge
-        run: cargo check -p tekto-wasm --target wasm32-unknown-unknown
+      - name: Install esbuild
+        run: |
+          npm install --prefix "$RUNNER_TEMP/tekto-ci" --no-save --no-package-lock esbuild@0.25.12
+          echo "$RUNNER_TEMP/tekto-ci/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Build WASM core and op bridge
+        run: cargo build -p tekto-wasm --target wasm32-unknown-unknown
       - name: Check tekto CPU + HostOp (no desktop shell, no quickjs, no gpu)
         run: cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js
+      - name: Test WASM in Node (required)
+        run: npm run test:wasm:required
+      - name: Test QuickJS
+        env:
+          TEKTO_REQUIRE_ESBUILD: "1"
+        run: cargo test -p tekto-js --features quickjs

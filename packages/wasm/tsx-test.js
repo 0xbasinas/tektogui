@@ -11,12 +11,12 @@ import { bundleApp, esbuildBin, repoRoot } from "./src/bundle-app.js";
 import { startDevServer } from "./src/dev-server.js";
 import { connectWasm } from "./src/index.js";
 import { applyUiPatch } from "./src/patch.js";
+import { wasmPath as findWasmPath } from "./src/wasm-path.js";
+import { requireOrSkip } from "./test-prerequisites.js";
 
 const root = repoRoot();
 const entry = resolve(root, "examples/notes/src/app.tsx");
-const wasmPath =
-  process.env.TEKTO_WASM ??
-  resolve(root, "target/wasm32-unknown-unknown/debug/tekto_wasm.wasm");
+const wasmPath = findWasmPath(root);
 
 function haveEsbuild() {
   const found = spawnSync(esbuildBin(), ["--version"], { encoding: "utf8" });
@@ -24,14 +24,8 @@ function haveEsbuild() {
 }
 
 test("Notes TSX bundle mounts on the wasm core", async (t) => {
-  if (!haveEsbuild()) {
-    t.skip("esbuild is not on PATH");
-    return;
-  }
-  if (!existsSync(wasmPath)) {
-    t.skip(`no wasm module at ${wasmPath}`);
-    return;
-  }
+  if (!requireOrSkip(t, haveEsbuild(), "esbuild is unavailable (PATH or ESBUILD)")) return;
+  if (!requireOrSkip(t, existsSync(wasmPath), `no wasm module at ${wasmPath}`)) return;
   const dir = mkdtempSync(resolve(tmpdir(), "tekto-tsx-"));
   const outfile = resolve(dir, "app.js");
   try {
@@ -57,10 +51,7 @@ test("Notes TSX bundle mounts on the wasm core", async (t) => {
 });
 
 test("web dev server serves the bundle and pushes ui.patch", async (t) => {
-  if (!haveEsbuild()) {
-    t.skip("esbuild is not on PATH");
-    return;
-  }
+  if (!requireOrSkip(t, haveEsbuild(), "esbuild is unavailable (PATH or ESBUILD)")) return;
   const server = await startDevServer({
     entry,
     wasmPath,
@@ -119,10 +110,7 @@ test("web dev server serves the bundle and pushes ui.patch", async (t) => {
 });
 
 test("web dev server rebuilds the bundle when the TSX entry changes", async (t) => {
-  if (!haveEsbuild()) {
-    t.skip("esbuild is not on PATH");
-    return;
-  }
+  if (!requireOrSkip(t, haveEsbuild(), "esbuild is unavailable (PATH or ESBUILD)")) return;
   const dir = mkdtempSync(resolve(tmpdir(), "tekto-watch-"));
   const tsx = resolve(dir, "app.tsx");
   const before = "watch-token-before";
@@ -165,10 +153,7 @@ test("web dev server rebuilds the bundle when the TSX entry changes", async (t) 
 
 
 test("web dev server waits for its watcher and isolates concurrent bundles", async (t) => {
-  if (!haveEsbuild()) {
-    t.skip("esbuild is not on PATH");
-    return;
-  }
+  if (!requireOrSkip(t, haveEsbuild(), "esbuild is unavailable (PATH or ESBUILD)")) return;
   const dir = mkdtempSync(resolve(tmpdir(), "tekto-watch-ready-"));
   const firstEntry = resolve(dir, "first.tsx");
   const secondEntry = resolve(dir, "second.tsx");
