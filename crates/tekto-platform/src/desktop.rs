@@ -16,10 +16,11 @@ use std::sync::{Arc, Mutex};
 use tekto_layout::layout_tree;
 use tekto_mcp::{AppHandle, SharedTreeHandle};
 use tekto_render::{paint_tree, CpuRenderer, Renderer};
-use tekto_tree::Tree;
+use tekto_tree::{FieldKey, Tree};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 /// Wakes the window when the dev server patches the tree.
@@ -38,6 +39,7 @@ struct State {
     tree: Arc<Mutex<Tree>>,
     clear: tekto_tree::Color,
     cursor: Option<(f32, f32)>,
+    modifiers: Modifiers,
     handle: Option<Arc<SharedTreeHandle>>,
     viewport: Arc<Mutex<Viewport>>,
     #[cfg(feature = "a11y-os")]
@@ -98,6 +100,7 @@ impl ApplicationHandler<AppEvent> for App {
             tree: Arc::clone(&self.tree),
             clear: self.runtime.clear,
             cursor: None,
+            modifiers: Modifiers::default(),
             handle: self.handle.clone(),
             viewport: Arc::clone(&self.viewport),
             #[cfg(feature = "a11y-os")]
@@ -158,6 +161,19 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                 }
             }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                if let Some(state) = self.state.as_mut() {
+                    state.modifiers = modifiers;
+                }
+            }
+            // Committed characters and Backspace only. `WindowEvent::Ime`
+            // (preedit, commit from a composition, candidates) is ignored.
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let Some(state) = self.state.as_mut() {
+                    apply_field_key(state, &event);
+                }
+            }
+            WindowEvent::Ime(_) => {}
             _ => {}
         }
     }
@@ -307,6 +323,42 @@ fn apply_pointer_click(state: &mut State, x: f32, y: f32) {
         let _ = tree.click(id);
     }
     state.window.request_redraw();
+}
+
+/// Printable characters and Backspace on the focused text field.
+///
+/// Ctrl, Alt, and Super chords are left alone. This is not an input method:
+/// there is no preedit string, marked range, or candidate window.
+fn apply_field_key(state: &mut State, event: &KeyEvent) {
+    if event.state != ElementState::Pressed {
+        return;
+    }
+    let changed = if let Ok(mut tree) = state.tree.lock() {
+        if event.logical_key == Key::Named(NamedKey::Backspace) {
+            tree.apply_field_key(FieldKey::Backspace).unwrap_or(false)
+        } else {
+            let mods = state.modifiers.state();
+            if mods.control_key() || mods.alt_key() || mods.super_key() {
+                false
+            } else if let Some(text) = event.text.as_deref() {
+                let plain: String = text.chars().filter(|c| !c.is_control()).collect();
+                if plain.is_empty() {
+                    false
+                } else if let Some(id) = tree.focus {
+                    tree.insert_text(id, &plain).is_ok()
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+    } else {
+        false
+    };
+    if changed {
+        state.window.request_redraw();
+    }
 }
 
 #[cfg(target_os = "android")]

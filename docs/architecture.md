@@ -66,6 +66,8 @@ Apps never call tiny-skia or wgpu directly.
 
 Dev-mode tools (first slice): `ui.tree`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`. Record / replay and write-back to source files are planned.
 
+`NodeKind::TextField` is a single-line field. The scene `text` is the value agents read and patch; `name` is the label. AccessKit maps it to `Role::TextInput` on the same id. Desktop key input covers printable characters and Backspace when the field is focused. Full IME is not in this slice: no preedit, marked text, candidate window, or Android soft keyboard (`WindowEvent::Ime` is ignored). That work is Month 3.
+
 Hot reload (rebuild or reload TypeScript) and live patches (change a running node) are both intended in dev mode.
 
 ## TypeScript

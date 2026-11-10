@@ -39,6 +39,8 @@ pub enum NodeKind {
     Rect,
     Text,
     Button,
+    /// Single-line editable value. `name` is the label; `text` is the value.
+    TextField,
 }
 
 impl NodeKind {
@@ -49,10 +51,11 @@ impl NodeKind {
             NodeKind::Rect => "rect",
             NodeKind::Text => "text",
             NodeKind::Button => "button",
+            NodeKind::TextField => "text_field",
         }
     }
 
-    /// Parse a kind name (`window`, `group`, `rect`, `text`, `button`).
+    /// Parse a kind name (`window`, `group`, `rect`, `text`, `button`, `text_field`).
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "window" => Some(Self::Window),
@@ -60,6 +63,7 @@ impl NodeKind {
             "rect" => Some(Self::Rect),
             "text" => Some(Self::Text),
             "button" => Some(Self::Button),
+            "text_field" => Some(Self::TextField),
             _ => None,
         }
     }
@@ -91,6 +95,8 @@ impl Color {
     pub const BANNER: Color = Color::rgb(0x3a, 0x42, 0x4a);
     /// Soft banner text.
     pub const ON_BANNER: Color = Color::rgb(0xf4, 0xf3, 0xf0);
+    /// Quiet inset behind a single-line field.
+    pub const FIELD: Color = Color::rgb(0xe4, 0xe2, 0xdc);
 
     pub fn to_hex(self) -> String {
         if self.a == 255 {
@@ -193,6 +199,12 @@ pub struct Node {
     pub bounds: Rect,
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
+    /// Character index in `text` (Unicode scalar values). Used by text fields.
+    #[serde(default)]
+    pub caret: usize,
+    /// Caret x inside the content box, in logical pixels. Layout fills this in.
+    #[serde(default)]
+    pub caret_x: f32,
 }
 
 impl Node {
@@ -209,19 +221,31 @@ impl Node {
             bounds: Rect::default(),
             parent: None,
             children: Vec::new(),
+            caret: 0,
+            caret_x: 0.0,
         }
     }
 
     pub fn display_name(&self) -> String {
         // Prefer visible text so live `ui.patch` of text shows up in the tree.
+        // An empty text field keeps its label (`name`) so the tree stays readable.
         if let Some(text) = &self.text {
-            return text.clone();
+            if !(self.kind == NodeKind::TextField && text.is_empty()) {
+                return text.clone();
+            }
         }
         if let Some(name) = &self.name {
             return name.clone();
         }
         self.kind.as_str().to_string()
     }
+}
+
+/// One desktop key applied to a focused text field. Not an IME event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldKey {
+    Insert(char),
+    Backspace,
 }
 
 /// Partial update used by live edits and by MCP `ui.patch`.
@@ -407,6 +431,82 @@ impl Tree {
     pub fn click(&mut self, id: NodeId) -> Result<(), TreeError> {
         self.set_focus(id)?;
         self.last_click = Some(id);
+        if let Some(node) = self.nodes.get_mut(&id) {
+            if node.kind == NodeKind::TextField {
+                node.caret = node.text.as_deref().unwrap_or("").chars().count();
+            }
+        }
+        Ok(())
+    }
+
+    /// Insert plain text at the caret of a text field and focus it.
+    ///
+    /// Control characters are skipped. This is not an IME: there is no
+    /// composition string, marked text, or candidate window.
+    pub fn insert_text(&mut self, id: NodeId, text: &str) -> Result<(), TreeError> {
+        self.ensure_field(id)?;
+        self.focus = Some(id);
+        for ch in text.chars().filter(|c| !c.is_control()) {
+            self.apply_on_field(id, FieldKey::Insert(ch))?;
+        }
+        Ok(())
+    }
+
+    /// One key aimed at the focused text field.
+    ///
+    /// Returns `Ok(false)` when nothing is focused or focus is not a text field.
+    pub fn apply_field_key(&mut self, key: FieldKey) -> Result<bool, TreeError> {
+        let Some(id) = self.focus else {
+            return Ok(false);
+        };
+        if self.get(id).is_some_and(|n| n.kind != NodeKind::TextField) {
+            return Ok(false);
+        }
+        self.apply_on_field(id, key)?;
+        Ok(true)
+    }
+
+    fn ensure_field(&self, id: NodeId) -> Result<(), TreeError> {
+        match self.nodes.get(&id) {
+            Some(node) if node.kind == NodeKind::TextField => Ok(()),
+            Some(_) => Err(TreeError {
+                message: format!("node {id} is not a text field"),
+            }),
+            None => Err(TreeError {
+                message: format!("unknown node {id}"),
+            }),
+        }
+    }
+
+    fn apply_on_field(&mut self, id: NodeId, key: FieldKey) -> Result<(), TreeError> {
+        let node = self.nodes.get_mut(&id).ok_or_else(|| TreeError {
+            message: format!("unknown node {id}"),
+        })?;
+        if node.kind != NodeKind::TextField {
+            return Err(TreeError {
+                message: format!("node {id} is not a text field"),
+            });
+        }
+        let current = node.text.clone().unwrap_or_default();
+        let mut chars: Vec<char> = current.chars().collect();
+        let mut caret = node.caret.min(chars.len());
+        match key {
+            FieldKey::Insert(ch) => {
+                if ch.is_control() {
+                    return Ok(());
+                }
+                chars.insert(caret, ch);
+                caret += 1;
+            }
+            FieldKey::Backspace => {
+                if caret > 0 {
+                    chars.remove(caret - 1);
+                    caret -= 1;
+                }
+            }
+        }
+        node.text = Some(chars.into_iter().collect());
+        node.caret = caret;
         Ok(())
     }
 
@@ -422,8 +522,14 @@ impl Tree {
             message: format!("unknown node {id}"),
         })?;
         if let Some(text) = patch.text {
-            if node.name.as_deref() == node.text.as_deref() {
+            // Buttons and labels start with name == text. A text field's name
+            // is the accessible label and must stay put when the value changes.
+            if node.kind != NodeKind::TextField && node.name.as_deref() == node.text.as_deref() {
                 node.name = Some(text.clone());
+            }
+            let len = text.chars().count();
+            if node.caret > len {
+                node.caret = len;
             }
             node.text = Some(text);
         }
@@ -643,10 +749,43 @@ mod tests {
             NodeKind::Rect,
             NodeKind::Text,
             NodeKind::Button,
+            NodeKind::TextField,
         ] {
             assert_eq!(NodeKind::from_name(kind.as_str()), Some(kind));
         }
         assert_eq!(NodeKind::from_name("nope"), None);
+    }
+
+    #[test]
+    fn text_field_insert_backspace_and_patch_keep_the_label() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        tree.get_mut(field).unwrap().name = Some("Title".into());
+        tree.get_mut(field).unwrap().text = Some("Hi".into());
+        tree.get_mut(field).unwrap().caret = 2;
+        tree.set_focus(field).unwrap();
+        assert!(tree.apply_field_key(FieldKey::Insert('!')).unwrap());
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hi!"));
+        assert!(tree.apply_field_key(FieldKey::Backspace).unwrap());
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hi"));
+        tree.insert_text(field, " there").unwrap();
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Hi there"));
+        assert_eq!(tree.focus, Some(field));
+        tree.patch(
+            field,
+            NodePatch {
+                text: Some("Note".into()),
+                ..NodePatch::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("Note"));
+        assert_eq!(tree.get(field).unwrap().name.as_deref(), Some("Title"));
+        assert_eq!(tree.get(field).unwrap().caret, 4);
+        let other = tree.add(NodeKind::Text, Some(root)).unwrap();
+        tree.set_focus(other).unwrap();
+        assert!(!tree.apply_field_key(FieldKey::Insert('x')).unwrap());
     }
 
     #[test]

@@ -73,12 +73,19 @@ fn collect(scene: &SceneTree, id: tekto_tree::NodeId, out: &mut Vec<(NodeId, Nod
         return;
     };
     let mut node = Node::new(role_for(src.kind));
-    let label = src.display_name();
-    if !label.is_empty() {
-        node.set_label(label);
-    }
-    if let Some(text) = &src.text {
-        node.set_value(text.clone());
+    if src.kind == NodeKind::TextField {
+        if let Some(name) = src.name.as_ref().filter(|s| !s.is_empty()) {
+            node.set_label(name.clone());
+        }
+        node.set_value(src.text.clone().unwrap_or_default());
+    } else {
+        let label = src.display_name();
+        if !label.is_empty() {
+            node.set_label(label);
+        }
+        if let Some(text) = &src.text {
+            node.set_value(text.clone());
+        }
     }
     let b = src.bounds;
     node.set_bounds(Rect::new(
@@ -104,6 +111,7 @@ fn role_for(kind: NodeKind) -> Role {
         NodeKind::Rect => Role::GenericContainer,
         NodeKind::Text => Role::Label,
         NodeKind::Button => Role::Button,
+        NodeKind::TextField => Role::TextInput,
     }
 }
 

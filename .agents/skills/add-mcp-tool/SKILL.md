@@ -25,7 +25,7 @@ The stdio MCP server (`tekto mcp`) is a proxy. Real work happens on the localhos
 | `ui.accesskit` | `GET /accesskit` | none |
 | `ui.screenshot` | `GET /screenshot` | `tekto screenshot [out]` |
 | `ui.click` | `POST /click` `{"id":N}` | `tekto click N` (sets focus and `last_click`; also logged) |
-| `ui.type` | `POST /type` `{"id":N,"text":"…"}` | none |
+| `ui.type` | `POST /type` `{"id":N,"text":"…"}` inserts plain characters into a text field at the caret and focuses it. Not an IME; Backspace is desktop-only | none |
 | `ui.patch` | `POST /patch` | `tekto patch ID [--text] [--fill] [--color] [--font-size] [--padding] [--gap]` (positional id; HTTP/MCP also accept `name` and `fontSize`). Response is `{ ok, node, writeback }`. |
 | `app.state` | `GET /state` | none |
 | `app.logs` | `GET /logs` | none |
