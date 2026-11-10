@@ -33,7 +33,7 @@ The stdio MCP server (`tekto mcp`) is a proxy. Real work happens on the localhos
 | `app.logs` | `GET /logs` | none |
 | `app.components` | `GET /components` | none. Returns `packages/jsx-runtime/src/components.json`. Works with no running app (the stdio tool does not call the dev server). |
 
-Protocol version in `initialize` is `2024-11-05`. Tool results use `{ "content": [{ "type": "text", "text": "…" }] }` (screenshots use `type: "image"` + base64 + `mimeType: "image/png"`).
+Protocol version in `initialize` is `2024-11-05`. Stdio uses newline-delimited JSON-RPC, with legacy `Content-Length` frames accepted and answered in kind. Stdout is protocol-only. The advertised initialization version remains `2024-11-05`. Tool results use `{ "content": [{ "type": "text", "text": "…" }] }` (screenshots use `type: "image"` + base64 + `mimeType: "image/png"`).
 
 ## Steps
 
@@ -47,5 +47,7 @@ Protocol version in `initialize` is `2024-11-05`. Tool results use `{ "content":
 ```bash
 cargo test -p tekto-mcp --all-targets
 cargo clippy -p tekto-mcp -p tekto-cli --all-targets -- -D warnings
+# Framing smoke check (newline framing; expect one JSON line with "result":{}):
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"ping"}' | cargo run -q -p tekto-cli -- mcp
 # Manual: start `tekto dev --headless`, then call the CLI or curl the new route.
 ```

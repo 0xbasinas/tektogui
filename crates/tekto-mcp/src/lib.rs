@@ -20,6 +20,7 @@ use std::thread;
 use tekto_tree::{NodeId, NodePatch, Store, Tree};
 
 mod http_policy;
+mod stdio;
 mod writeback;
 pub use writeback::{
     app_root, apply, apply_in, find_app_root, prefer_from_env, Prefer, Snapshot, WritebackReport,
@@ -711,48 +712,7 @@ fn http_request_bytes(
 
 /// Run a stdio MCP server that proxies to the dev HTTP server.
 pub fn run_stdio_mcp() -> Result<(), McpError> {
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
-    let mut in_lock = stdin.lock();
-    while let Some(msg) = read_lsp_message(&mut in_lock)? {
-        let v: Value = serde_json::from_slice(&msg)?;
-        if v.get("method").and_then(|m| m.as_str()) == Some("notifications/initialized") {
-            continue;
-        }
-        let id = v.get("id").cloned().unwrap_or(Value::Null);
-        let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
-        let result = match method {
-            "initialize" => json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": { "tools": {} },
-                "serverInfo": { "name": "tekto", "version": "0.1.0" }
-            }),
-            "tools/list" => json!({ "tools": tool_list() }),
-            "tools/call" => {
-                let params = v.get("params").cloned().unwrap_or(json!({}));
-                match call_tool(&params) {
-                    Ok(r) => r,
-                    Err(e) => json!({
-                        "content": [{ "type": "text", "text": e.to_string() }],
-                        "isError": true
-                    }),
-                }
-            }
-            "ping" => json!({}),
-            _ => {
-                write_lsp_message(
-                    &mut stdout,
-                    &json!({"jsonrpc":"2.0","id": id, "error": {"code": -32601, "message": "method not found"}}),
-                )?;
-                continue;
-            }
-        };
-        write_lsp_message(
-            &mut stdout,
-            &json!({"jsonrpc":"2.0","id": id, "result": result}),
-        )?;
-    }
-    Ok(())
+    stdio::run(std::io::stdin().lock(), std::io::stdout().lock())
 }
 
 fn tool_list() -> Value {
@@ -858,47 +818,6 @@ fn b64(data: &[u8]) -> String {
         }
     }
     out
-}
-
-fn read_lsp_message(r: &mut impl Read) -> Result<Option<Vec<u8>>, McpError> {
-    let mut header = Vec::new();
-    loop {
-        let mut b = [0u8; 1];
-        let n = r.read(&mut b)?;
-        if n == 0 {
-            return if header.is_empty() {
-                Ok(None)
-            } else {
-                Err(McpError::msg("eof in header"))
-            };
-        }
-        header.push(b[0]);
-        if header.ends_with(b"\r\n\r\n") {
-            break;
-        }
-        if header.len() > 4096 {
-            return Err(McpError::msg("header too large"));
-        }
-    }
-    let header = String::from_utf8_lossy(&header);
-    let mut len = 0usize;
-    for line in header.lines() {
-        let line = line.trim();
-        if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-            len = v.trim().parse().unwrap_or(0);
-        }
-    }
-    let mut body = vec![0u8; len];
-    r.read_exact(&mut body)?;
-    Ok(Some(body))
-}
-
-fn write_lsp_message(w: &mut impl Write, v: &Value) -> Result<(), McpError> {
-    let body = serde_json::to_vec(v)?;
-    write!(w, "Content-Length: {}\r\n\r\n", body.len())?;
-    w.write_all(&body)?;
-    w.flush()?;
-    Ok(())
 }
 
 #[cfg(test)]
