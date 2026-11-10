@@ -43,9 +43,12 @@ public final class FieldOverlay {
 
     /**
      * Physical pixels: safe left, top, right, bottom, then IME left, top, right, bottom.
-     * Safe covers system bars and the display cutout. The IME bottom is how far the
-     * keyboard overlaps this window. A resized window that no longer overlaps the
-     * keyboard reports 0, so layout does not pad twice.
+     * Safe covers system bars and the display cutout. On API 30+ the IME bottom is
+     * {@code getInsets(ime)}. On API 24–29 it is the full system-window bottom
+     * while that value is taller than the stable inset (keyboard plus any bar
+     * already in that overlap), and 0 when the system inset is only the stable
+     * bar. Layout takes the max of safe bottom and IME bottom. A resized window
+     * that no longer overlaps the keyboard reports 0, so layout does not pad twice.
      */
     public static int[] insets(Activity activity) {
         int[] out = new int[] {0, 0, 0, 0, 0, 0, 0, 0};
@@ -77,10 +80,14 @@ public final class FieldOverlay {
         int left = Math.max(wi.getSystemWindowInsetLeft(), wi.getStableInsetLeft());
         int top = Math.max(wi.getSystemWindowInsetTop(), wi.getStableInsetTop());
         int right = Math.max(wi.getSystemWindowInsetRight(), wi.getStableInsetRight());
-        int sysBottom = wi.getSystemWindowInsetBottom();
-        int stableBottom = wi.getStableInsetBottom();
+        int sysBottom = Math.max(0, wi.getSystemWindowInsetBottom());
+        int stableBottom = Math.max(0, wi.getStableInsetBottom());
         int safeBottom = Math.min(sysBottom, stableBottom);
-        int imeBottom = Math.max(0, sysBottom - stableBottom);
+        // System bottom is the full overlap from the window bottom (keyboard
+        // plus any bar already inside that overlap). Rust takes max(safe, ime),
+        // so pass that full value, not system minus stable. Same split as
+        // pre30_bottom_insets in android_insets.rs.
+        int imeBottom = sysBottom > stableBottom ? sysBottom : 0;
         if (Build.VERSION.SDK_INT >= 28) {
             DisplayCutout cut = wi.getDisplayCutout();
             if (cut != null) {
