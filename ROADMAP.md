@@ -40,7 +40,7 @@ Still in Month 1:
 ## Month 3 — feel, GPU start, packing
 
 - wgpu / Vello GPU backend behind the `gpu` feature
-- Desktop IME for a real text field
+- Desktop IME for a real text field (Linux/Windows preedit and commit are in; candidate UI, selection, and Android are not)
 - Record / replay of pointer, key, and MCP actions
 - Simple inspector UI talking to the same dev server
 - Notifications on desktop

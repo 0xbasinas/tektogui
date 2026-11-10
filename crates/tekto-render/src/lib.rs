@@ -61,7 +61,18 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
     if let Some(fill) = node.fill {
         renderer.fill_rect(node.bounds, fill);
     }
-    if let Some(text) = &node.text {
+    let composed;
+    let text_to_draw = if node.kind == tekto_tree::NodeKind::TextField {
+        composed = node.composed_text();
+        if composed.is_empty() {
+            None
+        } else {
+            Some(composed.as_str())
+        }
+    } else {
+        node.text.as_deref()
+    };
+    if let Some(text) = text_to_draw {
         let color = node.color.unwrap_or(Color::INK);
         let inset = if matches!(
             node.kind,
@@ -87,7 +98,10 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
             max_w,
         );
     }
-    if node.kind == tekto_tree::NodeKind::TextField && tree.focus == Some(id) {
+    if node.kind == tekto_tree::NodeKind::TextField
+        && tree.focus == Some(id)
+        && node.composed_caret().is_some()
+    {
         let inset = node.layout.padding;
         let h = (node.bounds.height - 2.0 * inset).max(1.0);
         renderer.fill_rect(

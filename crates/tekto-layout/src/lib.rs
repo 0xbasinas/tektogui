@@ -81,8 +81,11 @@ fn place_carets(tree: &mut Tree, text: &mut TextEngine) {
         let Some(node) = tree.get(id) else {
             continue;
         };
-        let value = node.text.clone().unwrap_or_default();
-        let caret = node.caret.min(value.chars().count());
+        let value = node.composed_text();
+        let caret = node.composed_caret().unwrap_or_else(|| {
+            node.caret
+                .min(node.text.as_deref().unwrap_or("").chars().count())
+        });
         let prefix: String = value.chars().take(caret).collect();
         let max_w = {
             let inner = node.bounds.width - 2.0 * node.layout.padding;
@@ -117,7 +120,13 @@ fn measure_text(
     ) {
         return Size::ZERO;
     }
-    let content = node.text.as_deref().unwrap_or("");
+    let composed;
+    let content = if node.kind == NodeKind::TextField {
+        composed = node.composed_text();
+        composed.as_str()
+    } else {
+        node.text.as_deref().unwrap_or("")
+    };
     // An empty field still needs a line box so the caret has somewhere to sit.
     let sample = if content.is_empty() { " " } else { content };
     let max_width = known.width.or_else(|| match avail.width {
