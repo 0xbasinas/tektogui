@@ -26,7 +26,7 @@ The stdio MCP server (`tekto mcp`) is a proxy. Real work happens on the localhos
 | `ui.screenshot` | `GET /screenshot` | `tekto screenshot [out]` |
 | `ui.click` | `POST /click` `{"id":N}` | `tekto click N` (sets focus and `last_click`; also logged) |
 | `ui.type` | `POST /type` `{"id":N,"text":"…"}` | none |
-| `ui.patch` | `POST /patch` | `tekto patch ID [--text] [--fill] [--color] [--font-size]` (positional id; HTTP/MCP also accept `name` and `fontSize`) |
+| `ui.patch` | `POST /patch` | `tekto patch ID [--text] [--fill] [--color] [--font-size]` (positional id; HTTP/MCP also accept `name` and `fontSize`). Response is `{ ok, node, writeback }`. |
 | `app.state` | `GET /state` | none |
 | `app.logs` | `GET /logs` | none |
 
@@ -37,7 +37,7 @@ Protocol version in `initialize` is `2024-11-05`. Tool results use `{ "content":
 1. Add the HTTP route first and try it against `tekto dev --headless`.
 2. Add the MCP tool with a tight schema (`required` only for what is required).
 3. Add a CLI subcommand only if it stays consistent with existing flags (positional id for click/patch).
-4. Live edits should keep working without a reload. Source write-back is a separate, later step.
+4. Live edits should keep working without a reload. Unique text / color / fontSize literals in the app project are written back to source; if the match is unsafe, leave the runtime change and report why in the `writeback` field. Never write outside the app project.
 
 ## Verify
 
