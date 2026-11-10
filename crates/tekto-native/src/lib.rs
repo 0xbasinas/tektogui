@@ -17,6 +17,8 @@ use thiserror::Error;
 
 #[cfg(any(target_os = "android", test))]
 mod android_clipboard;
+#[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+mod android_files;
 #[cfg(any(target_os = "android", test))]
 mod android_notify;
 #[cfg(target_os = "linux")]
@@ -280,11 +282,15 @@ impl Files for StubNative {
         {
             linux::read_file(path)
         }
+        #[cfg(target_os = "android")]
+        {
+            android_files::read_file(path)
+        }
         #[cfg(target_os = "windows")]
         {
             windows::read_file(path)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
         {
             let _ = path;
             Err(unsupported("files.read"))
@@ -296,11 +302,15 @@ impl Files for StubNative {
         {
             linux::write_file(path, contents)
         }
+        #[cfg(target_os = "android")]
+        {
+            android_files::write_file(path, contents)
+        }
         #[cfg(target_os = "windows")]
         {
             windows::write_file(path, contents)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
         {
             let _ = (path, contents);
             Err(unsupported("files.write"))
