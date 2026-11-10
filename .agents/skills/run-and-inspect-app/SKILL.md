@@ -38,7 +38,7 @@ cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0" --font-size
 # If no server is running, `screenshot` falls back to a headless Notes PNG.
 ```
 
-`tree` should include `window#1` and `Hello from Tekto` (unless you patched the text).
+`tree` should include `window#1` and `Hello from Tekto` (unless you patched the text). A button built with `tekto::button` shows up as `button#N` with the label as its name. `tekto click N` (or a left-click on its bounds) sets `last_click` to that id. `GET /accesskit` reports role `Button` and the label. JSX `<button>` only creates the kind and text; fill, color, font size, and padding stay unset until you patch them or set the props.
 
 ## HTTP and MCP
 
