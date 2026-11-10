@@ -1,9 +1,8 @@
-//! Renderer trait, a tiny-skia CPU backend, and a reserved GPU slot.
+//! Renderer trait, a tiny-skia CPU backend, and an optional wgpu / Vello backend.
 //!
 //! The CPU backend is the default. It is also the path used for headless
-//! screenshots, tests, and (later) a canvas2d-style web fallback.
-//! The GPU backend (wgpu / Vello, and WebGPU on the web) is a feature
-//! and is not pulled in until we need it, so everyday builds stay fast.
+//! screenshots and tests. The GPU backend is behind the `gpu` feature so
+//! everyday builds do not compile wgpu or Vello.
 
 use tekto_tree::{Color, Rect, Tree};
 
@@ -152,9 +151,16 @@ mod cpu;
 #[cfg(feature = "cpu")]
 pub use cpu::CpuRenderer;
 
-/// Placeholder for the wgpu / Vello backend.
+#[cfg(feature = "gpu")]
+mod gpu;
+#[cfg(feature = "gpu")]
+pub use gpu::GpuRenderer;
+
+/// Placeholder used when the crate is built without the `gpu` feature.
+#[cfg(not(feature = "gpu"))]
 pub struct GpuRenderer;
 
+#[cfg(not(feature = "gpu"))]
 impl GpuRenderer {
     pub fn new(_width: u32, _height: u32) -> Result<Self, RenderError> {
         Err(RenderError::GpuDisabled)

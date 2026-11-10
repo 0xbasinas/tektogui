@@ -17,7 +17,7 @@ One crate does one job. Put new code in an existing crate if that crate already 
 ## Rules
 
 - License: MIT, Apache-2.0, BSD, or zlib only. Write the new dep's license in the PR.
-- Default features stay lean. Do not add wgpu, Vello, QuickJS, fontconfig, or `accesskit_winit` to the default graph. Optional heavy work goes behind a feature that is **off by default**.
+- Default features stay lean. Do not add wgpu, Vello, QuickJS, fontconfig, or `accesskit_winit` to the default graph. Optional heavy work goes behind a feature that is **off by default**. The `gpu` feature (wgpu 29 + Vello 0.10) is that gate for the GPU renderer; leave it off on PR CI.
 - Parley must stay `{ version = "0.12", default-features = false, features = ["std"] }` with bundled Roboto (`system_fonts: false`).
 - Pin `skrifa` to `0.44` so it matches Parley (do not jump to a newer skrifa).
 - Use `workspace = true` for internal crates and shared deps.

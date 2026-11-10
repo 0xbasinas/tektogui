@@ -7,6 +7,8 @@ description: Debug Tekto layout, text, or CPU painting (wrong bounds, clipped or
 
 Pipeline: scene tree → `layout_tree` (Taffy) → `paint_tree` / `CpuRenderer` (tiny-skia + Skrifa outlines) → PNG or softbuffer. Text is Parley with bundled Roboto only (`system_fonts: false`).
 
+The optional `gpu` feature swaps the desktop window to `GpuRenderer` (wgpu + Vello). It uses the same `paint_tree` calls, then reads the texture back for softbuffer. Official headless PNGs (`render_tree_png`) stay on the CPU. If GPU init fails, the window falls back to CPU and says so on stderr. Check it with `cargo test -p tekto-render --features gpu --lib gpu_paints` or `cargo run -p notes --features gpu`. Do not turn `gpu` on for default tests.
+
 ## Where to look
 
 - Bounds and tree dump: `crates/tekto-tree` (`layout`, `bounds`, `to_pretty_text`, `hit`)
