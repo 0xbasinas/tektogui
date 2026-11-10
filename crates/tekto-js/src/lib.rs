@@ -191,13 +191,14 @@ pub fn eval_to_tree(source: &str) -> Result<Tree, JsError> {
     Ok(tree)
 }
 
-/// Apply a native plugin op (clipboard get/set today).
+/// Apply a native plugin op (clipboard, files, and Linux notifications).
 ///
 /// This is the JS-facing hook beside [`HostOp`]. Tree ops stay on [`Host`];
-/// clipboard returns text, so it does not go through [`Host::apply`].
-/// The JSON shape is [`NativeOp`] (`clipboardGetText` / `clipboardSetText`).
-/// A missing Linux clipboard session is a [`JsError::Message`] whose text
-/// contains `not available`.
+/// these calls return text or nothing, so they do not go through [`Host::apply`].
+/// The JSON shape is [`NativeOp`] (`clipboardGetText`, `clipboardSetText`,
+/// `notificationsShow`, and the `files*` ops).
+/// A missing Linux clipboard session or notification daemon is a
+/// [`JsError::Message`] whose text contains `not available`.
 pub fn apply_native_host_op(op: &NativeOp) -> Result<Option<String>, JsError> {
     apply_native_op(op).map_err(|err| JsError::Message(err.to_string()))
 }
@@ -235,6 +236,34 @@ mod tests {
             return;
         }
         let err = apply_native_host_op(&op).expect_err("headless or stub clipboard");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not available") || msg.contains("not implemented"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn native_notification_op_errors_clearly_without_a_daemon() {
+        let op: NativeOp = serde_json::from_str(
+            r#"{"op":"notificationsShow","title":"Saved","body":"Note stored"}"#,
+        )
+        .unwrap();
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let reserved = matches!(display.as_str(), ":1" | ":2" | ":1.0" | ":2.0");
+        let bus = std::env::var_os("DBUS_SESSION_BUS_ADDRESS")
+            .is_some_and(|value| !value.is_empty())
+            || std::env::var_os("XDG_RUNTIME_DIR")
+                .is_some_and(|dir| std::path::Path::new(&dir).join("bus").exists());
+        if reserved || bus {
+            let err = JsError::Message(
+                "notifications.show is not available on linux: no session bus or notification daemon"
+                    .into(),
+            );
+            assert!(err.to_string().contains("not available"));
+            return;
+        }
+        let err = apply_native_host_op(&op).expect_err("headless or stub notifications");
         let msg = err.to_string();
         assert!(
             msg.contains("not available") || msg.contains("not implemented"),
