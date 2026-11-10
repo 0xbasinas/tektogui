@@ -46,7 +46,17 @@ Tools in the first slice:
 
 Live patches change the running tree immediately and do not require a reload. `POST /patch` and `ui.patch` accept JSON `{ "id", "text?", "name?", "fill?", "color?", "fontSize?" }` (`#rrggbb` or `#rrggbbaa`) and return the updated node, or a clear error (unknown id, bad color). Padding and other layout styles are not in this slice.
 
-Writing those edits back into `.rs` or `.tsx` source is a separate step (issue #19). Hot reload of TypeScript (issue #18) is also separate: a patch should still be visible without it.
+Writing those edits back into `.rs` or `.tsx` source is a separate step (issue #19).
+
+## Hot reload TypeScript
+
+Rebuilds only the JS bundle and swaps it into the running QuickJS runtime. The Rust core stays up. Needs `esbuild` on `PATH` and a CLI built with `--features quickjs` (do not enable that feature on PR CI).
+
+```bash
+cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx --headless --out /tmp/notes-js.png
+```
+
+Saving the `.tsx` prints `js reload Nms`. JS remounts from source, so signal state resets. Failures go to stderr and `app.logs`. `POST /reload` accepts a JS bundle (or JSON `{"js":"..."}`) so a host can push over `adb forward`; the current Android APK has no QuickJS, so that hook waits for a later APK.
 
 ## Headless tests
 

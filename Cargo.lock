@@ -2424,6 +2424,7 @@ dependencies = [
  "clap",
  "serde_json",
  "tekto",
+ "tekto-js",
  "tekto-mcp",
 ]
 
