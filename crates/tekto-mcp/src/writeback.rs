@@ -27,6 +27,8 @@ pub struct Snapshot {
     pub fill: Option<String>,
     pub color: Option<String>,
     pub font_size: f32,
+    pub padding: f32,
+    pub gap: f32,
 }
 
 impl Snapshot {
@@ -37,6 +39,8 @@ impl Snapshot {
             fill: node.fill.map(|c| c.to_hex()),
             color: node.color.map(|c| c.to_hex()),
             font_size: node.font_size,
+            padding: node.layout.padding,
+            gap: node.layout.gap,
         }
     }
 }
@@ -243,26 +247,80 @@ pub fn apply_in(root: &Path, prefer: Prefer, old: &Snapshot, patch: &NodePatch) 
         );
     }
     if let Some(new_size) = patch.font_size {
-        let old_s = fmt_num(old.font_size);
-        let new_s = fmt_num(new_size);
-        one(
+        number_field(
             &root,
             prefer,
             "fontSize",
-            Some(old_s.as_str()),
-            new_s.as_str(),
-            FindKind::FontSize,
+            old.font_size,
+            new_size,
+            FindKind::Number {
+                jsx: "fontSize",
+                rust: "font_size",
+            },
+            &mut report,
+        );
+    }
+    if let Some(new_padding) = patch.padding {
+        number_field(
+            &root,
+            prefer,
+            "padding",
+            old.padding,
+            new_padding,
+            FindKind::Number {
+                jsx: "padding",
+                rust: "padding",
+            },
+            &mut report,
+        );
+    }
+    if let Some(new_gap) = patch.gap {
+        number_field(
+            &root,
+            prefer,
+            "gap",
+            old.gap,
+            new_gap,
+            FindKind::Number {
+                jsx: "gap",
+                rust: "gap",
+            },
             &mut report,
         );
     }
     report
 }
 
+fn number_field(
+    root: &Path,
+    prefer: Prefer,
+    prop: &str,
+    old: f32,
+    new: f32,
+    kind: FindKind,
+    report: &mut WritebackReport,
+) {
+    let old_s = fmt_num(old);
+    let new_s = fmt_num(new);
+    one(
+        root,
+        prefer,
+        prop,
+        Some(old_s.as_str()),
+        new_s.as_str(),
+        kind,
+        report,
+    );
+}
+
 #[derive(Clone, Copy)]
 enum FindKind {
     String,
     Color,
-    FontSize,
+    Number {
+        jsx: &'static str,
+        rust: &'static str,
+    },
 }
 
 fn one(
@@ -484,7 +542,7 @@ fn find_spans(src: &str, kind: FindKind, old: &str) -> Vec<(usize, String)> {
 }
 
 fn number_boundary_ok(kind: FindKind, src: &str, end: usize) -> bool {
-    if !matches!(kind, FindKind::FontSize) {
+    if !matches!(kind, FindKind::Number { .. }) {
         return true;
     }
     !matches!(src[end..].chars().next(), Some('0'..='9') | Some('.'))
@@ -508,16 +566,17 @@ fn search_tokens(kind: FindKind, old: &str) -> Vec<String> {
             }
             toks
         }
-        FindKind::FontSize => {
+        FindKind::Number { jsx, rust } => {
             let mut toks = vec![
-                format!("fontSize={{{old}}}"),
-                format!("fontSize={{ {old} }}"),
-                format!("font_size: {old}"),
-                format!("font_size: {old}.0"),
+                format!("{jsx}={{{old}}}"),
+                format!("{jsx}={{ {old} }}"),
+                format!("{rust}: {old}"),
             ];
             if !old.contains('.') {
-                toks.push(format!("fontSize={{{old}.0}}"));
-                toks.push(format!("font_size: {old}.0"));
+                toks.push(format!("{jsx}={{{old}.0}}"));
+                toks.push(format!("{rust}: {old}.0"));
+            } else {
+                toks.push(format!("{rust}: {old}"));
             }
             toks
         }
@@ -541,20 +600,20 @@ fn rewrite_match(kind: FindKind, _token_pat: &str, found: &str, new: &str) -> St
                 format!("\"{hex}\"")
             }
         }
-        FindKind::FontSize => {
-            if found.starts_with("fontSize=") {
+        FindKind::Number { jsx, rust } => {
+            if found.starts_with(&format!("{jsx}=")) {
                 let spaced = found.contains(' ');
                 if spaced {
-                    format!("fontSize={{ {new} }}")
+                    format!("{jsx}={{ {new} }}")
                 } else if found.contains(".0") && !new.contains('.') {
-                    format!("fontSize={{{new}.0}}")
+                    format!("{jsx}={{{new}.0}}")
                 } else {
-                    format!("fontSize={{{new}}}")
+                    format!("{jsx}={{{new}}}")
                 }
             } else if found.contains(".0") && !new.contains('.') {
-                format!("font_size: {new}.0")
+                format!("{rust}: {new}.0")
             } else {
-                format!("font_size: {new}")
+                format!("{rust}: {new}")
             }
         }
     }
@@ -702,6 +761,31 @@ const b = "Hello from Tekto";
         assert_eq!(report.status(), "written", "{report:?}");
         let src = fs::read_to_string(&app).unwrap();
         assert!(src.contains("fontSize={28}"), "{src}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn writes_a_unique_padding() {
+        let dir = temp_app();
+        let app = dir.join("src/app.tsx");
+        fs::write(
+            &app,
+            r#"<window title="Notes" padding={24} gap={20}></window>"#,
+        )
+        .unwrap();
+        let old = Snapshot {
+            padding: 24.0,
+            ..Snapshot::default()
+        };
+        let patch = NodePatch {
+            padding: Some(32.0),
+            ..NodePatch::default()
+        };
+        let report = apply_in(&dir, Prefer::Ts, &old, &patch);
+        assert_eq!(report.status(), "written", "{report:?}");
+        let src = fs::read_to_string(&app).unwrap();
+        assert!(src.contains("padding={32}"), "{src}");
+        assert!(src.contains("gap={20}"), "{src}");
         let _ = fs::remove_dir_all(&dir);
     }
 
