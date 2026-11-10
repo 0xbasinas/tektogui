@@ -3,7 +3,8 @@
 //! Each capability is a small trait so platforms can be filled in one
 //! at a time (Windows, Linux, Android, later macOS, iOS, and web).
 //! Text clipboard, notifications, and open/save dialogs are implemented on
-//! Linux and Windows. Android text clipboard uses `ClipboardManager`.
+//! Linux and Windows. macOS also has text clipboard; Android text clipboard
+//! uses `ClipboardManager`.
 //! Android notifications use `NotificationManager`.
 //! Linux notifications use the freedesktop session bus. The system tray is
 //! behind the `tray` feature (StatusNotifierItem on Linux, `Shell_NotifyIconW`
@@ -28,6 +29,8 @@ mod linux_notify;
 mod linux_shortcuts;
 #[cfg(all(target_os = "linux", feature = "tray"))]
 mod linux_tray;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(any(target_os = "windows", test))]
@@ -345,11 +348,20 @@ impl Clipboard for StubNative {
         {
             windows::get_text()
         }
+        #[cfg(target_os = "macos")]
+        {
+            macos::get_text()
+        }
         #[cfg(target_os = "android")]
         {
             android_clipboard::get_text()
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "android",
+            target_os = "macos"
+        )))]
         {
             Err(unsupported("clipboard.get"))
         }
@@ -363,11 +375,20 @@ impl Clipboard for StubNative {
         {
             windows::set_text(text)
         }
+        #[cfg(target_os = "macos")]
+        {
+            macos::set_text(text)
+        }
         #[cfg(target_os = "android")]
         {
             android_clipboard::set_text(text)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "android",
+            target_os = "macos"
+        )))]
         {
             let _ = text;
             Err(unsupported("clipboard.set"))
@@ -937,7 +958,7 @@ mod tests {
             );
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         {
             let err = native().get_text().expect_err("stub");
             assert!(matches!(
