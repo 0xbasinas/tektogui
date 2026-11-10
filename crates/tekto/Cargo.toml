@@ -19,7 +19,7 @@ js = ["dep:tekto-js"]
 quickjs = ["js", "tekto-js/quickjs"]
 # System tray (Linux StatusNotifierItem, Windows Shell_NotifyIconW). Off by default.
 tray = ["tekto-native/tray"]
-# Linux X11 global shortcuts. Off by default. Windows stays unsupported.
+# Global shortcuts (Linux X11 grab, Windows RegisterHotKey). Off by default.
 shortcuts = ["tekto-native/shortcuts", "tekto-js?/shortcuts"]
 
 [dependencies]

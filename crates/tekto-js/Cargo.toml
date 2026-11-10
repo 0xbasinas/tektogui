@@ -13,7 +13,7 @@ default = []
 # QuickJS-ng via rquickjs (both MIT). Off by default: compiling the engine is slow.
 # Do not enable this on PR CI.
 quickjs = ["dep:rquickjs"]
-# Linux X11 global shortcuts in tekto-native. Off by default.
+# Global shortcuts in tekto-native (Linux X11, Windows RegisterHotKey). Off by default.
 shortcuts = ["tekto-native/shortcuts"]
 
 [dependencies]
