@@ -53,6 +53,12 @@ target_sdk_version = 30
 [[package.metadata.android.uses_permission]]
 name = "android.permission.INTERNET"
 
+# Required so `Notifications::show` can request POST_NOTIFICATIONS on API 33+
+# once target_sdk_version is 33 or higher. On this APK the target is 30, so
+# the permission is granted at install. See the add-native-feature skill.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.POST_NOTIFICATIONS"
+
 [package.metadata.android.application]
 label = "Notes"
 debuggable = true
