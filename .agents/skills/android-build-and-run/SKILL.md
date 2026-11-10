@@ -63,7 +63,7 @@ cargo check -p notes-android --target aarch64-linux-android
 
 ## AVD `beddcode30` (manual only)
 
-Do not put this in PR CI. Do not run heavy `cargo test` / compiles in parallel with the emulator. This machine often has `/dev/kvm` but no permission, so you **must** pass `-accel off` (TCG, software). Be patient: a cold boot can take several minutes. `-gpu swiftshader_indirect` is optional.
+Do not put this in PR CI. Do not start the emulator if another heavy build is running, and do not run heavy `cargo test` / compiles in parallel with it. This machine often has `/dev/kvm` but no permission, so you **must** pass `-accel off` (TCG, software). Be patient: a cold boot can take several minutes. `-gpu swiftshader_indirect` is optional.
 
 ```bash
 source ~/.android-env.sh
@@ -136,7 +136,46 @@ Judge QuickJS cost on the `.so` / release size delta, not the raw debug APK (deb
 
 ## Lifecycle
 
-`android_main` in `examples/notes-android` calls `tekto::run_android` (or `run_android_with_session` when the `quickjs` feature is on, so `POST /reload` has a hook). That builds the winit event loop with `with_android_app`. The window/surface is created on `resumed` and dropped on `suspended`. The C symbols `tekto_on_resumed` / `tekto_on_suspended` stay for a later Java Activity if we ever need one. IME is later.
+`android_main` in `examples/notes-android` calls `tekto::run_android` (or `run_android_with_session` when the `quickjs` feature is on, so `POST /reload` has a hook). That builds the winit event loop with `with_android_app`.
+
+winit turns `InitWindow` into `ApplicationHandler::resumed` and `TerminateWindow` into `suspended`. `resumed` creates the winit window and the softbuffer CPU surface and records one [`SurfaceEpoch`](../../../crates/tekto-platform/src/lifecycle.rs). `suspended` retires that epoch, drops the softbuffer surface, then drops the window. A redraw after suspend returns without `buffer_mut` / `present`. A second `resumed` drops any held surface first so a replaced `ANativeWindow` cannot leak or be locked. IME is later.
+
+Host-only proof (no emulator):
+
+```bash
+cargo test -p tekto-platform --lib lifecycle
+cargo test -p notes-android
+```
+
+### Prove suspend / resume on AVD `beddcode30` when it is free
+
+Do not start the emulator while another heavy build is running. Do not use displays `:1` or `:2`. Stop only with `adb emu kill`.
+
+```bash
+source ~/.android-env.sh
+export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/27.1.12297006}"
+
+emulator -avd beddcode30 -no-window -memory 2048 -accel off &
+adb wait-for-device
+until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done
+
+cargo apk2 build -p notes-android --target x86_64-linux-android
+adb install -r target/x86_64-linux-android/debug/apk/notes.apk
+adb shell am start -n com.tektogui.notes/android.app.NativeActivity
+sleep 3
+mkdir -p /workspace/tektogui-shots
+adb exec-out screencap -p > /workspace/tektogui-shots/notes-android-resumed.png
+
+adb shell input keyevent KEYCODE_HOME
+sleep 2
+adb shell am start -n com.tektogui.notes/android.app.NativeActivity
+sleep 3
+adb exec-out screencap -p > /workspace/tektogui-shots/notes-android-resumed-again.png
+adb logcat -d -s AndroidRuntime:E | head
+adb emu kill
+```
+
+Both screenshots should show the Notes tree, and logcat should not contain a fatal `ANativeWindow` / softbuffer error.
 
 ## CI
 
@@ -144,6 +183,6 @@ The Android job in `.github/workflows/ci.yml` runs only on `push` to `nightly` o
 
 ## Verify
 
-- Host: `cargo test -p notes-android` (lifecycle stubs + headless Notes PNG).
+- Host: `cargo test -p notes-android` (lifecycle flag cycles + headless Notes PNG) and `cargo test -p tekto-platform --lib lifecycle` (one live surface epoch; suspend retires it; resume replaces it).
 - APK: `cargo apk2 build -p notes-android` exits 0 and writes `notes.apk`.
 - Device: package is installed, `am start` does not print `Error type`, `adb exec-out screencap -p` shows the Notes UI, and `tekto tree` over `adb forward tcp:8474` prints a window tree.

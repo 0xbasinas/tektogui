@@ -29,8 +29,11 @@ enum AppEvent {
 }
 
 struct State {
-    window: Rc<Window>,
+    /// Dropped before [`State::window`] so the Android `ANativeWindow` is
+    /// released while the winit window handle is still alive.
     surface: Surface<Rc<Window>, Rc<Window>>,
+    window: Rc<Window>,
+    epoch: crate::lifecycle::SurfaceEpoch,
     renderer: CpuRenderer,
     tree: Arc<Mutex<Tree>>,
     clear: tekto_tree::Color,
@@ -52,8 +55,10 @@ struct App {
 
 impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        // A second `resumed` (new native window without a paired drop) must
+        // not keep the previous softbuffer. Release it before creating another.
         if self.state.is_some() {
-            return;
+            self.release_surface();
         }
         let attrs = Window::default_attributes()
             .with_title(self.opts.title.clone())
@@ -84,9 +89,11 @@ impl ApplicationHandler<AppEvent> for App {
         let size = window.inner_size();
         let renderer =
             CpuRenderer::new(size.width.max(1), size.height.max(1)).expect("cpu renderer");
+        let epoch = crate::lifecycle::begin_surface();
         self.state = Some(State {
-            window,
             surface,
+            window,
+            epoch,
             renderer,
             tree: Arc::clone(&self.tree),
             clear: self.runtime.clear,
@@ -99,14 +106,12 @@ impl ApplicationHandler<AppEvent> for App {
         if let Some(state) = self.state.as_mut() {
             redraw(state);
         }
-        crate::lifecycle::on_resumed();
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        // Drop the window and softbuffer surface. On Android the surface is
-        // invalid after Suspended; Month 2 GPU backends must do the same.
-        self.state = None;
-        crate::lifecycle::on_suspended();
+        // Drop the softbuffer surface, then the window. On Android the
+        // ANativeWindow is invalid after Suspended; presenting into it crashes.
+        self.release_surface();
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: AppEvent) {
@@ -200,7 +205,14 @@ fn relayout_window(state: &mut State) {
 }
 
 fn redraw(state: &mut State) {
+    // Suspend clears the epoch. Do not lock or present a retired buffer.
+    if !crate::lifecycle::may_present(state.epoch) {
+        return;
+    }
     relayout_window(state);
+    if !crate::lifecycle::may_present(state.epoch) {
+        return;
+    }
     let (_lw, _lh, _scale, pw, ph) = window_logical_and_physical(&state.window);
     if let Ok(tree) = state.tree.lock() {
         paint_tree(&mut state.renderer, &tree, state.clear);
@@ -256,6 +268,27 @@ struct LiveDeactivate;
 #[cfg(feature = "a11y-os")]
 impl accesskit::DeactivationHandler for LiveDeactivate {
     fn deactivate_accessibility(&mut self) {}
+}
+
+impl App {
+    /// Retire the current buffer. Surface first, then the winit window.
+    fn release_surface(&mut self) {
+        let Some(state) = self.state.take() else {
+            crate::lifecycle::on_suspended();
+            return;
+        };
+        let State {
+            surface,
+            window,
+            epoch,
+            ..
+        } = state;
+        // Retire the epoch before unlocking the native window so a redraw
+        // cannot present into the buffer we are about to free.
+        let _ = crate::lifecycle::end_surface(epoch);
+        drop(surface);
+        drop(window);
+    }
 }
 
 fn apply_pointer_click(state: &mut State, x: f32, y: f32) {
@@ -402,9 +435,10 @@ fn run_event_loop(
         viewport,
         state: None,
     };
-    event_loop
-        .run_app(&mut app)
-        .map_err(|e| PlatformError::msg(e.to_string()))?;
+    let run_result = event_loop.run_app(&mut app);
+    // Desktop often exits without `suspended`. Still drop the buffer.
+    app.release_surface();
+    run_result.map_err(|e| PlatformError::msg(e.to_string()))?;
     tekto_mcp::clear_endpoint();
     Ok(())
 }
