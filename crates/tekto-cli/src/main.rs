@@ -2,6 +2,7 @@
 
 use clap::{Parser, Subcommand};
 
+mod android;
 mod scaffold;
 use std::path::PathBuf;
 use tekto::{notes_tree, render_headless_to_file, run, WindowOptions};
@@ -24,9 +25,19 @@ enum Command {
         headless: bool,
         #[arg(long, default_value = "notes-headless.png")]
         out: PathBuf,
+        /// Build, install, and launch Notes on a connected Android device/AVD,
+        /// then `adb forward` the dev server.
+        #[arg(long)]
+        android: bool,
     },
     /// Build the workspace (debug profile).
-    Build,
+    Build {
+        /// `android` packages the Notes APK with cargo-apk2.
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        release: bool,
+    },
     /// Run tests, including the headless snapshot.
     Test,
     /// Dump the live scene tree from the dev server.
@@ -68,7 +79,15 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             println!("  cargo run -- --headless --out app.png   # PNG + tree");
             println!("  cargo run                               # window + dev server");
         }
-        Command::Dev { headless, out } => {
+        Command::Dev {
+            headless,
+            out,
+            android,
+        } => {
+            if android {
+                android::dev_android(false)?;
+                return Ok(());
+            }
             let tree = notes_tree(640.0, 400.0)?;
             if headless {
                 let (handle, ep, _viewport) =
@@ -93,8 +112,21 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
             }
         }
-        Command::Build => {
-            let status = std::process::Command::new("cargo").arg("build").status()?;
+        Command::Build { target, release } => {
+            if target.as_deref() == Some("android") {
+                let apk = android::build_apk(release)?;
+                println!("wrote {}", apk.display());
+                return Ok(());
+            }
+            if let Some(other) = target {
+                return Err(format!("unknown build target `{other}` (try `android`)").into());
+            }
+            let mut cmd = std::process::Command::new("cargo");
+            cmd.arg("build");
+            if release {
+                cmd.arg("--release");
+            }
+            let status = cmd.status()?;
             if !status.success() {
                 std::process::exit(status.code().unwrap_or(1));
             }

@@ -183,14 +183,19 @@ pub fn rgba_to_u32_softbuffer(rgba: &[u8]) -> Vec<u32> {
 
 #[cfg(all(
     feature = "desktop",
-    not(target_os = "android"),
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
 mod desktop;
 #[cfg(all(
     feature = "desktop",
-    not(target_os = "android"),
+    target_os = "android",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+pub use desktop::run_android;
+#[cfg(all(
+    feature = "desktop",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
@@ -198,15 +203,18 @@ pub use desktop::run_windowed;
 
 #[cfg(not(all(
     feature = "desktop",
-    not(target_os = "android"),
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 )))]
 pub fn run_windowed(_runtime: AppRuntime, _opts: WindowOptions) -> Result<(), PlatformError> {
     Err(PlatformError::msg(
-        "windowed mode is not available on this target yet; use headless, or build with the desktop feature on Windows/Linux/macOS",
+        "windowed mode is not available on this target yet; use headless, or build with the desktop feature",
     ))
 }
+
+/// The NativeActivity app handle passed to `android_main`.
+#[cfg(all(feature = "desktop", target_os = "android"))]
+pub use winit::platform::android::activity::AndroidApp;
 
 /// Convert a physical cursor position to logical pixels using the window
 /// scale factor. Used so hit-testing matches layout (which is in logical px).

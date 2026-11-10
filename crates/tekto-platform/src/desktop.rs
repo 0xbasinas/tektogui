@@ -60,8 +60,9 @@ impl ApplicationHandler<AppEvent> for App {
             .with_inner_size(winit::dpi::LogicalSize::new(
                 self.opts.width,
                 self.opts.height,
-            ))
-            .with_visible(false);
+            ));
+        #[cfg(not(target_os = "android"))]
+        let attrs = attrs.with_visible(false);
         let window = event_loop.create_window(attrs).expect("window");
         #[cfg(feature = "a11y-os")]
         let adapter = {
@@ -98,6 +99,14 @@ impl ApplicationHandler<AppEvent> for App {
         if let Some(state) = self.state.as_mut() {
             redraw(state);
         }
+        crate::lifecycle::on_resumed();
+    }
+
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        // Drop the window and softbuffer surface. On Android the surface is
+        // invalid after Suspended; Month 2 GPU backends must do the same.
+        self.state = None;
+        crate::lifecycle::on_suspended();
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: AppEvent) {
@@ -264,23 +273,76 @@ fn apply_pointer_click(state: &mut State, x: f32, y: f32) {
     state.window.request_redraw();
 }
 
+#[cfg(target_os = "android")]
+pub fn run_android(
+    runtime: AppRuntime,
+    opts: WindowOptions,
+    android_app: winit::platform::android::activity::AndroidApp,
+) -> Result<(), PlatformError> {
+    run_event_loop(runtime, opts, Some(android_app))
+}
+
 pub fn run_windowed(runtime: AppRuntime, opts: WindowOptions) -> Result<(), PlatformError> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = (runtime, opts);
+        return Err(PlatformError::msg(
+            "on Android, call tekto::run_android(...) from android_main",
+        ));
+    }
+    #[cfg(not(target_os = "android"))]
+    run_event_loop(runtime, opts, None)
+}
+
+#[cfg(target_os = "android")]
+type AndroidAppArg = winit::platform::android::activity::AndroidApp;
+#[cfg(not(target_os = "android"))]
+type AndroidAppArg = ();
+
+fn run_event_loop(
+    runtime: AppRuntime,
+    opts: WindowOptions,
+    android_app: Option<AndroidAppArg>,
+) -> Result<(), PlatformError> {
     let mut prepared = runtime.clone();
     prepared.layout(opts.width as f32, opts.height as f32);
-    let event_loop = EventLoop::<AppEvent>::with_user_event()
+    let mut builder = EventLoop::<AppEvent>::with_user_event();
+    #[cfg(target_os = "android")]
+    {
+        use winit::platform::android::EventLoopBuilderExtAndroid;
+        let app = android_app
+            .ok_or_else(|| PlatformError::msg("AndroidApp is required to start the event loop"))?;
+        builder.with_android_app(app);
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = android_app;
+    let event_loop = builder
         .build()
         .map_err(|e| PlatformError::msg(e.to_string()))?;
     let (tree, handle, viewport) = if opts.dev_server {
         let proxy = event_loop.create_proxy();
-        let (handle, ep, viewport) = crate::start_handle(&prepared, opts.width, opts.height)?;
-        if let Ok(mut slot) = handle.on_change.lock() {
-            *slot = Some(Arc::new(move || {
-                let _ = proxy.send_event(AppEvent::TreeChanged);
-            }));
+        match crate::start_handle(&prepared, opts.width, opts.height) {
+            Ok((handle, ep, viewport)) => {
+                if let Ok(mut slot) = handle.on_change.lock() {
+                    *slot = Some(Arc::new(move || {
+                        let _ = proxy.send_event(AppEvent::TreeChanged);
+                    }));
+                }
+                eprintln!("Tekto dev server at {}", ep.base_url());
+                eprintln!("Try: tekto tree    or    tekto screenshot    or    tekto click <id>");
+                (Arc::clone(&handle.tree), Some(handle), viewport)
+            }
+            Err(err) => {
+                // Still show the window if the loopback server cannot bind
+                // (seen on Android before INTERNET was in the manifest).
+                eprintln!("Tekto dev server failed: {err}");
+                (
+                    Arc::new(Mutex::new(prepared.tree.clone())),
+                    None,
+                    Arc::new(Mutex::new(Viewport::new(opts.width, opts.height))),
+                )
+            }
         }
-        eprintln!("Tekto dev server at {}", ep.base_url());
-        eprintln!("Try: tekto tree    or    tekto screenshot    or    tekto click <id>");
-        (Arc::clone(&handle.tree), Some(handle), viewport)
     } else {
         (
             Arc::new(Mutex::new(prepared.tree.clone())),
