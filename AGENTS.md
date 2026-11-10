@@ -30,6 +30,9 @@ Short, command-accurate how-tos live in `.agents/skills/<slug>/SKILL.md`. The sa
 | [add-mcp-tool](.agents/skills/add-mcp-tool/SKILL.md) | New dev-server route, MCP tool, or CLI inspect command |
 | [release-and-ci](.agents/skills/release-and-ci/SKILL.md) | PRs into `nightly`, merge to `main`, light CI rules |
 | [pick-up-an-issue](.agents/skills/pick-up-an-issue/SKILL.md) | Start from a GitHub issue and open a small PR |
+| [windows-test](.agents/skills/windows-test/SKILL.md) | Real Windows Notes window, clipboard, and sandboxed files. Linux cargo check is not a runtime test |
+
+Windows runtime steps and the report template are in [docs/windows-handoff.md](docs/windows-handoff.md). Read that file and the `windows-test` skill before claiming a Windows pass. Do not close issues #3, #26, or #28 until a real Windows machine has run those steps. PRs for this work go to `nightly` only.
 
 ## Git
 
