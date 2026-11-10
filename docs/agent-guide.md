@@ -36,7 +36,13 @@ Agents can use the same HTTP server directly: `GET /health` checks availability,
 cargo run -p tekto-cli -- mcp
 ```
 
-This speaks the Model Context Protocol on stdio and proxies to the same HTTP server.
+This proxies MCP requests to the same HTTP server. Stdio uses one JSON-RPC message per line (no raw newlines inside a message); stdout is reserved for protocol messages. Legacy `Content-Length` frames are also accepted and answered in the same format. Initialization still advertises protocol version `2024-11-05`; this does not claim full support for newer MCP protocol semantics or verified interoperability with a real MCP client.
+
+For a local framing check without a running app:
+
+```bash
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"ping"}' | cargo run -q -p tekto-cli -- mcp
+```
 
 Tools in the first slice:
 
