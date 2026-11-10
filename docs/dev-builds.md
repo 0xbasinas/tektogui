@@ -89,3 +89,5 @@ Probe edits were reverted. They are not in the tree.
 - `a11y-os` (and `accesskit_winit`) stays off. In-process `accesskit` stays, on purpose.
 - A one-line Notes or widget edit is well under a second. Gating widgets, or making the example depend on leaf crates instead of `tekto`, would change the default API (`notes_tree`, `window`, `button`) for a gain measured in tens of milliseconds.
 - Editing the text or platform crate still does not rebuild the heavy third-party graph; those crates are small wrappers. Their compile cost shows up on a cold check, which feature flags cannot remove from an app that windows and draws text.
+
+Rust hot-patch options (dylib, Cranelift, Subsecond) are in [rust-hot-reload.md](rust-hot-reload.md) (issue #29). None is adopted yet.
