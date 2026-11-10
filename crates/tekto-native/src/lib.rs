@@ -2,8 +2,8 @@
 //!
 //! Each capability is a small trait so platforms can be filled in one
 //! at a time (Windows, Linux, Android, later macOS, iOS, and web).
-//! Text clipboard is implemented on Linux and Windows. Linux notifications
-//! use the freedesktop notification service on the session bus. The API is
+//! Text clipboard and notifications are implemented on Linux and Windows.
+//! Linux notifications use the freedesktop session bus. The API is
 //! stable for apps and for the JS [`NativeOp`] hook.
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,8 @@ mod linux;
 mod linux_notify;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "windows")]
+mod windows_notify;
 
 #[derive(Debug, Error)]
 pub enum NativeError {
@@ -62,7 +64,7 @@ pub enum NativeOp {
         path: String,
         bytes: Vec<u8>,
     },
-    /// Show a plain-text desktop notification. Linux only; other platforms
+    /// Show a plain-text desktop notification. Linux and Windows; other platforms
     /// return [`NativeError::Unsupported`].
     NotificationsShow {
         title: String,
@@ -259,7 +261,11 @@ impl Notifications for StubNative {
         {
             linux_notify::show(title, body)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            windows_notify::show(title, body)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             let _ = (title, body);
             Err(unsupported("notifications.show"))
@@ -586,7 +592,7 @@ mod tests {
             );
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             let err = native().show("Tekto", "body").expect_err("stub");
             assert!(matches!(
