@@ -878,58 +878,34 @@ mod tests {
             "components.json must list every NodeKind and nothing else"
         );
 
-        // Minimum an agent needs. Dropping a core widget, or a prop/event
-        // the widgets actually expose, fails this test.
-        let required: &[(&str, &[&str], &[&str])] = &[
-            (
-                "button",
-                &["name", "text", "fill", "color", "fontSize", "padding"],
-                &["click"],
-            ),
-            (
-                "text_field",
-                &["name", "text", "fill", "color", "fontSize", "padding"],
-                &["click", "type", "key", "ime"],
-            ),
-            ("scroll", &["width", "height"], &["scroll"]),
-            ("list", &["name", "width", "height"], &[]),
-            ("list_item", &["name", "text", "height"], &["click"]),
-            ("text", &["text", "color", "fontSize"], &[]),
-            (
-                "window",
-                &["name", "width", "height", "fill", "padding", "gap"],
-                &[],
-            ),
-        ];
-        for (widget, props, events) in required {
+        // Events come from NodeKind::agent_events (what the host actually
+        // does), not a shorter hand-written list. Prop completeness is
+        // tekto_js::component_schema_lists_every_host_prop: every setProp key
+        // must appear on every kind, because JSX forwards that set globally.
+        for kind in tekto_tree::NodeKind::all() {
+            let widget = kind.as_str();
             let spec = schema["components"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|c| c["name"] == *widget)
+                .find(|c| c["name"] == widget)
                 .unwrap_or_else(|| panic!("schema omits core widget {widget}"));
-            let got_props: Vec<&str> = spec["props"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|p| p["name"].as_str().unwrap())
-                .collect();
-            for prop in *props {
-                assert!(
-                    got_props.contains(prop),
-                    "{widget} schema omits prop {prop}"
-                );
-            }
             let got_events: Vec<&str> = spec["events"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .map(|e| e["name"].as_str().unwrap())
                 .collect();
-            for event in *events {
+            for event in kind.agent_events() {
                 assert!(
                     got_events.contains(event),
                     "{widget} schema omits event {event}"
+                );
+            }
+            for event in &got_events {
+                assert!(
+                    kind.agent_events().contains(event),
+                    "{widget} schema lists event {event} the host does not apply to this kind"
                 );
             }
         }

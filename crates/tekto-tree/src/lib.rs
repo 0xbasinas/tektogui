@@ -97,8 +97,9 @@ impl NodeKind {
         }
     }
 
-    /// Every kind. Add a variant here when you add one to the enum so the
-    /// component schema test fails until `components.json` lists it.
+    /// Every kind. `as_str` is exhaustive, so a new variant fails to compile
+    /// until it has a name. This list must include that name: the component
+    /// schema test requires `components.json` to match `all()`.
     pub fn all() -> &'static [NodeKind] {
         &[
             NodeKind::Window,
@@ -111,6 +112,24 @@ impl NodeKind {
             NodeKind::List,
             NodeKind::ListItem,
         ]
+    }
+
+    /// Host actions an agent can use on this kind.
+    ///
+    /// `click` (`ui.click`) focuses any node. `type`, `key`, and `ime` apply
+    /// only to a text field. `scroll` applies only to a scroll container.
+    pub fn agent_events(self) -> &'static [&'static str] {
+        match self {
+            NodeKind::TextField => &["click", "type", "key", "ime"],
+            NodeKind::Scroll => &["click", "scroll"],
+            NodeKind::Window
+            | NodeKind::Group
+            | NodeKind::Rect
+            | NodeKind::Text
+            | NodeKind::Button
+            | NodeKind::List
+            | NodeKind::ListItem => &["click"],
+        }
     }
 }
 

@@ -50,7 +50,7 @@ Tools in the first slice:
 | `app.logs` | Recent log lines |
 | `app.components` | JSON schema of widgets, props, and events. No running app required |
 
-`app.components` (and `GET /components`) returns `packages/jsx-runtime/src/components.json`. That file is the list `@tektogui/jsx-runtime` mounts. Kinds match `NodeKind` (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`, `list`, `list_item`). Props are the ones JSX forwards. `title` is an alias of `name`. Events are host actions (`click`, `type`, `scroll`, `ime`), not `onClick` props. The Rust `banner()` helper is a `rect`, not its own kind.
+`app.components` (and `GET /components`) returns `packages/jsx-runtime/src/components.json`. That file is the list `@tektogui/jsx-runtime` mounts. Kinds match `NodeKind` (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`, `list`, `list_item`). Each kind lists every prop the host `setProp` accepts (`width`, `height`, `column`, `justifyCenter`, `text`, `name`, `fill`, `color`, `fontSize`, `padding`, `gap`), because JSX forwards that set on every kind. `title` is an alias of `name` (`font_size` and `justify_center` are the snake_case aliases). Events are host actions, not `onClick` props: `click` on every kind, plus `type`, `key`, and `ime` on `text_field`, and `scroll` on `scroll`. The Rust `banner()` helper is a `rect`, not its own kind.
 
 Live patches change the running tree immediately and do not require a reload. `POST /patch` and `ui.patch` accept JSON `{ "id", "text?", "name?", "fill?", "color?", "fontSize?", "padding?", "gap?" }` (`#rrggbb` or `#rrggbbaa`) and return the updated node, or a clear error (unknown id, bad color).
 

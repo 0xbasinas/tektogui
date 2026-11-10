@@ -751,21 +751,42 @@ mod tests {
     }
 
     #[test]
-    fn component_schema_props_are_host_props() {
+    fn component_schema_lists_every_host_prop() {
         let raw = include_str!("../../../packages/jsx-runtime/src/components.json");
         let schema: serde_json::Value = serde_json::from_str(raw).unwrap();
         let aliases = schema["propAliases"]
             .as_object()
             .cloned()
             .unwrap_or_default();
-        for comp in schema["components"].as_array().unwrap() {
-            for prop in comp["props"].as_array().unwrap() {
-                let name = prop["name"].as_str().unwrap();
-                let host = aliases.get(name).and_then(|v| v.as_str()).unwrap_or(name);
+        // Snake_case spellings are aliases. JSX rewrites `title` before setProp.
+        // Every other HOST_PROP_KEYS entry is a prop agents can set on any kind.
+        let mut required: Vec<&str> = HOST_PROP_KEYS
+            .iter()
+            .copied()
+            .filter(|key| !aliases.contains_key(*key))
+            .collect();
+        required.push("title");
+        let components = schema["components"].as_array().unwrap();
+        assert!(!components.is_empty(), "components.json lists no widgets");
+        for comp in components {
+            let kind = comp["name"].as_str().unwrap();
+            let listed: Vec<&str> = comp["props"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["name"].as_str().unwrap())
+                .collect();
+            for name in &listed {
+                let host = aliases.get(*name).and_then(|v| v.as_str()).unwrap_or(name);
                 assert!(
                     HOST_PROP_KEYS.contains(&host),
-                    "{} prop {name} is not a host prop",
-                    comp["name"]
+                    "{kind} prop {name} is not a host prop"
+                );
+            }
+            for key in &required {
+                assert!(
+                    listed.contains(key),
+                    "{kind} schema omits host prop {key} (setProp accepts it on every node)"
                 );
             }
         }
