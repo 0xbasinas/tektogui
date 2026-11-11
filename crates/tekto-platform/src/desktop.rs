@@ -477,6 +477,9 @@ fn relayout_window(state: &mut State) {
             || (vp.scale - next.scale).abs() > f32::EPSILON;
         *vp = next;
     }
+    // Android always lays out, because insets can change every frame.
+    #[cfg(target_os = "android")]
+    let _ = viewport_changed;
     #[cfg(target_os = "android")]
     let insets = window_insets(state, scale);
     #[cfg(not(target_os = "android"))]
