@@ -193,6 +193,20 @@ fn tree_screenshot_and_patch_against_dev_server() {
         png.len()
     );
 
+    let out = run_tekto(&dev_file, &["scroll", "1", "--by", "10"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not a scroll container"));
+    let mut mcp = Command::new(tekto_bin())
+        .arg("mcp")
+        .env("TEKTO_DEV_FILE", &dev_file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    mcp.stdin.take().unwrap().write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"ui.scroll\",\"arguments\":{\"id\":1,\"delta\":10}}}\n").unwrap();
+    let response = mcp.wait_with_output().unwrap();
+    assert!(String::from_utf8_lossy(&response.stdout).contains("not a scroll container"));
+
     let body_id = id_for(&tree, "Hello from Tekto");
     let banner_id = id_for(&tree, "banner");
 
