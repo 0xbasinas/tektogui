@@ -324,6 +324,7 @@ mod tests {
         let root = tree.add(NodeKind::Window, None).unwrap();
         let button = tree.add(NodeKind::Button, Some(root)).unwrap();
         tree.set_focus(button).unwrap();
+        assert!(set_prop(&mut tree, root, "disabled", "true").is_err());
         set_prop(&mut tree, button, "disabled", "true").unwrap();
         assert!(tree.get(button).unwrap().disabled);
         assert_eq!(tree.focus, Some(root));
@@ -875,11 +876,11 @@ mod tests {
             .cloned()
             .unwrap_or_default();
         // Snake_case spellings are aliases. JSX rewrites `title` before setProp.
-        // Every other HOST_PROP_KEYS entry is a prop agents can set on any kind.
+        // Disabled is limited to buttons and text fields.
         let mut required: Vec<&str> = HOST_PROP_KEYS
             .iter()
             .copied()
-            .filter(|key| !aliases.contains_key(*key))
+            .filter(|key| *key != "disabled" && !aliases.contains_key(*key))
             .collect();
         required.push("title");
         let components = schema["components"].as_array().unwrap();
@@ -892,6 +893,10 @@ mod tests {
                 .iter()
                 .map(|p| p["name"].as_str().unwrap())
                 .collect();
+            assert_eq!(
+                listed.contains(&"disabled"),
+                matches!(kind, "button" | "text_field")
+            );
             for name in &listed {
                 let host = aliases.get(*name).and_then(|v| v.as_str()).unwrap_or(name);
                 assert!(

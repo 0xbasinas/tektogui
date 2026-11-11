@@ -31,6 +31,14 @@ fn disabled_controls_share_state_across_input_accessibility_and_paint() {
     assert!(tree.get(field).unwrap().preedit.is_empty());
     assert!(!tree.traverse_focus(false));
     assert!(tree.click(button).is_err());
+    assert!(tree.click(field).is_err());
+    assert!(tree.insert_text(field, "typed").is_err());
+    let f = tree.get(field).unwrap().bounds;
+    assert_eq!(
+        tree.click_at(f.x + f.width / 2.0, f.y + f.height / 2.0),
+        None
+    );
+    assert_eq!(tree.focus, Some(root));
     assert_eq!(
         tekto_tree::route_named_key(&mut tree, tekto_tree::NamedActionKey::Enter, false).1,
         None
@@ -82,4 +90,50 @@ fn disabled_controls_share_state_across_input_accessibility_and_paint() {
     tree.click(button).unwrap();
     tree.insert_text(field, "!").unwrap();
     assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("hello!"));
+}
+
+#[test]
+fn focus_skips_disabled_middle_control_in_both_directions() {
+    let mut tree = Tree::new();
+    let root = window(&mut tree, "Test", 300.0, 200.0).unwrap();
+    let first = button(&mut tree, root, "First").unwrap();
+    let middle = text_field(&mut tree, root, "Middle", "").unwrap();
+    let last = button(&mut tree, root, "Last").unwrap();
+    tree.patch(
+        middle,
+        NodePatch {
+            disabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    tree.set_focus(first).unwrap();
+    assert!(tree.traverse_focus(false));
+    assert_eq!(tree.focus, Some(last));
+    assert!(tree.traverse_focus(true));
+    assert_eq!(tree.focus, Some(first));
+    tree.patch(
+        first,
+        NodePatch {
+            disabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // Simulate a stale focus to exercise the keyboard guard directly.
+    tree.focus = Some(first);
+    assert_eq!(
+        tekto_tree::route_named_key(&mut tree, tekto_tree::NamedActionKey::Space, false).1,
+        None
+    );
+    assert!(tree
+        .patch(
+            root,
+            NodePatch {
+                disabled: Some(true),
+                ..Default::default()
+            }
+        )
+        .is_err());
+    assert!(!tree.get(root).unwrap().disabled);
 }

@@ -941,7 +941,7 @@ fn tool_list() -> Value {
         {"name": "ui.scroll", "description": "Scroll a container by logical pixels and return the clamped offset.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}, "delta": {"type": "number"}}, "required": ["id", "delta"]}},
         {"name": "ui.key", "description": "Press a named key on the focused node.", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "enum": ["Tab", "Shift+Tab", "Enter", "Space", "Backspace"]}}, "required": ["name"]}},
         {"name": "ui.type", "description": "Insert plain characters at the caret of a text field (by stable id) and focus it. Not an IME: no composition or candidate window. Use ui.key for Backspace.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
-        {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, fontSize, padding, or gap. Returns the updated node and a writeback report. Applies immediately (no reload). Unique literals in the app project are written back to source; ambiguous edits stay in the runtime tree.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}, "padding": {"type": "number"}, "gap": {"type": "number"}}, "required": ["id"]}},
+        {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, fontSize, padding, gap, or disabled (buttons and text fields). Returns the updated node and a writeback report. Applies immediately (no reload). Unique literals in the app project are written back to source; ambiguous edits stay in the runtime tree.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "disabled": {"type": "boolean"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}, "padding": {"type": "number"}, "gap": {"type": "number"}}, "required": ["id"]}},
         {"name": "app.state", "description": "Read opted-in app state as JSON.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "app.states", "description": "List time-travel frames for an opted-in store. enabled is false when the app did not record history.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "app.restore", "description": "Jump an opted-in store to a recorded index from app.states. Returns the restored JSON value.", "inputSchema": {"type": "object", "properties": {"index": {"type": "number"}}, "required": ["index"]}},
@@ -1299,6 +1299,53 @@ mod tests {
             click_js: Mutex::new(None),
             history: Mutex::new(None),
         }
+    }
+
+    #[test]
+    fn patch_route_accepts_disabled_and_reports_it() {
+        let handle = http_test_handle();
+        let button = handle
+            .tree
+            .lock()
+            .unwrap()
+            .add(NodeKind::Button, None)
+            .unwrap();
+        let body = format!(r#"{{"id":{},"disabled":true}}"#, button.raw());
+        let (status, _, body) =
+            process_http_request(&handle, Some(("POST".into(), "/patch".into(), body)));
+        assert_eq!(status, "200 OK");
+        let response: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response["node"]["disabled"], true);
+        let field = handle
+            .tree
+            .lock()
+            .unwrap()
+            .add(NodeKind::TextField, None)
+            .unwrap();
+        handle
+            .patch(
+                field,
+                NodePatch {
+                    disabled: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let type_body = format!(r#"{{"id":{},"text":"no"}}"#, field.raw());
+        let (status, _, _) =
+            process_http_request(&handle, Some(("POST".into(), "/type".into(), type_body)));
+        assert_eq!(status, "400 Bad Request");
+        let tools = tool_list();
+        let patch = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "ui.patch")
+            .unwrap();
+        assert_eq!(
+            patch["inputSchema"]["properties"]["disabled"]["type"],
+            "boolean"
+        );
     }
 
     #[test]

@@ -2,12 +2,12 @@
  * Apply one `ui.patch` / `POST /patch` body to a wasm host.
  *
  * Same fields as the desktop dev server: `id` plus optional `text`,
- * `name`, `fill`, `color`, `fontSize` (or `font_size`), `padding`, `gap`.
+ * `name`, `fill`, `color`, `fontSize` (or `font_size`), `padding`, `gap`, `disabled`.
  * No DOM types. The wasm ABI does not return a node dump, so the result
  * is `{ ok, id }` rather than the desktop `{ ok, node, writeback }`.
  */
 
-const PROP_KEYS = ["name", "fill", "color", "fontSize", "padding", "gap"];
+const PROP_KEYS = ["disabled", "name", "fill", "color", "fontSize", "padding", "gap"];
 
 export function applyUiPatch(host, patch) {
   if (!host || typeof host.setText !== "function" || typeof host.setProp !== "function") {
