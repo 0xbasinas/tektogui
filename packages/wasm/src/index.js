@@ -24,6 +24,8 @@ export function hostFromExports(exports) {
     tekto_apply_ops: applyOpsExport,
     tekto_set_fallback_font: setFallbackFontExport,
     tekto_render_png: renderExport,
+    tekto_click_at: clickExport,
+    tekto_scroll_at: scrollExport,
     tekto_reset: resetExport,
     tekto_out_ptr: outPtr,
     tekto_out_len: outLen,
@@ -33,7 +35,9 @@ export function hostFromExports(exports) {
     typeof alloc !== "function" ||
     typeof applyOpsExport !== "function" ||
     typeof setFallbackFontExport !== "function" ||
-    typeof renderExport !== "function"
+    typeof renderExport !== "function" ||
+    typeof clickExport !== "function" ||
+    typeof scrollExport !== "function"
   ) {
     throw new Error("tekto wasm exports are missing (rebuild tekto-wasm)");
   }
@@ -76,6 +80,15 @@ export function hostFromExports(exports) {
         throw new Error(textDecoder.decode(bytes) || "render failed");
       }
       return bytes;
+    },
+    /** Hit-test in the supplied viewport. A hit does not invoke app callbacks. */
+    clickAt(width, height, x, y) {
+      return clickExport(width, height, x, y) || null;
+    },
+    /** Scroll in layout pixels; null means no scroll target. */
+    scrollAt(width, height, x, y, delta) {
+      const result = scrollExport(width, height, x, y, delta);
+      return Number.isNaN(result) ? null : result;
     },
     /** Same shape `mount` expects (`@tektogui/jsx-runtime`). */
     create(kind) {
