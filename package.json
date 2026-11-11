@@ -9,6 +9,7 @@
   "scripts": {
     "test": "node --test packages/core/test.js packages/core/native-types.test.js packages/jsx-runtime/test.js packages/jsx-runtime/input-types.test.js packages/build/test.js packages/wasm/test.js packages/wasm/tsx-test.js packages/create-tektogui/test/index.test.js",
     "generate:native-types": "node scripts/generate-native-types.mjs",
+    "test:browser": "node scripts/browser-parity.mjs",
     "test:wasm:required": "node scripts/test-wasm-required.js",
     "test:generated": "node scripts/test-generated-apps.js",
     "dev:web": "node packages/wasm/dev.js"
