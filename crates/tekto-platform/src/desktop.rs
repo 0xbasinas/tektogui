@@ -616,20 +616,15 @@ fn deliver_pointer(state: &mut State, op: PointerOp) {
         crate::pointer_route::deliver_pointer(handle, &mut state.pointer, op, now).unwrap_or(true)
     } else if let Ok(mut tree) = state.tree.lock() {
         let effect = apply_pointer_op(&mut state.pointer, &mut tree, op, now);
-        effect.redraw
-            || effect.click_at.is_some_and(|(x, y)| {
-                let Some(id) = tree.hit(x, y) else {
-                    return false;
-                };
-                let caret = tekto_layout::field_caret_at(&tree, id, x, y);
-                if tree.click(id).is_err() {
-                    return false;
-                }
-                if let (Some(caret), Some(node)) = (caret, tree.get_mut(id)) {
-                    node.caret = caret;
-                }
-                true
+        let clicked = effect
+            .click_at
+            .and_then(|(x, y)| {
+                crate::pointer_route::click_pointer(&mut tree, x, y)
+                    .ok()
+                    .flatten()
             })
+            .is_some();
+        effect.redraw || clicked
     } else {
         false
     };

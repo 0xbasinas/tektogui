@@ -197,15 +197,34 @@ pub fn deliver_pointer(
     op: PointerOp,
     now_ms: f64,
 ) -> Result<bool, tekto_mcp::McpError> {
-    handle.route_action_with_caret(|tree| {
+    handle.route_activated_action(|tree| {
         let effect = apply_pointer_op(pointer, tree, op, now_ms);
-        let id = effect.click_at.and_then(|(x, y)| tree.hit(x, y));
-        let caret = effect
-            .click_at
-            .zip(id)
-            .and_then(|((x, y), id)| tekto_layout::field_caret_at(tree, id, x, y));
-        (effect.redraw, id, caret)
+        let id = match effect.click_at {
+            Some((x, y)) => {
+                click_pointer(tree, x, y).map_err(|e| tekto_mcp::McpError::msg(e.to_string()))?
+            }
+            None => None,
+        };
+        Ok((effect.redraw, id))
     })
+}
+
+/// Activate the hit node and apply the pointer-derived field caret.
+pub(crate) fn click_pointer(
+    tree: &mut Tree,
+    x: f32,
+    y: f32,
+) -> Result<Option<NodeId>, tekto_tree::TreeError> {
+    let Some(id) = tree.hit(x, y) else {
+        return Ok(None);
+    };
+    // A click clears IME preedit, so resolve and apply against committed text.
+    let caret = tekto_layout::field_caret_at(tree, id, x, y);
+    tree.click(id)?;
+    if let (Some(caret), Some(node)) = (caret, tree.get_mut(id)) {
+        node.caret = caret.min(node.text.as_deref().unwrap_or("").chars().count());
+    }
+    Ok(Some(id))
 }
 
 #[cfg(test)]
@@ -238,43 +257,47 @@ mod tests {
     #[test]
     fn routed_field_click_sets_caret_before_typing() {
         use std::sync::{Arc, Mutex};
-        let mut tree = Tree::new();
-        let root = tree.add(NodeKind::Window, None).unwrap();
-        tree.get_mut(root).unwrap().bounds = Rect::new(0.0, 0.0, 300.0, 100.0);
-        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
-        let node = tree.get_mut(field).unwrap();
-        node.bounds = Rect::new(20.0, 10.0, 200.0, 40.0);
-        node.layout.padding = 8.0;
-        node.font_size = 16.0;
-        node.text = Some("Hello".into());
-        let handle = tekto_mcp::SharedTreeHandle {
-            tree: Arc::new(Mutex::new(tree)),
-            render: Arc::new(|_| Ok(Vec::new())),
-            logs: Arc::new(Mutex::new(Vec::new())),
-            on_change: Mutex::new(None),
-            pending_js: Mutex::new(None),
-            apply_js: Mutex::new(None),
-            last_writeback: Mutex::new(None),
-            action_gate: Arc::new(Mutex::new(())),
-            click_js: Mutex::new(None),
-            history: Mutex::new(None),
-        };
-        let mut pointer = PointerSession::default();
-        pointer.on_cursor_moved(45.0, 22.0);
-        deliver_pointer(
-            &handle,
-            &mut pointer,
-            PointerOp::Begin { x: 45.0, y: 22.0 },
-            0.0,
-        )
-        .unwrap();
-        deliver_pointer(&handle, &mut pointer, PointerOp::End { commit: true }, 1.0).unwrap();
-        let mut tree = handle.tree.lock().unwrap();
-        tree.type_keyboard_text("!").unwrap();
-        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("He!llo"));
-        tree.click(field).unwrap();
-        tree.type_keyboard_text("?").unwrap();
-        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("He!llo?"));
+        for (value, x, expected) in [
+            ("Hello", 21.0, "!Hello"),
+            ("Hello", 45.0, "He!llo"),
+            ("Hello", 210.0, "Hello!"),
+            ("ééé", 46.0, "éé!é"),
+        ] {
+            let mut tree = Tree::new();
+            let root = tree.add(NodeKind::Window, None).unwrap();
+            tree.get_mut(root).unwrap().bounds = Rect::new(0.0, 0.0, 300.0, 100.0);
+            let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+            let node = tree.get_mut(field).unwrap();
+            node.bounds = Rect::new(20.0, 10.0, 200.0, 40.0);
+            node.layout.padding = 8.0;
+            node.font_size = 16.0;
+            node.text = Some(value.into());
+            let handle = tekto_mcp::SharedTreeHandle {
+                tree: Arc::new(Mutex::new(tree)),
+                render: Arc::new(|_| Ok(Vec::new())),
+                logs: Arc::new(Mutex::new(Vec::new())),
+                on_change: Mutex::new(None),
+                pending_js: Mutex::new(None),
+                apply_js: Mutex::new(None),
+                last_writeback: Mutex::new(None),
+                action_gate: Arc::new(Mutex::new(())),
+                click_js: Mutex::new(None),
+                history: Mutex::new(None),
+            };
+            let mut pointer = PointerSession::default();
+            pointer.on_cursor_moved(x, 22.0);
+            deliver_pointer(&handle, &mut pointer, PointerOp::Begin { x, y: 22.0 }, 0.0).unwrap();
+            deliver_pointer(&handle, &mut pointer, PointerOp::End { commit: true }, 1.0).unwrap();
+            let mut tree = handle.tree.lock().unwrap();
+            tree.type_keyboard_text("!").unwrap();
+            assert_eq!(tree.get(field).unwrap().text.as_deref(), Some(expected));
+            tree.click(field).unwrap();
+            tree.type_keyboard_text("?").unwrap();
+            assert_eq!(
+                tree.get(field).unwrap().text.as_deref(),
+                Some(format!("{expected}?").as_str())
+            );
+        }
     }
 
     #[test]
