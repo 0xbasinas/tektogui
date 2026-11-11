@@ -104,7 +104,12 @@ fn paint_node_opacity<R: Renderer>(
     };
     let opacity = (node.opacity
         * parent_opacity
-        * if node.disabled && matches!(node.kind, NodeKind::Button | NodeKind::TextField) {
+        * if node.disabled
+            && matches!(
+                node.kind,
+                NodeKind::Button | NodeKind::TextField | NodeKind::Checkbox
+            )
+        {
             0.5
         } else {
             1.0
@@ -119,7 +124,9 @@ fn paint_node_opacity<R: Renderer>(
     if tree.focus == Some(id)
         && matches!(
             node.kind,
-            tekto_tree::NodeKind::Button | tekto_tree::NodeKind::TextField
+            tekto_tree::NodeKind::Button
+                | tekto_tree::NodeKind::Checkbox
+                | tekto_tree::NodeKind::TextField
         )
     {
         let b = node.bounds;
@@ -140,6 +147,19 @@ fn paint_node_opacity<R: Renderer>(
             Rect::new(b.x + b.width - thickness, b.y, thickness, b.height),
         ] {
             renderer.fill_rect(rect, color);
+        }
+    }
+    if node.kind == NodeKind::Checkbox {
+        let x = node.bounds.x + node.layout.padding;
+        let y = node.bounds.y + (node.bounds.height - 18.0) / 2.0;
+        let ink = with_opacity(node.color.unwrap_or(Color::INK), opacity);
+        renderer.fill_rect(Rect::new(x, y, 18.0, 18.0), ink);
+        renderer.fill_rect(
+            Rect::new(x + 2.0, y + 2.0, 14.0, 14.0),
+            with_opacity(Color::PAGE, opacity),
+        );
+        if node.checked {
+            renderer.fill_rect(Rect::new(x + 5.0, y + 5.0, 8.0, 8.0), ink);
         }
     }
     let composed;
@@ -163,6 +183,7 @@ fn paint_node_opacity<R: Renderer>(
         let inset = if matches!(
             node.kind,
             tekto_tree::NodeKind::Button
+                | tekto_tree::NodeKind::Checkbox
                 | tekto_tree::NodeKind::TextField
                 | tekto_tree::NodeKind::ListItem
         ) {
@@ -171,13 +192,28 @@ fn paint_node_opacity<R: Renderer>(
             0.0
         };
         let max_w = if node.bounds.width > 0.0 {
-            Some((node.bounds.width - 2.0 * inset).max(0.0))
+            Some(
+                (node.bounds.width
+                    - 2.0 * inset
+                    - if node.kind == NodeKind::Checkbox {
+                        28.0
+                    } else {
+                        0.0
+                    })
+                .max(0.0),
+            )
         } else {
             None
         };
         renderer.draw_text(
             text,
-            node.bounds.x + inset,
+            node.bounds.x
+                + inset
+                + if node.kind == NodeKind::Checkbox {
+                    28.0
+                } else {
+                    0.0
+                },
             node.bounds.y + inset,
             node.font_size,
             color,

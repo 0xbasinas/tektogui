@@ -118,7 +118,7 @@ test("component schema lists every prop JSX forwards on each kind", () => {
     assert.ok(Array.isArray(spec.props));
     assert.ok(Array.isArray(spec.events));
     const listed = new Set(spec.props.map((p) => p.name));
-    assert.equal(listed.has("disabled"), ["button", "text_field"].includes(spec.name));
+    assert.equal(listed.has("disabled"), ["button", "text_field", "checkbox"].includes(spec.name));
     for (const key of forwarded) {
       assert.ok(listed.has(key), `${spec.name} omits prop ${key} that JSX forwards`);
     }
@@ -207,3 +207,9 @@ test("disabled controls lower their state to host props", () => {
   assert.throws(() => renderToOps(jsx('text_field', { onInput() {} })), /retained QuickJS/);
   assert.throws(() => mount(jsx('button', { onInput() {} }), host), /text_field/);
 }
+
+test("checkbox lowers checked state", () => {
+  const ops = renderToOps(jsx("checkbox", { checked: true, children: "Remember" }));
+  assert.ok(ops.some(o => o.op === "create" && o.kind === "checkbox"));
+  assert.ok(ops.some(o => o.op === "setProp" && o.key === "checked" && o.value === "true"));
+});
