@@ -32,6 +32,13 @@ function rightClick(x, y) {
   const r = rect();
   canvas.dispatchEvent(new MouseEvent("contextmenu", { clientX: r.left + x, clientY: r.top + y, button: 2, bubbles: true, cancelable: true }));
 }
+function touchTap(x, y) {
+  const r = rect();
+  const base = { clientX: r.left + x, clientY: r.top + y, bubbles: true, cancelable: true, pointerId: 2, pointerType: "touch", isPrimary: true };
+  canvas.dispatchEvent(new PointerEvent("pointerdown", { ...base, button: 0, buttons: 1 }));
+  canvas.dispatchEvent(new PointerEvent("pointerup", { ...base, button: 0, buttons: 0 }));
+  canvas.dispatchEvent(new MouseEvent("click", { clientX: base.clientX, clientY: base.clientY, bubbles: true, cancelable: true }));
+}
 function key(name) {
   const target = document.activeElement && document.activeElement !== document.body ? document.activeElement : canvas;
   target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
@@ -42,7 +49,7 @@ try {
   host.reset();
   const app = jsx("window", { title: "Parity", width: 320, height: 240, padding: 0, gap: 0, fill: "#f4f3f0", children: [
     jsx("tab_list", { name: "Tabs", children: [
-      jsx("tab", { width: 100, height: 36, checked: true, children: "One" }, null),
+      jsx("tab", { width: 100, height: 36, checked: true, onClick: () => note("tab-one"), children: "One" }, null),
       jsx("tab", { width: 100, height: 36, onClick: () => note("tab"), children: "Two" }, null),
     ] }, null),
     jsx("button", {
@@ -83,6 +90,11 @@ try {
   pointer(150, 18);
   await frame();
   record("tab click", seen === "tab", seen);
+
+  note("");
+  touchTap(50, 18);
+  await frame();
+  record("touch tap on a tab", seen === "tab-one", seen);
 
   note("");
   pointer(100, 94);
