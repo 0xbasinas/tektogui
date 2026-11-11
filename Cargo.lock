@@ -3226,6 +3226,7 @@ name = "tekto-tree"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tekto-image",
  "unicode-segmentation",
 ]

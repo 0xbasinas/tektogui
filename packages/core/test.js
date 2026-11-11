@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSignal, createEffect, transitionOp, nativeOpJson } from "./src/index.js";
+import { createSignal, createEffect, transitionOp, tokensOp, nativeOpJson } from "./src/index.js";
+
+test("tokens op forwards a partial token set", () => {
+  assert.deepEqual(tokensOp({ page: "#101010", gap: 8 }), {
+    op: "setTokens",
+    json: '{"page":"#101010","gap":8}',
+  });
+  assert.deepEqual(tokensOp(), { op: "setTokens", json: "{}" });
+});
 
 test("transition op is a quiet style tween", () => {
   assert.deepEqual(transitionOp(4, { opacity: 0, x: 12, durationMs: 180 }), {

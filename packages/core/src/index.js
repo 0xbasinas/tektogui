@@ -99,6 +99,17 @@ export function transitionOp(id, props = {}) {
 }
 
 /**
+ * Host op for a partial design-token set. Keys match `TokenPatch`:
+ * `page`, `ink`, `banner`, `onBanner`, `field`, `border`, `focus` (hex
+ * strings), and `gap`, `padding`, `bodySize`, `titleSize` (numbers).
+ * Existing nodes keep their resolved colours; later nodes and the
+ * renderer use the new set.
+ */
+export function tokensOp(tokens = {}) {
+  return { op: "setTokens", json: JSON.stringify(tokens) };
+}
+
+/**
  * JSON for `tekto.applyNativeOp` on the desktop QuickJS host.
  * `op` is one NativeOp object (`shortcutsRegister`, `clipboardGetText`, …).
  * The host returns a string or null, and throws when the platform
