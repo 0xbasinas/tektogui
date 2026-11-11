@@ -10,3 +10,8 @@ publish = false
 
 [dependencies]
 tekto = { path = "../../crates/tekto" }
+
+[features]
+default = []
+# Paint through Vello/wgpu instead of the CPU renderer.
+gpu = ["tekto/gpu"]

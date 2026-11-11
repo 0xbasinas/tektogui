@@ -117,6 +117,7 @@ pub fn layout_tree_with_text(
     }
     place_carets(tree, text);
     place_text_chars(tree, text);
+    tree.clear_layout_dirty();
 }
 
 /// Resolve a pointer position to a field's character index using painted text layout.

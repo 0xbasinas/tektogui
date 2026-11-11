@@ -1052,6 +1052,9 @@ pub struct Tree {
     pub(crate) gesture: Option<scroll_feel::Gesture>,
     pub(crate) flings: Vec<scroll_feel::Fling>,
     pub(crate) tokens: Tokens,
+    /// Set when a change may affect layout. The window skips layout while
+    /// only paint properties (colour, opacity) animate.
+    pub(crate) layout_dirty: bool,
 }
 
 impl Default for Tree {
@@ -1079,6 +1082,7 @@ impl Tree {
             gesture: None,
             flings: Vec::new(),
             tokens: Tokens::default(),
+            layout_dirty: true,
         }
     }
 
@@ -1117,8 +1121,27 @@ impl Tree {
         self.nodes.get(&id)
     }
 
+    /// Mutable access marks the tree for a layout pass. Widgets and apps use
+    /// this to set style before the next frame; colour-only animation does not
+    /// go through here, so a colour tween does not trigger layout.
     pub fn get_mut(&mut self, id: NodeId) -> Option<&mut Node> {
+        self.layout_dirty = true;
         self.nodes.get_mut(&id)
+    }
+
+    /// Whether the next frame needs a layout pass.
+    pub fn layout_dirty(&self) -> bool {
+        self.layout_dirty
+    }
+
+    /// Force the next frame to lay out, for example after a host resize.
+    pub fn mark_layout_dirty(&mut self) {
+        self.layout_dirty = true;
+    }
+
+    /// Called by the layout pass once bounds are written.
+    pub fn clear_layout_dirty(&mut self) {
+        self.layout_dirty = false;
     }
 
     pub fn ids(&self) -> impl Iterator<Item = NodeId> + '_ {
@@ -1139,6 +1162,7 @@ impl Tree {
 
     /// Allocate a node and, if `parent` is set, append it as a child.
     pub fn add(&mut self, kind: NodeKind, parent: Option<NodeId>) -> Result<NodeId, TreeError> {
+        self.layout_dirty = true;
         if matches!(kind, NodeKind::Radio | NodeKind::Tab)
             && parent.is_some_and(|id| {
                 let expected = if kind == NodeKind::Radio {
@@ -1196,6 +1220,7 @@ impl Tree {
         child: NodeId,
         index: Option<usize>,
     ) -> Result<(), TreeError> {
+        self.layout_dirty = true;
         if parent == child {
             return Err(TreeError {
                 message: "cannot append a node to itself".into(),
@@ -1269,6 +1294,7 @@ impl Tree {
 
     /// Drop a node and its descendants. Ids are never reused.
     pub fn remove(&mut self, id: NodeId) -> Result<(), TreeError> {
+        self.layout_dirty = true;
         if !self.nodes.contains_key(&id) {
             return Err(TreeError {
                 message: format!("unknown node {id}"),
@@ -1520,6 +1546,7 @@ impl Tree {
     ///
     /// Leaving a text field drops its preedit. The composition is not committed.
     pub fn set_focus(&mut self, id: NodeId) -> Result<(), TreeError> {
+        self.layout_dirty = true;
         if !self.nodes.contains_key(&id) {
             return Err(TreeError {
                 message: format!("unknown node {id}"),
@@ -1885,6 +1912,7 @@ impl Tree {
     }
 
     fn write_scroll(&mut self, id: NodeId, y: f32, add: bool) -> Result<f32, TreeError> {
+        self.layout_dirty = true;
         let node = self.nodes.get_mut(&id).ok_or_else(|| TreeError {
             message: format!("unknown node {id}"),
         })?;
@@ -1961,6 +1989,7 @@ impl Tree {
 
     /// Disabling the focused control moves focus to the root and drops preedit.
     pub fn patch(&mut self, id: NodeId, patch: NodePatch) -> Result<(), TreeError> {
+        self.layout_dirty = true;
         let changed_text = patch.text.is_some();
         let disabling = patch.disabled == Some(true);
         let node = self.nodes.get_mut(&id).ok_or_else(|| TreeError {

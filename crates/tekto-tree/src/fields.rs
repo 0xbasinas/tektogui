@@ -51,6 +51,7 @@ impl Tree {
     /// Control characters are skipped. An in-progress preedit is dropped
     /// (not committed). Composition goes through [`Tree::apply_ime`].
     pub fn insert_text(&mut self, id: NodeId, text: &str) -> Result<(), TreeError> {
+        self.layout_dirty = true;
         self.ensure_field(id)?;
         self.set_focus(id)?;
         if let Some(node) = self.nodes.get_mut(&id) {
@@ -93,6 +94,7 @@ impl Tree {
     /// Control characters are dropped. A preedit is cleared and not committed.
     /// Returns `Ok(false)` when focus is not a text field or nothing changed.
     pub fn set_focused_field_value(&mut self, text: &str, caret: usize) -> Result<bool, TreeError> {
+        self.layout_dirty = true;
         let Some(id) = self.focus else {
             return Ok(false);
         };
@@ -136,6 +138,7 @@ impl Tree {
     /// committed value and clears the preedit. `Disabled` drops an unfinished
     /// preedit without inserting it.
     pub fn apply_ime(&mut self, event: ImeEvent) -> Result<bool, TreeError> {
+        self.layout_dirty = true;
         let Some(id) = self.focus else {
             return Ok(false);
         };

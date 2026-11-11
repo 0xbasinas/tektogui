@@ -461,21 +461,25 @@ fn apply_channels(tree: &mut Tree, id: NodeId, channels: &[Channel], eased: f32)
             ChannelKind::X => {
                 if let Some(value) = channel.value.number(eased) {
                     bounds.x = value;
+                    tree.layout_dirty = true;
                 }
             }
             ChannelKind::Y => {
                 if let Some(value) = channel.value.number(eased) {
                     bounds.y = value;
+                    tree.layout_dirty = true;
                 }
             }
             ChannelKind::Width => {
                 if let Some(value) = channel.value.number(eased) {
                     bounds.width = value.max(0.0);
+                    tree.layout_dirty = true;
                 }
             }
             ChannelKind::Height => {
                 if let Some(value) = channel.value.number(eased) {
                     bounds.height = value.max(0.0);
+                    tree.layout_dirty = true;
                 }
             }
             ChannelKind::Fill => node.fill = channel.value.color(eased),
