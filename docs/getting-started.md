@@ -50,7 +50,7 @@ cargo run -p tekto-cli -- patch 4 --text "Hello from an agent"
 
 ## Start a new app
 
-From the tektogui repo (or any folder, if `TEKTO_ROOT` points at it):
+From the tektogui checkout (run it with the checkout as your current folder; `cargo run -p` needs the workspace manifest, and `TEKTO_ROOT` does not change that). To scaffold from another folder, see the built-binary example below:
 
 ```bash
 cargo run -p tekto-cli -- new hello
