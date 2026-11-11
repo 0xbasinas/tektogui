@@ -2,7 +2,7 @@
 
 use rquickjs::{
     function::{Func, Opt},
-    Context, Ctx, Object, Runtime, Value,
+    Context, Ctx, Module, Object, Runtime, Value, WriteOptions,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -107,6 +107,20 @@ impl JsSession {
         self.run(host, |ctx| ctx.eval::<(), _>(source))
     }
 
+    /// Evaluate a Tekto bytecode envelope built by [`compile_bytecode`].
+    ///
+    /// The header carries the format and engine tag. A stale or foreign file
+    /// returns an error whose text says to rebuild from source; the caller
+    /// should then fall back to [`Self::eval`] with the original bundle.
+    pub fn eval_bytecode(&self, bytes: &[u8], host: &mut dyn Host) -> Result<(), JsError> {
+        let payload = crate::decode_bytecode(bytes)?;
+        self.run(host, |ctx| unsafe {
+            let module = Module::load(ctx.clone(), payload)?;
+            let (_module, promise) = module.eval()?;
+            promise.finish::<()>()
+        })
+    }
+
     /// Capture keyed signal values as JSON before replacing this session.
     pub fn snapshot_signals(&self, host: &mut dyn Host) -> Result<String, JsError> {
         self.run(host, |ctx| ctx.eval("typeof globalThis.__tektoSnapshotSignals === 'function' ? globalThis.__tektoSnapshotSignals() : '{}'"))
@@ -202,6 +216,26 @@ impl JsSession {
 
 pub fn eval_script(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
     JsSession::new()?.eval(source, host)
+}
+
+/// Compile a bundle to versioned QuickJS bytecode without running it.
+///
+/// The module is compiled in strict mode with its source stripped. `name` is
+/// only for diagnostics. The result starts with the Tekto header, so
+/// [`JsSession::eval_bytecode`] can reject a file from another engine.
+pub fn compile_bytecode(source: &str, name: &str) -> Result<Vec<u8>, JsError> {
+    let runtime = Runtime::new().map_err(|err| JsError::Message(err.to_string()))?;
+    let context = Context::full(&runtime).map_err(|err| JsError::Message(err.to_string()))?;
+    let payload = context
+        .with(|ctx| {
+            let module = Module::declare(ctx, name, source)?;
+            module.write(WriteOptions {
+                strip_source: true,
+                ..WriteOptions::default()
+            })
+        })
+        .map_err(|err| JsError::Message(format_quickjs_error(&err)))?;
+    Ok(crate::encode_bytecode(&payload))
 }
 
 fn format_quickjs_error(err: &rquickjs::Error) -> String {

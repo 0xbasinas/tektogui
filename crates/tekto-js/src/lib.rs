@@ -19,7 +19,12 @@ use thiserror::Error;
 mod engine;
 
 #[cfg(feature = "quickjs")]
-pub use engine::JsSession;
+pub use engine::{compile_bytecode, JsSession};
+
+mod bytecode;
+pub use bytecode::{
+    decode_bytecode, encode_bytecode, BYTECODE_ENGINE, BYTECODE_FORMAT, BYTECODE_MAGIC,
+};
 
 mod bundle;
 mod permissions;
@@ -556,6 +561,55 @@ mod tests {
                 .contains("native capability `tray` is not allowed"),
             "{error}"
         );
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn bytecode_round_trips_and_refuses_a_foreign_engine() {
+        use crate::{compile_bytecode, decode_bytecode};
+        let source = r#"
+            // SOURCE-MARKER-not-in-bytecode
+            const root = tekto.create('window');
+            const label = tekto.create('text');
+            tekto.setText(label, 'Bytecode OK');
+            tekto.append(root, label);
+        "#;
+        let bytes = compile_bytecode(source, "bundle.js").unwrap();
+        let payload = decode_bytecode(&bytes).unwrap();
+        assert!(
+            !String::from_utf8_lossy(payload).contains("SOURCE-MARKER-not-in-bytecode"),
+            "the compiled bytecode kept the source text"
+        );
+        let mut host = TreeHost::new();
+        let session = JsSession::new().unwrap();
+        session.eval_bytecode(&bytes, &mut host).unwrap();
+        assert_eq!(
+            host.tree
+                .borrow()
+                .get(NodeId::from_raw(2))
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("Bytecode OK")
+        );
+
+        // A file from another engine is refused, and the source still runs.
+        let mut foreign = bytes.clone();
+        foreign[16] = b'X';
+        let error = session.eval_bytecode(&foreign, &mut host).unwrap_err();
+        assert!(
+            error.to_string().contains("rebuild the bundle from source"),
+            "{error}"
+        );
+        let mut fallback = TreeHost::new();
+        session.eval(source, &mut fallback).unwrap();
+        assert!(fallback.tree.borrow().get(NodeId::from_raw(2)).is_some());
+
+        // A corrupt payload fails inside QuickJS instead of running something else.
+        let mut corrupt = bytes.clone();
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 0xff;
+        assert!(session.eval_bytecode(&corrupt, &mut host).is_err());
     }
 
     #[cfg(feature = "quickjs")]
