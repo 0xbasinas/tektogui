@@ -64,6 +64,8 @@ struct State {
     viewport: Arc<Mutex<Viewport>>,
     /// Origin for [`Tree::advance`]. Zero at the first frame of this surface.
     anim_origin: Instant,
+    /// Set by a close control; the event loop exits on the next wake.
+    close_requested: bool,
     #[cfg(feature = "a11y-os")]
     adapter: accesskit_winit::Adapter,
 }
@@ -86,6 +88,7 @@ impl ApplicationHandler<AppEvent> for App {
         }
         let attrs = Window::default_attributes()
             .with_title(self.opts.title.clone())
+            .with_decorations(self.opts.decorations)
             .with_inner_size(winit::dpi::LogicalSize::new(
                 self.opts.width,
                 self.opts.height,
@@ -132,6 +135,7 @@ impl ApplicationHandler<AppEvent> for App {
             handle: self.handle.clone(),
             viewport: Arc::clone(&self.viewport),
             anim_origin: Instant::now(),
+            close_requested: false,
             #[cfg(feature = "a11y-os")]
             adapter,
         });
@@ -147,6 +151,14 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self
+            .state
+            .as_ref()
+            .is_some_and(|state| state.close_requested)
+        {
+            event_loop.exit();
+            return;
+        }
         // The commit echo, when the OS sends one, is already in this burst.
         // A key after the queue goes idle is the user's next keystroke.
         if let Some(state) = self.state.as_mut() {
@@ -250,6 +262,23 @@ impl ApplicationHandler<AppEvent> for App {
             } => {
                 if let Some(state) = self.state.as_mut() {
                     let pressed = button_state == ElementState::Pressed;
+                    if pressed {
+                        let drag = state
+                            .pointer
+                            .cursor
+                            .filter(|_| !state.pointer.swallow_mouse)
+                            .is_some_and(|(x, y)| {
+                                state
+                                    .tree
+                                    .lock()
+                                    .ok()
+                                    .is_some_and(|tree| tree.drag_region_at(x, y))
+                            });
+                        if drag {
+                            let _ = state.window.drag_window();
+                            return;
+                        }
+                    }
                     let op = state.pointer.on_left_button(pressed);
                     deliver_pointer(state, op);
                 }
@@ -670,23 +699,41 @@ fn deliver_pointer(state: &mut State, op: PointerOp) {
         return;
     }
     let now = pointer_ms(state);
+    let mut control = None;
     let changed = if let Some(handle) = &state.handle {
         crate::pointer_route::deliver_pointer(handle, &mut state.pointer, op, now).unwrap_or(true)
     } else if let Ok(mut tree) = state.tree.lock() {
         let had_overlay = tree.overlay().is_some();
         let effect = apply_pointer_op(&mut state.pointer, &mut tree, op, now);
-        let clicked = effect
-            .click_at
-            .and_then(|(x, y)| {
-                crate::pointer_route::click_pointer(&mut tree, x, y)
-                    .ok()
-                    .flatten()
-            })
-            .is_some();
+        if let Some((x, y)) = effect.click_at {
+            control = tree
+                .hit(x, y)
+                .and_then(|id| tree.get(id))
+                .map(|node| node.window_control)
+                .filter(|control| *control != tekto_tree::WindowControl::None);
+        }
+        let clicked = control.is_some()
+            || effect
+                .click_at
+                .and_then(|(x, y)| {
+                    crate::pointer_route::click_pointer(&mut tree, x, y)
+                        .ok()
+                        .flatten()
+                })
+                .is_some();
         effect.redraw || clicked || (had_overlay && tree.overlay().is_none())
     } else {
         false
     };
+    match control {
+        Some(tekto_tree::WindowControl::Minimize) => state.window.set_minimized(true),
+        Some(tekto_tree::WindowControl::Maximize) => {
+            let maximized = state.window.is_maximized();
+            state.window.set_maximized(!maximized);
+        }
+        Some(tekto_tree::WindowControl::Close) => state.close_requested = true,
+        _ => {}
+    }
     if changed {
         state.window.request_redraw();
     }
@@ -783,6 +830,7 @@ fn apply_ime(state: &mut State, ime: Ime) {
 }
 
 fn apply_field_key(state: &mut State, event: &KeyEvent) {
+    let mut control = None;
     let changed = if let Some(handle) = &state.handle {
         crate::key_route::deliver_key(
             handle,
@@ -816,10 +864,30 @@ fn apply_field_key(state: &mut State, event: &KeyEvent) {
             state.modifiers.state(),
             &mut state.last_ime_commit,
         );
-        changed || click.is_some_and(|id| tree.click(id).is_ok())
+        if let Some(id) = click {
+            let target = tree.get(id).map(|node| node.window_control);
+            match target {
+                Some(control_value) if control_value != tekto_tree::WindowControl::None => {
+                    control = Some(control_value);
+                }
+                _ => {
+                    let _ = tree.click(id);
+                }
+            }
+        }
+        changed
     } else {
         false
     };
+    match control {
+        Some(tekto_tree::WindowControl::Minimize) => state.window.set_minimized(true),
+        Some(tekto_tree::WindowControl::Maximize) => {
+            let maximized = state.window.is_maximized();
+            state.window.set_maximized(!maximized);
+        }
+        Some(tekto_tree::WindowControl::Close) => state.close_requested = true,
+        _ => {}
+    }
     if changed {
         state.window.request_redraw();
     }

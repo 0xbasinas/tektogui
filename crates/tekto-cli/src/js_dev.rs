@@ -157,6 +157,7 @@ fn run_js_dev_inner(
                 width: WIDTH,
                 height: HEIGHT,
                 dev_server: true,
+                decorations: true,
             },
             Some((handle, ep, viewport)),
         )?;

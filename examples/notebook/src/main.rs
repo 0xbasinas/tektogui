@@ -232,6 +232,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             width: WIDTH,
             height: HEIGHT,
             dev_server: true,
+            decorations: true,
         },
         Some(session),
     )?;

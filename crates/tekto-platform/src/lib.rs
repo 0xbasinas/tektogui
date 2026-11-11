@@ -33,6 +33,9 @@ pub struct WindowOptions {
     pub width: u32,
     pub height: u32,
     pub dev_server: bool,
+    /// Draw the OS title bar. Set false to paint your own chrome; the app then
+    /// needs a drag region and window controls.
+    pub decorations: bool,
 }
 
 impl Default for WindowOptions {
@@ -42,6 +45,7 @@ impl Default for WindowOptions {
             width: 640,
             height: 400,
             dev_server: true,
+            decorations: true,
         }
     }
 }

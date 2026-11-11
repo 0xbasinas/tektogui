@@ -64,6 +64,7 @@ fn android_main(app: tekto::AndroidApp) {
         width: 640,
         height: 400,
         dev_server: true,
+        decorations: true,
     };
     // When built with `--features quickjs`, attach a JS reload hook so
     // `tekto dev --js --android` can POST a bundle over adb forward.

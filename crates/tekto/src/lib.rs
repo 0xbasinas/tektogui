@@ -43,16 +43,16 @@ pub use tekto_tree::{
     ease_linear, ease_smoothstep, reduced_motion_requested, Action, Color, Easing, FieldKey, Image,
     ImageError, ImageFit, ImeEvent, LayoutStyle, Node, NodeId, NodeKind, NodePatch, Overlay,
     OverlaySide, RecordedKey, Recording, Rect, StateInfo, Store, StoreError, StyleTransition, Tree,
-    TreeDump, TreeEvent, DEFAULT_TRANSITION_MS, LIST_OVERSCAN_PX, SCROLL_WHEEL_LINE,
+    TreeDump, TreeEvent, WindowControl, DEFAULT_TRANSITION_MS, LIST_OVERSCAN_PX, SCROLL_WHEEL_LINE,
 };
 
 pub use tekto_widgets::{
-    app_bar, app_bar_action, app_bar_leading_button, apply_axis, banner, button, checkbox, dialog,
-    image, list, list_item, menu, menu_item, notes_tree, progress, radio, radio_group,
-    responsive_axis, scroll, select, select_option, slider, split_pane, switch, tab, tab_list,
-    tab_panel, text, text_area, text_field, title_on_banner, window, AppBar, Axis, KeyedList,
-    ListIds, ListRow, SplitPane, APP_BAR_HEIGHT, BANNER_HEIGHT, BANNER_PADDING, BODY_SIZE,
-    LIST_GAP, LIST_ROW_PADDING, PAGE_PADDING, STACK_GAP, TITLE_SIZE,
+    app_bar, app_bar_action, app_bar_leading_button, app_bar_window_controls, apply_axis, banner,
+    button, checkbox, dialog, image, list, list_item, menu, menu_item, notes_tree, progress, radio,
+    radio_group, responsive_axis, scroll, select, select_option, slider, split_pane, switch, tab,
+    tab_list, tab_panel, text, text_area, text_field, title_on_banner, window, AppBar, Axis,
+    KeyedList, ListIds, ListRow, SplitPane, APP_BAR_HEIGHT, BANNER_HEIGHT, BANNER_PADDING,
+    BODY_SIZE, LIST_GAP, LIST_ROW_PADDING, PAGE_PADDING, STACK_GAP, TITLE_SIZE,
 };
 
 /// Layout, paint with the CPU renderer, and write a PNG if `out` is set.
