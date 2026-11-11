@@ -1,0 +1,25 @@
+# GUI framework research: what Tekto can learn
+
+Research snapshot: 2026-11-11. This is a set of proposals, not a commitment or a claim of feature parity. Sources are the projects' own documentation and source comments, read on this date. The comparison is selective; it does not rank the frameworks overall. See [runtime opportunities](runtime-research.md) and [feature proposals](feature-research.md) for implementation slices and tests.
+
+Tekto's reference point is [`round3-research.md`](round3-research.md): Rust and TSX share a retained scene, stable node ids, AccessKit semantics, CPU and optional GPU rendering, and an agent-facing dev server. Several older architecture and gap documents describe earlier milestones; verify current code before treating their status as current. Windows resize artifacts, real IME sessions, and cross-driver GPU behavior remain open in the round 3 document.
+
+| Project or source | Observed design | Useful question for Tekto |
+| --- | --- | --- |
+| [Iced README](https://github.com/iced-rs/iced/blob/master/README.md), [tasks and subscriptions](https://github.com/iced-rs/iced/blob/master/src/lib.rs) | Rust views use state, messages, and updates; Iced documents asynchronous tasks, subscriptions, a renderer-independent runtime, software and GPU renderers, and performance tooling. Iced calls itself experimental. | Can a small, cancellable task interface and timing view make apps easier to build and diagnose without imposing Iced's architecture? |
+| [Xilem overview](https://github.com/linebender/xilem/blob/main/README.md), [Masonry overview](https://github.com/linebender/xilem/blob/main/masonry/README.md) | Xilem rebuilds a lightweight view description over a retained widget tree. Masonry centralizes focus, pointer interactions, and accessibility and exposes tree inspection and tests. | Can Tekto make lifecycle and invalidation explicit while keeping its own scene and Rust/TSX APIs? |
+| [egui README](https://github.com/emilk/egui/blob/main/README.md) | egui is immediate mode, has an interactive web demo and a custom painting API, and states portability and ease of integration as goals. | Can examples, diagnostics, and a bounded custom-paint API be made easy to discover without adopting immediate mode or losing stable ids? |
+| [Flutter scroll view](https://github.com/flutter/flutter/blob/master/packages/flutter/lib/src/widgets/scroll_view.dart) | Its lazy list documentation describes building visible children on demand and supplying semantic indices and counts for scroll announcements. | Can Tekto's existing fixed-height `KeyedList` expose visible range, total count, and deterministic focus when rows leave the viewport? |
+| [AccessKit](https://github.com/AccessKit/accesskit/blob/main/README.md), [WAI-ARIA tabs](https://www.w3.org/WAI/ARIA/apg/patterns/tabs/), [modal dialog](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/) | AccessKit defines stable ids, roles, properties, actions, and incremental updates. APG describes keyboard and focus behavior for web patterns; native platforms still need their own checks. | Can the inspector show the same semantics and action outcomes that assistive technology sees, then verify them on real platforms? |
+| [Parley text stack](https://github.com/linebender/parley/blob/main/README.md) | Text layout depends on shaping, font fallback, segmentation and bidi analysis; Parley also exposes selection and editing utilities. | Can Tekto retain and invalidate text layout safely and test mixed-script selection before adding richer text? |
+| [wgpu surface example](https://github.com/gfx-rs/wgpu/blob/trunk/examples/features/src/hello_triangle/mod.rs) | The example distinguishes timeout/occlusion, suboptimal/outdated, and lost surfaces and requests redraw after recovery. | Can Tekto capture size and surface state first, then test recovery decisions separately from the Windows black-strip investigation? |
+
+## Recommended order
+
+1. **Make existing behavior measurable.** Add opt-in frame stages and surface-size traces, then reproduce the resize strip on Windows. Add an accessibility inspection and real AT-SPI smoke-test plan. These support nearly every later change.
+2. **Finish text and list fundamentals.** Exercise real IME and clipboard flows, improve mixed-direction text, and give virtual rows clear focus and semantic rules. Avoid promising device behavior from headless tests alone.
+3. **Add narrow app building blocks.** Prototype navigation, cancellable background work, and accessible data views against one small app. Keep each independently optional where it brings substantial dependencies.
+
+## Boundaries
+
+These are design observations, not instructions to copy implementation. Tekto's [agent rules](../../AGENTS.md) prohibit wrapping other engines, require the existing scene/AccessKit identity model, keep GPU and QuickJS out of defaults, and require a license review before any new direct dependency. Flutter and Masonry are comparison sources, not proposed dependencies. No external code is copied by these documents; check upstream license and attribution separately before reusing code.
