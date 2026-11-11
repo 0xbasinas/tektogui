@@ -1,3 +1,7 @@
+/** Tagged native plugin call. The `op` names match Rust `NativeOp`. */
+import type { NativeOp } from "./native-ops.js";
+export type { NativeOp };
+
 export declare function transitionOp(
   id: number,
   props?: {
@@ -46,25 +50,6 @@ export declare function tokensOp(tokens?: {
 
 export declare function createSignal<T>(value: T, options?: { key?: string }): [() => T, (value: T | ((prev: T) => T)) => void];
 export declare function createEffect(fn: () => void): (() => void) & { dispose(): void };
-
-/** Tagged native plugin call. The `op` names match Rust `NativeOp`. */
-export type NativeOp =
-  | { op: "filesOpenDialog" }
-  | { op: "filesSaveDialog" }
-  | { op: "clipboardGetText" }
-  | { op: "clipboardSetText"; text: string }
-  | { op: "filesReadText"; path: string }
-  | { op: "filesWriteText"; path: string; text: string }
-  | { op: "filesReadBytes"; path: string }
-  | { op: "filesWriteBytes"; path: string; bytes: number[] }
-  | { op: "notificationsShow"; title: string; body: string }
-  | { op: "trayShow"; label: string; menu: { id: string; label: string }[] }
-  | { op: "trayHide" }
-  | { op: "traySetLabel"; label: string }
-  | { op: "trayTakeClick" }
-  | { op: "shortcutsRegister"; accelerator: string; id: string }
-  | { op: "shortcutsUnregister"; id: string }
-  | { op: "shortcutsTakeActivation" };
 
 /**
  * JSON text for desktop `tekto.applyNativeOp`. Shortcut register, unregister,

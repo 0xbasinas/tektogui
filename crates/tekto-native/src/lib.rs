@@ -125,6 +125,33 @@ pub enum NativeOp {
     ShortcutsTakeActivation,
 }
 
+impl NativeOp {
+    /// The `op` tag the JS host and `native-ops.json` use.
+    ///
+    /// The match is exhaustive on purpose: a new variant must be named here,
+    /// and the drift test compares these names with the generated typings.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::FilesOpenDialog => "filesOpenDialog",
+            Self::FilesSaveDialog => "filesSaveDialog",
+            Self::ClipboardGetText => "clipboardGetText",
+            Self::ClipboardSetText { .. } => "clipboardSetText",
+            Self::FilesReadText { .. } => "filesReadText",
+            Self::FilesWriteText { .. } => "filesWriteText",
+            Self::FilesReadBytes { .. } => "filesReadBytes",
+            Self::FilesWriteBytes { .. } => "filesWriteBytes",
+            Self::NotificationsShow { .. } => "notificationsShow",
+            Self::TrayShow { .. } => "trayShow",
+            Self::TrayHide => "trayHide",
+            Self::TraySetLabel { .. } => "traySetLabel",
+            Self::TrayTakeClick => "trayTakeClick",
+            Self::ShortcutsRegister { .. } => "shortcutsRegister",
+            Self::ShortcutsUnregister { .. } => "shortcutsUnregister",
+            Self::ShortcutsTakeActivation => "shortcutsTakeActivation",
+        }
+    }
+}
+
 /// One tray menu row. `id` is what a click reports. `label` is the visible text.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrayMenuItem {
@@ -603,6 +630,32 @@ pub fn native() -> StubNative {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_op_spec_matches_the_enum() {
+        use super::*;
+        let spec: serde_json::Value =
+            serde_json::from_str(include_str!("../native-ops.json")).expect("native-ops.json");
+        let entries = spec["ops"].as_array().expect("ops array");
+        assert!(!entries.is_empty());
+        let mut names = std::collections::BTreeSet::new();
+        for entry in entries {
+            let name = entry["name"].as_str().expect("op name");
+            assert!(names.insert(name), "duplicate op {name}");
+            let example = &entry["example"];
+            let op: NativeOp = serde_json::from_value(example.clone())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(op.name(), name, "spec name does not match the Rust name");
+            assert_eq!(
+                serde_json::to_value(&op).expect("serialize")["op"],
+                name,
+                "{name} serializes under a different tag"
+            );
+        }
+        // Every op the typings describe must be one this crate can decode and
+        // the other way round. Removing an entry from the spec fails here.
+        assert_eq!(names.len(), 16, "native-ops.json is missing an op");
+    }
+
     #[test]
     fn shortcut_ops_round_trip() {
         use super::*;
