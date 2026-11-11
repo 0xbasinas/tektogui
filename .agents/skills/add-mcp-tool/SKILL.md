@@ -35,6 +35,18 @@ The stdio MCP server (`tekto mcp`) is a proxy. Real work happens on the localhos
 
 Protocol version in `initialize` is `2024-11-05`. Stdio uses newline-delimited JSON-RPC, with legacy `Content-Length` frames accepted and answered in kind. Stdout is protocol-only. The advertised initialization version remains `2024-11-05`. Tool results use `{ "content": [{ "type": "text", "text": "…" }] }` (screenshots use `type: "image"` + base64 + `mimeType: "image/png"`).
 
+## HTTP limits (dev server)
+
+Constants live in `crates/tekto-mcp/src/lib.rs` (`serve`, `handle_client_locked`):
+
+- `MAX_CLIENTS = 8`: at most eight connections in flight. The accept loop closes any extra connection at once, with no response and no dispatch. Capacity returns when a worker finishes.
+- `IO_DEADLINE = 5s`, absolute, not per read or write. The request (headers and body) must arrive within 5 seconds of accept, even if a client trickles one byte at a time. The response gets a separate 5 seconds to write. On a miss the connection is dropped with no HTTP error body, so a slow reader cannot hold a slot.
+- Requests: headers up to 64 KiB, whole buffered request up to 2 MiB. A body shorter than `Content-Length` is an error, not a partial request.
+- Handlers run one at a time (a dispatch lock) so patch and writeback keep request order. Keep new routes short.
+- IPv6: `DevEndpoint::base_url()` brackets the host (`http://[::1]:PORT`).
+
+Clients should retry after a closed or timed-out connection. Keep `docs/agent-guide.md` in sync if these numbers change.
+
 ## Steps
 
 1. Add the HTTP route first and try it against `tekto dev --headless`.
@@ -46,6 +58,10 @@ Protocol version in `initialize` is `2024-11-05`. Stdio uses newline-delimited J
 
 ```bash
 cargo test -p tekto-mcp --all-targets
+# HTTP socket regressions (limits, deadlines, overload, IPv6):
+cargo test -p tekto-mcp --lib -- request_limits stalled_clients trickling_headers slow_reader endpoint_urls http_socket
+cargo test -p tekto-mcp --test http_trust
+cargo test -p tekto-cli --test live_cli ipv6_dev_server_cli_flow
 cargo clippy -p tekto-mcp -p tekto-cli --all-targets -- -D warnings
 # Framing smoke check (newline framing; expect one JSON line with "result":{}):
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"ping"}' | cargo run -q -p tekto-cli -- mcp

@@ -14,9 +14,10 @@ use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use tekto_tree::{NodeId, NodePatch, Store, Tree};
 
 mod http_policy;
@@ -297,7 +298,12 @@ pub struct DevEndpoint {
 
 impl DevEndpoint {
     pub fn base_url(&self) -> String {
-        format!("http://{}:{}", self.host, self.port)
+        let host = if self.host.contains(':') && !self.host.starts_with('[') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        format!("http://{}:{}", host, self.port)
     }
 }
 
@@ -367,17 +373,89 @@ pub fn start_dev_server(handle: Arc<dyn AppHandle>) -> Result<DevEndpoint, McpEr
     thread::Builder::new()
         .name("tekto-dev".into())
         .spawn(move || {
-            for stream in listener.incoming() {
-                if !running.load(Ordering::Relaxed) {
-                    break;
-                }
-                if let Ok(stream) = stream {
-                    let handle = Arc::clone(&handle);
-                    let _ = handle_client(stream, handle);
-                }
-            }
+            serve(listener, handle, running);
         })?;
     Ok(ep)
+}
+
+// Absolute deadlines stop clients that send one byte just before each timeout.
+// At most eight requests (and their buffers) may be in flight; excess sockets close.
+const MAX_CLIENTS: usize = 8;
+const IO_DEADLINE: Duration = Duration::from_secs(5);
+
+fn serve(listener: TcpListener, handle: Arc<dyn AppHandle>, running: Arc<AtomicBool>) {
+    let active = Arc::new(AtomicUsize::new(0));
+    // Keep multi-step operations, including patch and writeback, in request order.
+    let dispatch_lock = Arc::new(Mutex::new(()));
+    for stream in listener.incoming() {
+        if !running.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Ok(stream) = stream {
+            // Only this accept loop increments; workers only decrement.
+            if active.load(Ordering::Acquire) >= MAX_CLIENTS {
+                continue;
+            }
+            active.fetch_add(1, Ordering::AcqRel);
+            let handle = Arc::clone(&handle);
+            let count = Arc::clone(&active);
+            let lock = Arc::clone(&dispatch_lock);
+            if thread::Builder::new()
+                .name("tekto-dev-client".into())
+                .spawn(move || {
+                    struct Slot(Arc<AtomicUsize>);
+                    impl Drop for Slot {
+                        fn drop(&mut self) {
+                            self.0.fetch_sub(1, Ordering::Release);
+                        }
+                    }
+                    let _slot = Slot(count);
+                    let _ = handle_client_locked(stream, handle, &lock);
+                })
+                .is_err()
+            {
+                active.fetch_sub(1, Ordering::Release);
+            }
+        }
+    }
+}
+
+struct DeadlineReader<'a> {
+    stream: &'a mut TcpStream,
+    deadline: Instant,
+}
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self
+            .deadline
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "request deadline"))?;
+        self.stream.set_read_timeout(Some(left))?;
+        self.stream.read(buf)
+    }
+}
+
+fn write_before(
+    stream: &mut TcpStream,
+    mut bytes: &[u8],
+    deadline: Instant,
+) -> std::io::Result<()> {
+    while !bytes.is_empty() {
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "response deadline")
+            })?;
+        stream.set_write_timeout(Some(left))?;
+        let n = stream.write(bytes)?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::WriteZero.into());
+        }
+        bytes = &bytes[n..];
+    }
+    Ok(())
 }
 
 fn read_http_request(stream: &mut impl Read) -> Result<Option<(String, String, String)>, McpError> {
@@ -390,6 +468,9 @@ fn read_http_request(stream: &mut impl Read) -> Result<Option<(String, String, S
         }
         data.extend_from_slice(&tmp[..n]);
         if let Some(pos) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+            if pos > 64 * 1024 {
+                return Err(McpError::msg("request headers too large"));
+            }
             break pos;
         }
         if data.len() > 64 * 1024 {
@@ -408,10 +489,13 @@ fn read_http_request(stream: &mut impl Read) -> Result<Option<(String, String, S
         }
     }
     let body_start = header_end + 4;
+    if content_len > 2 * 1024 * 1024 - body_start {
+        return Err(McpError::msg("request body too large"));
+    }
     while data.len() < body_start + content_len {
         let n = stream.read(&mut tmp)?;
         if n == 0 {
-            break;
+            return Err(McpError::msg("incomplete HTTP request body"));
         }
         data.extend_from_slice(&tmp[..n]);
         if data.len() > 2 * 1024 * 1024 {
@@ -427,15 +511,31 @@ fn read_http_request(stream: &mut impl Read) -> Result<Option<(String, String, S
     Ok(Some((method, path, body)))
 }
 
-fn handle_client(mut stream: TcpStream, handle: Arc<dyn AppHandle>) -> Result<(), McpError> {
-    let request = read_http_request(&mut stream)?;
-    let (status, content_type, body_bytes) = process_http_request(handle.as_ref(), request);
+#[cfg(test)]
+fn handle_client(stream: TcpStream, handle: Arc<dyn AppHandle>) -> Result<(), McpError> {
+    handle_client_locked(stream, handle, &Mutex::new(()))
+}
+
+fn handle_client_locked(
+    mut stream: TcpStream,
+    handle: Arc<dyn AppHandle>,
+    lock: &Mutex<()>,
+) -> Result<(), McpError> {
+    let request = read_http_request(&mut DeadlineReader {
+        stream: &mut stream,
+        deadline: Instant::now() + IO_DEADLINE,
+    })?;
+    let (status, content_type, body_bytes) = {
+        let _guard = lock.lock().map_err(|e| McpError::msg(e.to_string()))?;
+        process_http_request(handle.as_ref(), request)
+    };
     let header = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body_bytes.len()
     );
-    stream.write_all(header.as_bytes())?;
-    stream.write_all(&body_bytes)?;
+    let deadline = Instant::now() + IO_DEADLINE;
+    write_before(&mut stream, header.as_bytes(), deadline)?;
+    write_before(&mut stream, &body_bytes, deadline)?;
     Ok(())
 }
 
@@ -824,6 +924,138 @@ fn b64(data: &[u8]) -> String {
 mod tests {
     use super::*;
     use tekto_tree::{NodeKind, NodePatch};
+
+    #[test]
+    fn endpoint_urls_bracket_ipv6() {
+        for (host, expected) in [
+            ("127.0.0.1", "http://127.0.0.1:42"),
+            ("localhost", "http://localhost:42"),
+            ("::1", "http://[::1]:42"),
+            ("[::1]", "http://[::1]:42"),
+        ] {
+            assert_eq!(
+                DevEndpoint {
+                    host: host.into(),
+                    port: 42
+                }
+                .base_url(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn request_limits_and_incomplete_body_are_enforced() {
+        let large_header = format!(
+            "GET / HTTP/1.1\r\nHost: localhost\r\nX: {}\r\n\r\n",
+            "a".repeat(64 * 1024)
+        );
+        assert!(read_http_request(&mut large_header.as_bytes()).is_err());
+        let large_body =
+            "POST /reload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2097152\r\n\r\n";
+        assert!(read_http_request(&mut large_body.as_bytes()).is_err());
+        let incomplete = "POST /reload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\na";
+        assert!(read_http_request(&mut incomplete.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn stalled_clients_timeout_and_capacity_recovers() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            serve(
+                listener,
+                Arc::new(http_test_handle()),
+                Arc::new(AtomicBool::new(true)),
+            )
+        });
+        let mut idle = TcpStream::connect(addr).unwrap();
+        let mut partial = TcpStream::connect(addr).unwrap();
+        write!(
+            partial,
+            "POST /reload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\na"
+        )
+        .unwrap();
+        let start = Instant::now();
+        assert!(http_get(&format!("http://{addr}/health")).is_ok());
+        assert!(start.elapsed() < Duration::from_secs(2));
+        // Fill the remaining slots, then verify overload closes without dispatch.
+        let mut stalls = Vec::new();
+        for _ in 0..MAX_CLIENTS - 2 {
+            stalls.push(TcpStream::connect(addr).unwrap());
+        }
+        thread::sleep(Duration::from_millis(200));
+        let mut excess = TcpStream::connect(addr).unwrap();
+        excess
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let _ = excess.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        let mut b = [0; 1];
+        assert_closed(excess.read(&mut b));
+        idle.set_read_timeout(Some(IO_DEADLINE + Duration::from_secs(2)))
+            .unwrap();
+        assert_closed(idle.read(&mut b));
+        partial
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        assert_closed(partial.read(&mut b));
+        thread::sleep(Duration::from_millis(200));
+        assert!(http_get(&format!("http://{addr}/health")).is_ok());
+    }
+
+    fn assert_closed(result: std::io::Result<usize>) {
+        match result {
+            Ok(0) => (),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                ) => {}
+            other => panic!("expected closed connection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trickling_headers_hit_absolute_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            serve(
+                listener,
+                Arc::new(http_test_handle()),
+                Arc::new(AtomicBool::new(true)),
+            )
+        });
+        let mut slow = TcpStream::connect(addr).unwrap();
+        for _ in 0..6 {
+            if slow.write_all(b"G").is_err() {
+                break;
+            }
+            thread::sleep(Duration::from_secs(1));
+        }
+        slow.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        assert_closed(slow.read(&mut [0; 1]));
+        assert!(http_get(&format!("http://{addr}/health")).is_ok());
+    }
+
+    #[test]
+    fn slow_reader_does_not_hold_a_slot_forever() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut handle = http_test_handle();
+        handle.render = Arc::new(|_| Ok(vec![0; 32 * 1024 * 1024]));
+        thread::spawn(move || serve(listener, Arc::new(handle), Arc::new(AtomicBool::new(true))));
+        let mut slow = TcpStream::connect(addr).unwrap();
+        slow.write_all(b"GET /screenshot HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .unwrap();
+        assert!(http_get(&format!("http://{addr}/health")).is_ok());
+        thread::sleep(IO_DEADLINE + Duration::from_secs(1));
+        let mut data = Vec::new();
+        slow.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        assert!(slow.read_to_end(&mut data).is_ok());
+        assert!(data.len() < 32 * 1024 * 1024);
+        assert!(http_get(&format!("http://{addr}/health")).is_ok());
+    }
 
     fn http_test_handle() -> SharedTreeHandle {
         let mut tree = Tree::new();
