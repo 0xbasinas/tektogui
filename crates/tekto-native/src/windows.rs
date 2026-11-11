@@ -175,7 +175,7 @@ fn fail(reason: String) -> NativeError {
 }
 
 /// Relative components only. Rejects `.`, `..`, prefixes, empty segments,
-/// NTFS alternate streams (`:`), and trailing dots or spaces (Win32 strips those).
+/// NTFS alternate streams, reserved device names, and trailing dots or spaces.
 fn relative_parts(path: &str) -> Result<Vec<&str>, NativeError> {
     if path.bytes().any(|b| b == 0) {
         return Err(fail("path contains a NUL byte".into()));
@@ -195,8 +195,22 @@ fn relative_parts(path: &str) -> Result<Vec<&str>, NativeError> {
         return Err(fail("invalid relative path".into()));
     }
     if segs.iter().any(|s| {
-        s.bytes()
-            .any(|b| matches!(b, b':' | b'*' | b'?' | b'"' | b'<' | b'>' | b'|'))
+        let stem = s.split('.').next().unwrap_or(s).trim_end_matches(' ');
+        let upper = stem.to_ascii_uppercase();
+        let device = matches!(
+            upper.as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        ) || ["COM", "LPT"].iter().any(|prefix| {
+            upper.strip_prefix(prefix).is_some_and(|n| {
+                matches!(
+                    n,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
+        });
+        device
+            || s.bytes()
+                .any(|b| matches!(b, b':' | b'*' | b'?' | b'"' | b'<' | b'>' | b'|'))
     }) {
         return Err(fail("invalid relative path".into()));
     }
@@ -592,11 +606,16 @@ mod tests {
             "note.txt:stream",
             "trail.",
             "trail ",
+            "CON",
+            "folder/nul.txt",
+            "com1.log",
+            "LPT²",
             "",
         ] {
             assert!(relative_parts(path).is_err(), "{path}");
         }
         assert_eq!(relative_parts(r"notes\a.txt").unwrap(), ["notes", "a.txt"]);
+        assert!(relative_parts("COM10.txt").is_ok());
     }
 
     #[test]
