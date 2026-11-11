@@ -465,19 +465,32 @@ fn relayout_window(state: &mut State) {
     let (lw, lh, scale, pw, ph) = window_logical_and_physical(&state.window);
     let _ = state.renderer.resize(pw, ph);
     state.renderer.set_scale(scale);
+    let next = Viewport {
+        width: lw.round().max(1.0) as u32,
+        height: lh.round().max(1.0) as u32,
+        scale,
+    };
+    let mut viewport_changed = false;
     if let Ok(mut vp) = state.viewport.lock() {
-        *vp = Viewport {
-            width: lw.round().max(1.0) as u32,
-            height: lh.round().max(1.0) as u32,
-            scale,
-        };
+        viewport_changed = vp.width != next.width
+            || vp.height != next.height
+            || (vp.scale - next.scale).abs() > f32::EPSILON;
+        *vp = next;
     }
     #[cfg(target_os = "android")]
     let insets = window_insets(state, scale);
     #[cfg(not(target_os = "android"))]
     let insets = window_insets(&*state, scale);
     if let Ok(mut tree) = state.tree.lock() {
-        layout_with_insets(&mut tree, lw, lh, insets);
+        // A colour or opacity tween only repaints. Skipping layout keeps
+        // Taffy and Parley off the frame path for those animations.
+        #[cfg(target_os = "android")]
+        let needs_layout = true;
+        #[cfg(not(target_os = "android"))]
+        let needs_layout = viewport_changed || tree.layout_dirty();
+        if needs_layout {
+            layout_with_insets(&mut tree, lw, lh, insets);
+        }
         let now_ms = state.anim_origin.elapsed().as_secs_f64() * 1000.0;
         tree.advance(now_ms);
     }

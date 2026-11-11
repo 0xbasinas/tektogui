@@ -4,6 +4,7 @@ use super::*;
 impl Tree {
     /// Associate one tab with one panel. Panels and their state stay in the tree.
     pub fn bind_tab_panel(&mut self, tab: NodeId, panel: NodeId) -> Result<(), TreeError> {
+        self.layout_dirty = true;
         if self.get(tab).is_none_or(|n| n.kind != NodeKind::Tab)
             || self.get(panel).is_none_or(|n| n.kind != NodeKind::TabPanel)
             || self.tab_panels.contains_key(&tab)

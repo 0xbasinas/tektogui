@@ -243,6 +243,12 @@ Each of these is a separate slice in `tekto-native`, with `Unsupported` / `Unava
 - **Android:** the Notes APK builds, installs, paints on the x86_64 AVD, and answers `tekto tree` over `adb forward`. The NativeActivity text field and IME overlay still need a live type-into-field check because the Notes screen has no field.
 - **Desktop IME:** the Windows route handles `WindowEvent::Ime`, but no test drives a real IME layout; the Windows pass typed committed text only.
 
+## Rendering performance
+
+Animations repaint on the window clock (16 ms). A frame used to re-run Taffy and Parley every time even when only a colour or opacity tween was running. `Tree` now carries a `layout_dirty` flag: structure, geometry, text, focus, scroll, overlays and tab binding mark it; `get_mut` marks it for app and widget edits; a layout pass clears it; and a position or size tween marks it from `advance`. The desktop loop lays out only when the viewport changed or the flag is set, so a colour or opacity tween paints without relayout. Android still lays out every frame because insets can change. The demo can also run on the optional GPU renderer: `cargo run -p round3-demo --features gpu`.
+
+**Remaining:** No frame-time instrumentation or benchmark number is committed; the improvement was checked by eye and by tests that assert which changes request layout. Text shaping is still redone on layout, and the whole scene is repainted each animation frame (no partial damage region).
+
 ## Not doing
 
 These were looked at and rejected, or deferred on purpose.

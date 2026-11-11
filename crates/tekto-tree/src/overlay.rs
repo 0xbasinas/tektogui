@@ -15,6 +15,7 @@ impl Tree {
         anchor: NodeId,
         side: OverlaySide,
     ) -> Result<(), TreeError> {
+        self.layout_dirty = true;
         let root = self.root.ok_or_else(|| TreeError {
             message: "no window root".into(),
         })?;
@@ -114,6 +115,7 @@ impl Tree {
 
     /// Close and remove the overlay, restoring focus if possible.
     pub fn close_overlay(&mut self) -> bool {
+        self.layout_dirty = true;
         let Some(overlay) = self.overlay.take() else {
             return false;
         };
