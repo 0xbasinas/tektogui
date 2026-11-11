@@ -10,6 +10,24 @@ test("transition op is a quiet style tween", () => {
     x: "12",
     durationMs: 180,
   });
+  assert.deepEqual(
+    transitionOp(5, {
+      fill: "#3a424a",
+      color: "#f4f3f0",
+      easing: "ease-out",
+      repeat: true,
+      durationMs: 400,
+    }),
+    {
+      op: "transition",
+      id: 5,
+      fill: "#3a424a",
+      color: "#f4f3f0",
+      easing: "ease-out",
+      repeat: true,
+      durationMs: 400,
+    },
+  );
 });
 
 test("shortcut native ops encode register, unregister, and take", () => {

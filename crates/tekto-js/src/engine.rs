@@ -298,7 +298,8 @@ fn js_close_overlay(ctx: Ctx<'_>) -> rquickjs::Result<()> {
 }
 
 /// `tekto.transition(id, key, value, durationMs)` or
-/// `tekto.transition(id, { opacity, x, y, width, height, durationMs })`.
+/// `tekto.transition(id, { opacity, x, y, width, height, fill, color,
+/// easing, repeat, durationMs })`.
 ///
 /// Each call merges onto the node. A later call does not cancel other props.
 /// Pass `0` for `durationMs` to snap. The window loop advances time.
@@ -309,21 +310,33 @@ fn js_transition<'js>(
     value: Opt<Value<'js>>,
     duration_ms: Opt<u32>,
 ) -> rquickjs::Result<()> {
-    let (opacity, x, y, width, height, duration) = if spec_or_key.is_object() {
+    let mut opacity = None;
+    let mut x = None;
+    let mut y = None;
+    let mut width = None;
+    let mut height = None;
+    let mut fill = None;
+    let mut color = None;
+    let mut easing = None;
+    let mut repeat = false;
+    let duration;
+    if spec_or_key.is_object() {
         let Some(obj) = spec_or_key.as_object() else {
             return throw(
                 &ctx,
                 JsError::Message("transition spec must be an object".into()),
             );
         };
-        (
-            read_prop(&ctx, obj, "opacity")?,
-            read_prop(&ctx, obj, "x")?,
-            read_prop(&ctx, obj, "y")?,
-            read_prop(&ctx, obj, "width")?,
-            read_prop(&ctx, obj, "height")?,
-            read_duration(&ctx, obj)?.or(Some(DEFAULT_JS_DURATION_MS)),
-        )
+        opacity = read_prop(&ctx, obj, "opacity")?;
+        x = read_prop(&ctx, obj, "x")?;
+        y = read_prop(&ctx, obj, "y")?;
+        width = read_prop(&ctx, obj, "width")?;
+        height = read_prop(&ctx, obj, "height")?;
+        fill = read_prop(&ctx, obj, "fill")?;
+        color = read_prop(&ctx, obj, "color")?;
+        easing = read_prop(&ctx, obj, "easing")?;
+        repeat = read_repeat(&ctx, obj)?;
+        duration = read_duration(&ctx, obj)?.or(Some(DEFAULT_JS_DURATION_MS));
     } else {
         let Some(text) = spec_or_key.as_string() else {
             return throw(
@@ -343,29 +356,26 @@ fn js_transition<'js>(
                 return throw(&ctx, JsError::Message("transition needs a value".into()));
             }
         };
-        let mut opacity = None;
-        let mut x = None;
-        let mut y = None;
-        let mut width = None;
-        let mut height = None;
         match key.as_str() {
             "opacity" => opacity = Some(raw),
             "x" => x = Some(raw),
             "y" => y = Some(raw),
             "width" => width = Some(raw),
             "height" => height = Some(raw),
+            "fill" => fill = Some(raw),
+            "color" => color = Some(raw),
+            "easing" => easing = Some(raw),
             other => {
                 return throw(
                     &ctx,
                     JsError::Message(format!(
-                        "transition key must be opacity, x, y, width, or height, got `{other}`"
+                        "transition key must be opacity, x, y, width, height, fill, color, or easing, got `{other}`"
                     )),
                 );
             }
         }
-        let duration = duration_ms.0.or(Some(DEFAULT_JS_DURATION_MS));
-        (opacity, x, y, width, height, duration)
-    };
+        duration = duration_ms.0.or(Some(DEFAULT_JS_DURATION_MS));
+    }
     match with_host(|host| {
         host.apply(&[HostOp::Transition {
             id,
@@ -374,6 +384,10 @@ fn js_transition<'js>(
             y,
             width,
             height,
+            fill,
+            color,
+            easing,
+            repeat,
             duration_ms: duration,
         }])?;
         Ok(())
@@ -398,6 +412,20 @@ fn read_prop<'js>(
         return Ok(None);
     }
     Ok(Some(value_to_string(ctx, &value)?))
+}
+
+fn read_repeat<'js>(ctx: &Ctx<'js>, obj: &Object<'js>) -> rquickjs::Result<bool> {
+    if !obj.contains_key("repeat")? {
+        return Ok(false);
+    }
+    let value: Value = obj.get("repeat")?;
+    if value.is_null() || value.is_undefined() {
+        return Ok(false);
+    }
+    match value.as_bool() {
+        Some(flag) => Ok(flag),
+        None => throw(ctx, JsError::Message("repeat must be a boolean".into())),
+    }
 }
 
 fn read_duration<'js>(ctx: &Ctx<'js>, obj: &Object<'js>) -> rquickjs::Result<Option<u32>> {

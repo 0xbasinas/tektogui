@@ -245,15 +245,9 @@ These three work well together, and can share the `tekto-test` crate above.
 
 ### Animation upgrades (small)
 
-- **Name:** Colour, a few easings, and repeat — only when a widget needs them.
-- **What it does:** Tekto already tweens opacity, x, y, width, and height (180 ms, smoothstep, reduced-motion respected). Add colour (fill/color), a few named easings, and `repeat` (for a spinner) if a control needs it. Expose reduced-motion and a deterministic clock to tests.
-- **Why:** Masonry, Iced, and Makepad have richer motion. The research sessions did not fully agree (see below), so this stays small.
-- **Priority:** medium. **Size:** S–M.
-- **Crates it touches:** `tekto-tree` animation code first; split a crate only if it grows a lot. Test helpers in `tekto-test`.
-- **Design notes:** Do not build a new timeline, keyframe, or spring system unless a later widget truly needs it. Keep reduced-motion behaviour.
-- **DX fit:** No new deps. Quiet motion, no bounce. Agents can still patch style; a `transition` field is optional later.
-- **Acceptance:** A colour fade and a repeating spinner honour reduced-motion and the test clock. Existing tweens still work.
-- **Licence:** Own MIT code. Easing formulas are ordinary maths, not copied framework code.
+**Implemented:** `StyleTransition` now tweens fill and text colour in addition to opacity and bounds, takes `easing` (`smoothstep`, `linear`, `ease-in`, `ease-out`), and supports `repeat`. Repeat ping-pongs: when the last channel finishes it swaps endpoints and runs back, one cycle per `advance`, so a spinner or a breathing pulse needs no timeline. Reduced motion still snaps once and never repeats. The same fields cross the HostOp boundary: `transitionOp(id, { fill, color, easing, repeat })` in `@tektogui/core`, the QuickJS `tekto.transition` bridge, and the Rust API. Headless tests cover colour midpoints, each easing, ping-pong over several cycles, reduced motion, and bad colour or easing strings.
+
+**Remaining:** No rotation channel, so a spinner is a pulse or a back-and-forth slide rather than a rotating arc. No keyframes, springs, or timelines, and existing tweens still use the single 180 ms default. A colour fade and a repeating spinner honour reduced motion and the test clock; the desktop window still advances from its own clock.
 
 ### Native extras
 
