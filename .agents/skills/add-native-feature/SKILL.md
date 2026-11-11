@@ -192,13 +192,13 @@ That does not install an APK and does not touch the device clipboard. A live rou
 
 ## Windows open and save dialogs
 
-`Files::open_dialog` and `Files::save_dialog` on Windows call `GetOpenFileNameW` and `GetSaveFileNameW` from `comdlg32` (`src/windows_dialog.rs`). No extra crate. The struct is `OPENFILENAMEW`. Flags are `OFN_EXPLORER`, `OFN_HIDEREADONLY`, `OFN_NOCHANGEDIR`, and `OFN_PATHMUSTEXIST`. Open also sets `OFN_FILEMUSTEXIST`. Save also sets `OFN_OVERWRITEPROMPT` (same idea as zenity `--confirm-overwrite`). The filter is all files. The path buffer is 32768 UTF-16 units. A chosen file is `Ok(Some(path))` only when the path is a drive path (`C:\...`) or a UNC path (`\\server\share\...`). Cancel is `Get*FileNameW` returning false and `CommDlgExtendedError` returning 0, which is `Ok(None)`. Any other dialog error is `NativeError::Unavailable` with reason `Windows common file dialog is unavailable` (no interactive desktop, initialization failure, or a buffer the API rejects). A path that is not absolute uses reason `file dialog did not return an absolute path`. A UTF-16 sequence that is not Unicode is `NativeError::Message`. The call blocks on the thread that invokes it. It does not change the process directory. Headless and non-Windows builds do not call this API. A Windows live check opened both dialogs; cancellation and overwrite results need further investigation. Cross-check:
+`Files::open_dialog` and `Files::save_dialog` on Windows call `GetOpenFileNameW` and `GetSaveFileNameW` from `comdlg32` (`src/windows_dialog.rs`). No extra crate. The struct is `OPENFILENAMEW`. Flags are `OFN_EXPLORER`, `OFN_HIDEREADONLY`, `OFN_NOCHANGEDIR`, and `OFN_PATHMUSTEXIST`. Open also sets `OFN_FILEMUSTEXIST`. Save also sets `OFN_OVERWRITEPROMPT` (same idea as zenity `--confirm-overwrite`). The filter is all files. The path buffer is 32768 UTF-16 units. A chosen file is `Ok(Some(path))` only when the path is a drive path (`C:\...`) or a UNC path (`\\server\share\...`). Cancel is `Get*FileNameW` returning false and `CommDlgExtendedError` returning 0, which is `Ok(None)`. Any other dialog error is `NativeError::Unavailable` with reason `Windows common file dialog is unavailable` (no interactive desktop, initialization failure, or a buffer the API rejects). A path that is not absolute uses reason `file dialog did not return an absolute path`. A UTF-16 sequence that is not Unicode is `NativeError::Message`. The call blocks on the thread that invokes it. It does not change the process directory. Headless and non-Windows builds do not call this API. Windows live checks confirmed selection, cancellation, and the Save overwrite warning. Cross-check:
 
 ```bash
 cargo check --target x86_64-pc-windows-gnu -p tekto-native
 ```
 
-That command does not link or run on Windows. Issue #45 stays open until a Windows machine shows the dialog, confirms cancel, and confirms overwrite.
+That command does not link or run on Windows. The live Windows results are recorded in the Windows handoff report.
 
 ## Windows file sandbox
 
