@@ -95,7 +95,7 @@ Desktop reload rebuilds only the JS bundle and swaps it into the running QuickJS
 cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx --headless --out /tmp/notes-js.png
 ```
 
-Saving the `.tsx` prints `js reload Nms`. JS remounts from source. Unkeyed signal state resets; `createSignal(initial, { key: "unique-key" })` restores compatible JSON state on reload. `app.logs` reports restored, reset, and removed keys. Keyed values must be JSON data; duplicate keys fail the candidate reload. Failures go to stderr and `app.logs`. `POST /reload` accepts a JS bundle (or JSON `{"js":"..."}`) so a host can push over `adb forward`. On Android, `tekto dev --js examples/notes/src/app.tsx --android` builds the APK with `-F quickjs` and posts the bundle (the host CLI does not need `--features quickjs`). The default APK stays without QuickJS so nightly Android CI stays lean.
+Saving the `.tsx` prints `js reload Nms`. JS remounts from source. Unkeyed signal state resets; `createSignal(initial, { key: "unique-key" })` restores compatible JSON state on reload. `app.logs` reports restored, reset, and removed keys. Keyed values must be JSON data, including dense arrays (use `null` for an empty slot); duplicate keys fail the candidate reload. Failures go to stderr and `app.logs`. `POST /reload` accepts a JS bundle (or JSON `{"js":"..."}`) so a host can push over `adb forward`. On Android, `tekto dev --js examples/notes/src/app.tsx --android` builds the APK with `-F quickjs` and posts the bundle (the host CLI does not need `--features quickjs`). The default APK stays without QuickJS so nightly Android CI stays lean.
 
 ## Headless tests
 
