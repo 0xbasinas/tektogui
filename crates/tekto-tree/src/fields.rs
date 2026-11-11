@@ -95,6 +95,7 @@ impl Tree {
     /// Returns `Ok(false)` when focus is not a text field or nothing changed.
     pub fn set_focused_field_value(&mut self, text: &str, caret: usize) -> Result<bool, TreeError> {
         self.layout_dirty = true;
+        self.reset_caret_blink();
         let Some(id) = self.focus else {
             return Ok(false);
         };
@@ -139,6 +140,7 @@ impl Tree {
     /// preedit without inserting it.
     pub fn apply_ime(&mut self, event: ImeEvent) -> Result<bool, TreeError> {
         self.layout_dirty = true;
+        self.reset_caret_blink();
         let Some(id) = self.focus else {
             return Ok(false);
         };
@@ -208,6 +210,8 @@ impl Tree {
     }
 
     fn apply_on_field(&mut self, id: NodeId, key: FieldKey) -> Result<(), TreeError> {
+        self.layout_dirty = true;
+        self.reset_caret_blink();
         let node = self.nodes.get_mut(&id).ok_or_else(|| TreeError {
             message: format!("unknown node {id}"),
         })?;
