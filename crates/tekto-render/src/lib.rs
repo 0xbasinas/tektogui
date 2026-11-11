@@ -4,7 +4,7 @@
 //! screenshots and tests. The GPU backend is behind the `gpu` feature so
 //! everyday builds do not compile wgpu or Vello.
 
-use tekto_tree::{Color, Rect, Tree};
+use tekto_tree::{Color, NodeKind, Rect, Tree};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RenderError {
@@ -102,7 +102,14 @@ fn paint_node_opacity<R: Renderer>(
     let Some(node) = tree.get(id) else {
         return;
     };
-    let opacity = (node.opacity * parent_opacity).clamp(0.0, 1.0);
+    let opacity = (node.opacity
+        * parent_opacity
+        * if node.disabled && matches!(node.kind, NodeKind::Button | NodeKind::TextField) {
+            0.5
+        } else {
+            1.0
+        })
+    .clamp(0.0, 1.0);
     if opacity <= 0.001 {
         return;
     }

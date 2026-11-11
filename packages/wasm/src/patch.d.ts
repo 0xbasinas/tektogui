@@ -4,6 +4,7 @@ import type { TektoWasmHost } from "./index.js";
 export interface UiPatch {
   id: number;
   text?: string;
+  disabled?: boolean;
   name?: string;
   fill?: string;
   color?: string;

@@ -37,6 +37,7 @@ cargo run -p tekto-cli -- key Tab
 cargo run -p tekto-cli -- scroll 1 --by 48
 cargo run -p tekto-cli -- screenshot /tmp/shot.png
 cargo run -p tekto-cli -- patch 4 --text "Hello from a patch"
+cargo run -p tekto-cli -- patch 4 --disabled true  # button or text field
 cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0" --font-size 20 --padding 24
 # If no server is running, `screenshot` falls back to a headless Notes PNG.
 ```
@@ -64,7 +65,7 @@ curl -s -X POST http://127.0.0.1:PORT/patch \
 - `GET /inspector` — HTML page (see Browser inspector). `GET /health` returns `{"ok":true}`.
 - `GET /tree`, `GET /tree.txt`, `GET /accesskit`, `GET /screenshot`, `GET /state`, `GET /states`, `GET /logs`, `GET /components`
 - `POST /states/restore` `{"index":N}` jumps an opted-in store to a recorded frame from `GET /states`
-- `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb","fontSize":20,"padding":24,"gap":20}` — response is `{ "ok": true, "node": { ... }, "writeback": { ... } }` or an error
+- `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb","fontSize":20,"padding":24,"gap":20,"disabled":true}` — response is `{ "ok": true, "node": { ... }, "writeback": { ... } }` or an error
 - `POST /click` `{"id":1}`
 - `POST /key` `{"name":"Tab"}` presses `Tab`, `Shift+Tab`, `Enter`, `Space`, or `Backspace` on the focused node.
 - `POST /scroll` `{"id":N,"delta":N}` scrolls a scroll container by logical pixels and returns the clamped `offset`.
@@ -72,6 +73,8 @@ curl -s -X POST http://127.0.0.1:PORT/patch \
 - `POST /reload` raw JS bundle, or `{"js":"…"}`
 
 Stdio MCP (`cargo run -p tekto-cli -- mcp`) proxies these tools to the running dev server: `ui.tree`, `ui.accesskit`, `ui.screenshot`, `ui.click`, `ui.key`, `ui.scroll`, `ui.type`, `ui.patch`, `app.state`, `app.states`, `app.restore`, `app.logs`. `app.components` is the exception: the MCP server answers it locally from the bundled `components.json` and needs no running app. `GET /components` is the dev-server route for the same file, so it needs a running dev server.
+
+The `disabled` field applies only to buttons and text fields. It is a runtime-only patch; writeback reports it as skipped. The wasm `applyUiPatch` accepts the same boolean field.
 
 Live patches change the running tree immediately (no reload). If the old text or a simple style literal is unique in the app project, the same edit is written back to source; the response includes a `writeback` field (`status`, `files`, `skipped`). If the match is ambiguous, or the source uses a named constant, the runtime change stays and `writeback` explains why. Never writes outside the app project (`TEKTO_APP_ROOT`, or the folder of `tekto dev --js`). Hot reload of TS is not a substitute for `ui.patch`.
 

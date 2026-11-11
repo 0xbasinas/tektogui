@@ -56,9 +56,10 @@ pub fn route_named_key(
         NamedActionKey::Tab => (tree.traverse_focus(false), None),
         NamedActionKey::ShiftTab => (tree.traverse_focus(true), None),
         NamedActionKey::Enter | NamedActionKey::Space => {
-            let button = tree
-                .focus
-                .filter(|id| tree.get(*id).is_some_and(|n| n.kind == NodeKind::Button));
+            let button = tree.focus.filter(|id| {
+                tree.get(*id)
+                    .is_some_and(|n| n.kind == NodeKind::Button && !n.disabled)
+            });
             (false, button.filter(|_| !repeat))
         }
         NamedActionKey::Backspace => (
@@ -339,6 +340,8 @@ pub const BODY_SIZE: f32 = 20.0;
 pub struct Node {
     pub id: NodeId,
     pub kind: NodeKind,
+    #[serde(default)]
+    pub disabled: bool,
     pub name: Option<String>,
     pub text: Option<String>,
     pub fill: Option<Color>,
@@ -429,6 +432,7 @@ impl Node {
         Self {
             id,
             kind,
+            disabled: false,
             name: None,
             text: None,
             fill: None,
@@ -567,6 +571,7 @@ pub enum ImeEvent {
 /// Partial update used by live edits and by MCP `ui.patch`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NodePatch {
+    pub disabled: Option<bool>,
     pub text: Option<String>,
     pub name: Option<String>,
     pub fill: Option<String>,
@@ -840,7 +845,7 @@ impl Tree {
         let mut eligible = Vec::new();
         while let Some(id) = stack.pop() {
             if let Some(node) = self.get(id) {
-                if matches!(node.kind, NodeKind::Button | NodeKind::TextField) {
+                if !node.disabled && matches!(node.kind, NodeKind::Button | NodeKind::TextField) {
                     eligible.push(id);
                 }
                 stack.extend(node.children.iter().rev().copied());
@@ -866,6 +871,11 @@ impl Tree {
         if !self.nodes.contains_key(&id) {
             return Err(TreeError {
                 message: format!("unknown node {id}"),
+            });
+        }
+        if self.nodes[&id].disabled {
+            return Err(TreeError {
+                message: format!("node {id} is disabled"),
             });
         }
         if self.focus != Some(id) {
@@ -913,7 +923,10 @@ impl Tree {
         let Some(id) = self.focus else {
             return Ok(false);
         };
-        if self.get(id).is_some_and(|n| n.kind != NodeKind::TextField) {
+        if self
+            .get(id)
+            .is_some_and(|n| n.kind != NodeKind::TextField || n.disabled)
+        {
             return Ok(false);
         }
         if self.get(id).is_some_and(|n| !n.preedit.is_empty()) {
@@ -953,7 +966,10 @@ impl Tree {
         let Some(id) = self.focus else {
             return Ok(false);
         };
-        if self.get(id).is_some_and(|n| n.kind != NodeKind::TextField) {
+        if self
+            .get(id)
+            .is_some_and(|n| n.kind != NodeKind::TextField || n.disabled)
+        {
             return Ok(false);
         }
         // The input method owns the keys while a composition is on screen.
@@ -972,7 +988,10 @@ impl Tree {
         let Some(id) = self.focus else {
             return Ok(false);
         };
-        if self.get(id).is_none_or(|n| n.kind != NodeKind::TextField) {
+        if self
+            .get(id)
+            .is_none_or(|n| n.kind != NodeKind::TextField || n.disabled)
+        {
             return Ok(false);
         }
         let plain: String = text.chars().filter(|c| !c.is_control()).collect();
@@ -1004,7 +1023,10 @@ impl Tree {
         let Some(id) = self.focus else {
             return Ok(false);
         };
-        if self.get(id).is_some_and(|n| n.kind != NodeKind::TextField) {
+        if self
+            .get(id)
+            .is_some_and(|n| n.kind != NodeKind::TextField || n.disabled)
+        {
             return Ok(false);
         }
         self.ensure_field(id)?;
@@ -1048,6 +1070,9 @@ impl Tree {
 
     fn ensure_field(&self, id: NodeId) -> Result<(), TreeError> {
         match self.nodes.get(&id) {
+            Some(node) if node.disabled => Err(TreeError {
+                message: format!("node {id} is disabled"),
+            }),
             Some(node) if node.kind == NodeKind::TextField => Ok(()),
             Some(_) => Err(TreeError {
                 message: format!("node {id} is not a text field"),
@@ -1171,11 +1196,24 @@ impl Tree {
         Some(id)
     }
 
+    /// Disabling the focused control moves focus to the root and drops preedit.
     pub fn patch(&mut self, id: NodeId, patch: NodePatch) -> Result<(), TreeError> {
         let changed_text = patch.text.is_some();
+        let disabling = patch.disabled == Some(true);
         let node = self.nodes.get_mut(&id).ok_or_else(|| TreeError {
             message: format!("unknown node {id}"),
         })?;
+        if patch.disabled.is_some() && !matches!(node.kind, NodeKind::Button | NodeKind::TextField)
+        {
+            return Err(TreeError {
+                message: format!(
+                    "disabled is only supported on buttons and text fields (node {id})"
+                ),
+            });
+        }
+        if let Some(disabled) = patch.disabled {
+            node.disabled = disabled;
+        }
         if let Some(text) = patch.text {
             // Buttons and labels start with name == text. A text field's name
             // is the accessible label and must stay put when the value changes.
@@ -1213,6 +1251,10 @@ impl Tree {
         }
         if let Some(gap) = patch.gap {
             node.layout.gap = gap;
+        }
+        if disabling && self.focus == Some(id) {
+            self.clear_field_preedit(id);
+            self.focus = self.root;
         }
         if changed_text {
             self.emit(TreeEvent::Changed(id));
@@ -1260,6 +1302,11 @@ impl Tree {
         } else {
             format!("\"{}\"", escape_quotes(&node.display_name()))
         };
+        let label = if node.disabled {
+            format!("{label} disabled=true")
+        } else {
+            label
+        };
         let b = node.bounds;
         out.push_str(&format!(
             "{indent}- {}#{} {} [{:.0},{:.0} {:.0}x{:.0}]\n",
@@ -1282,6 +1329,7 @@ impl Tree {
         Some(NodeDump {
             id: node.id.raw(),
             kind: node.kind,
+            disabled: node.disabled,
             name: node.name.clone(),
             text: node.text.clone(),
             fill: node.fill.map(|c| c.to_hex()),
@@ -1314,6 +1362,7 @@ impl Tree {
         out.push(NodeDump {
             id: node.id.raw(),
             kind: node.kind,
+            disabled: node.disabled,
             name: node.name.clone(),
             text: node.text.clone(),
             fill: node.fill.map(|c| c.to_hex()),
@@ -1379,6 +1428,8 @@ pub struct TreeDump {
 pub struct NodeDump {
     pub id: u64,
     pub kind: NodeKind,
+    #[serde(default)]
+    pub disabled: bool,
     pub name: Option<String>,
     pub text: Option<String>,
     pub fill: Option<String>,

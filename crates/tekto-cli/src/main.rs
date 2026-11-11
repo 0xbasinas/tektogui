@@ -79,6 +79,8 @@ enum Command {
         #[arg(long)]
         text: Option<String>,
         #[arg(long)]
+        disabled: Option<bool>,
+        #[arg(long)]
         fill: Option<String>,
         #[arg(long)]
         color: Option<String>,
@@ -268,6 +270,7 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
         Command::Patch {
             id,
             text,
+            disabled,
             fill,
             color,
             font_size,
@@ -278,6 +281,9 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             let mut v = serde_json::json!({"id": id});
             if let Some(t) = text {
                 v["text"] = serde_json::Value::String(t);
+            }
+            if let Some(disabled) = disabled {
+                v["disabled"] = serde_json::json!(disabled);
             }
             if let Some(f) = fill {
                 v["fill"] = serde_json::Value::String(f);
