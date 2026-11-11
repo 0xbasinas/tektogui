@@ -413,6 +413,40 @@ mod tests {
         owner.shutdown().unwrap();
     }
     #[test]
+    fn bundled_counter_example_updates_existing_node() {
+        if tekto_js::which_esbuild().is_none() {
+            assert_ne!(
+                std::env::var("TEKTO_REQUIRE_ESBUILD").as_deref(),
+                Ok("1"),
+                "esbuild is required"
+            );
+            return;
+        }
+        let entry =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/counter/app.tsx");
+        let bundle = tekto_js::bundle(&entry).expect("bundle counter example");
+        let runtime = crate::AppRuntime::new(Tree::new(), "counter");
+        let (handle, viewport) = crate::create_handle(&runtime, 640, 400);
+        let owner = crate::install_js_runtime(&handle, &viewport);
+        owner.mount(&bundle).expect("mount counter example");
+        let label = NodeId::from_raw(3);
+        let button = NodeId::from_raw(4);
+        {
+            let tree = handle.tree();
+            assert_eq!(tree.get(label).unwrap().text.as_deref(), Some("0"));
+            assert_eq!(tree.get(button).unwrap().name.as_deref(), Some("Increment"));
+        }
+        for expected in ["1", "2"] {
+            handle.click(button).expect("click Increment");
+            assert_eq!(
+                handle.tree().get(label).unwrap().text.as_deref(),
+                Some(expected)
+            );
+        }
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
     fn desktop_routes_deliver_counter_once_and_order_lifecycle() {
         use tekto_platform::key_route::{deliver_key, ElementState, Key, ModifiersState, NamedKey};
         use tekto_platform::pointer_route::{deliver_pointer, FingerPhase, PointerSession};
