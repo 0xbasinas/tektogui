@@ -83,7 +83,9 @@ cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx
 cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx
 ```
 
-In TSX, reactive text is `text={() => signal()}` and button callbacks are `onClick={() => ...}`. This is desktop QuickJS only. See `docs/tsx-events.md` for syntax and limits (no callback timeout, no raw concurrent tree mutation, no reentry of gated handle actions).
+In TSX, reactive text is `text={() => signal()}` and button callbacks are `onClick={() => ...}`. This is desktop QuickJS only. See `docs/tsx-events.md` for syntax and limits (no raw concurrent tree mutation, no reentry of gated handle actions).
+
+Each host-backed JS call (evaluation, click callback, forget, disposal) has a fixed one-second budget in `crates/tekto-js/src/engine.rs`. There is no setting to change it. QuickJS checks the deadline periodically and interrupts JS, so a runaway loop returns a budget error (`QuickJS execution budget exceeded (1 second)`); click failures are also logged (`GET /logs` / `app.logs`). Native Rust calls and lock waits are not generally preemptible, so this is not a strict wall-clock limit. A failed reload keeps the old session. An interrupted callback keeps the session, but changes it already made are not rolled back. Interrupted cleanup can leave cleanups unfinished, and a retired session drops the rest.
 
 The process prints `js bundle Nms` on the first load and `js reload Nms` after a save (bundle + eval + swap). The Rust window and dev server stay up; the JS side remounts from source, so in-memory signal state resets. A failed rebuild prints a short error to stderr and `GET /logs` / `app.logs`. `--no-watch` loads once.
 
