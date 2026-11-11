@@ -41,6 +41,7 @@ pub struct AccessKitDump {
 pub struct AccessKitNodeDump {
     pub id: u64,
     pub role: String,
+    pub disabled: bool,
     pub label: Option<String>,
     pub value: Option<String>,
     pub bounds: [f64; 4],
@@ -56,6 +57,7 @@ pub fn dump(scene: &SceneTree) -> Option<AccessKitDump> {
         .map(|(id, node)| AccessKitNodeDump {
             id: id.0,
             role: format!("{:?}", node.role()),
+            disabled: node.is_disabled(),
             label: node.label().map(|s| s.to_string()),
             value: node.value().map(|s| s.to_string()),
             bounds: node.bounds().map_or([0.0; 4], |r| [r.x0, r.y0, r.x1, r.y1]),
@@ -73,6 +75,9 @@ fn collect(scene: &SceneTree, id: tekto_tree::NodeId, out: &mut Vec<(NodeId, Nod
         return;
     };
     let mut node = Node::new(role_for(src.kind));
+    if src.disabled {
+        node.set_disabled();
+    }
     if src.kind == NodeKind::TextField {
         if let Some(name) = src.name.as_ref().filter(|s| !s.is_empty()) {
             node.set_label(name.clone());
