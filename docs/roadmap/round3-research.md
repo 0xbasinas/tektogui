@@ -255,9 +255,13 @@ Edge resizing is manual for the undecorated window: a 6 px band on each edge (co
 
 ## Rendering performance
 
-Animations repaint on the window clock (16 ms). A frame used to re-run Taffy and Parley every time even when only a colour or opacity tween was running. `Tree` now carries a `layout_dirty` flag: structure, geometry, text, focus, scroll, overlays and tab binding mark it; `get_mut` marks it for app and widget edits; a layout pass clears it; and a position or size tween marks it from `advance`. The desktop loop lays out only when the viewport changed or the flag is set, so a colour or opacity tween paints without relayout. Android still lays out every frame because insets can change. The demo can also run on the optional GPU renderer: `cargo run -p round3-demo --features gpu`.
+Animations repaint on the window clock (16 ms). A frame used to re-run Taffy and Parley every time even when only a colour or opacity tween was running. `Tree` now carries a `layout_dirty` flag: structure, geometry, text, focus, scroll, overlays and tab binding mark it; `get_mut` marks it for app and widget edits; a layout pass clears it; and a position or size tween marks it from `advance`. The desktop loop lays out only when the viewport changed or the flag is set, so a colour or opacity tween paints without relayout. Android still lays out every frame because insets can change.
 
-**Remaining:** No frame-time instrumentation or benchmark number is committed; the improvement was checked by eye and by tests that assert which changes request layout. Text shaping is still redone on layout, and the whole scene is repainted each animation frame (no partial damage region).
+The GPU painter now presents **straight to a wgpu window surface** (`GpuRenderer::new_for_window` and `present_window`), sharing the Vello device and queue. The old path rendered Vello to an offscreen texture, copied it back to the CPU, converted it to softbuffer pixels, and blitted through GDI; measured frame time on the round 3 demo was about 33 ms, of which roughly 29 ms was that present. With the surface path it is about 16 ms and the softbuffer readback remains only as a fallback when a surface cannot be created. A window resize applies at most one rect per painted frame (`ResizeSession::pending`), so input events cannot queue up faster than the window can present.
+
+`TEKTO_FRAME_LOG=1` on a debug build prints one line per frame with layout, paint, and present timings.
+
+**Remaining:** Text shaping still runs whenever layout does, and a resize frame that changes the wrap width can spend 40–60 ms in layout, which is the remaining source of spikes. There is no partial damage region: each frame repaints the whole scene.
 
 ## Not doing
 

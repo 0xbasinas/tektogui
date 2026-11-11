@@ -54,6 +54,8 @@ struct ResizeSession {
     scale: f64,
     /// Last rect sent to the OS, so a still pointer sends nothing.
     last: (i32, i32, u32, u32),
+    /// Newest rect waiting for the next frame.
+    pending: Option<(i32, i32, u32, u32)>,
 }
 
 /// Distance from an edge that starts a resize, in logical pixels.
@@ -68,9 +70,11 @@ struct State {
     /// Dropped before [`State::window`] so the Android `ANativeWindow` is
     /// released while the winit window handle is still alive.
     surface: Surface<Rc<Window>, Rc<Window>>,
+    /// Dropped before `window`: a wgpu surface created from the HWND must
+    /// go away while the window still exists.
+    renderer: Painter,
     window: Rc<Window>,
     epoch: crate::lifecycle::SurfaceEpoch,
-    renderer: Painter,
     tree: Arc<Mutex<Tree>>,
     clear: tekto_tree::Color,
     /// Mouse and touch share one gesture. See [`crate::pointer_route`].
@@ -143,7 +147,7 @@ impl ApplicationHandler<AppEvent> for App {
         let context = Context::new(window.clone()).expect("softbuffer context");
         let surface = Surface::new(&context, window.clone()).expect("softbuffer surface");
         let size = window.inner_size();
-        let renderer = Painter::new(size.width.max(1), size.height.max(1));
+        let renderer = Painter::new(&window, size.width.max(1), size.height.max(1));
         let epoch = crate::lifecycle::begin_surface();
         self.state = Some(State {
             surface,
@@ -362,7 +366,10 @@ impl ApplicationHandler<AppEvent> for App {
                             return;
                         }
                     } else {
-                        if state.resize.take().is_some() {
+                        if let Some(session) = state.resize.take() {
+                            if let Some(rect) = session.pending {
+                                set_window_rect(&state.window, rect.0, rect.1, rect.2, rect.3);
+                            }
                             release_mouse();
                             return;
                         }
@@ -497,11 +504,25 @@ enum Painter {
 }
 
 impl Painter {
-    fn new(width: u32, height: u32) -> Self {
+    fn new(window: &Window, width: u32, height: u32) -> Self {
+        #[cfg(not(feature = "gpu"))]
+        let _ = window;
         if crate::gpu_policy::wants_gpu_paint() {
             #[cfg(feature = "gpu")]
             {
-                match tekto_render::GpuRenderer::new(width, height) {
+                use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+                let direct = match (window.window_handle(), window.display_handle()) {
+                    (Ok(window_handle), Ok(display_handle)) => {
+                        tekto_render::GpuRenderer::new_for_window(
+                            width,
+                            height,
+                            window_handle.as_raw(),
+                            display_handle.as_raw(),
+                        )
+                    }
+                    _ => tekto_render::GpuRenderer::new(width, height),
+                };
+                match direct {
                     Ok(renderer) => {
                         eprintln!(
                             "tekto: painting with wgpu / Vello ({})",
@@ -539,7 +560,11 @@ impl Painter {
         match self {
             Painter::Cpu(renderer) => renderer.resize(width, height),
             #[cfg(feature = "gpu")]
-            Painter::Gpu(renderer) => renderer.resize(width, height),
+            Painter::Gpu(renderer) => {
+                renderer.resize(width, height)?;
+                renderer.configure_surface(width, height);
+                Ok(())
+            }
         }
     }
 
@@ -564,6 +589,15 @@ impl Painter {
             Painter::Cpu(renderer) => renderer.rgba8(),
             #[cfg(feature = "gpu")]
             Painter::Gpu(renderer) => renderer.rgba8(),
+        }
+    }
+
+    /// Present straight to the window surface when the GPU path has one.
+    fn present_window(&mut self) -> Option<Result<bool, tekto_render::RenderError>> {
+        match self {
+            Painter::Cpu(_) => None,
+            #[cfg(feature = "gpu")]
+            Painter::Gpu(renderer) => Some(renderer.present_window()),
         }
     }
 }
@@ -635,7 +669,19 @@ fn redraw(state: &mut State) {
     if !crate::lifecycle::may_present(state.epoch) {
         return;
     }
+    let frame_start = Instant::now();
+    // One window rect per painted frame keeps geometry and content in step.
+    if let Some(session) = state.resize {
+        if let Some(rect) = session.pending {
+            set_window_rect(&state.window, rect.0, rect.1, rect.2, rect.3);
+            if let Some(session) = state.resize.as_mut() {
+                session.last = rect;
+                session.pending = None;
+            }
+        }
+    }
     relayout_window(state);
+    let layout_done = Instant::now();
     if !crate::lifecycle::may_present(state.epoch) {
         return;
     }
@@ -647,6 +693,26 @@ fn redraw(state: &mut State) {
             #[cfg(feature = "a11y-os")]
             &mut state.adapter,
         );
+    }
+    let paint_done = Instant::now();
+    match state.renderer.present_window() {
+        Some(Ok(true)) => {
+            if frame_log_enabled() {
+                eprintln!(
+                    "tekto frame {:.2} ms (layout {:.2}, paint {:.2}, gpu present {:.2})",
+                    frame_start.elapsed().as_secs_f64() * 1000.0,
+                    (layout_done - frame_start).as_secs_f64() * 1000.0,
+                    (paint_done - layout_done).as_secs_f64() * 1000.0,
+                    (Instant::now() - paint_done).as_secs_f64() * 1000.0
+                );
+            }
+            sync_ime(state);
+            return;
+        }
+        Some(Ok(false)) | None => {}
+        Some(Err(err)) => {
+            eprintln!("tekto: GPU present failed ({err}); using softbuffer");
+        }
     }
     let rgba = match state.renderer.rgba8() {
         Ok(pixels) => pixels,
@@ -686,22 +752,52 @@ fn redraw(state: &mut State) {
     let Some(height) = NonZeroU32::new(ph) else {
         return;
     };
+    let resize_start = Instant::now();
     let _ = state.surface.resize(width, height);
+    let resize_done = Instant::now();
     match state.surface.buffer_mut() {
         Ok(mut buf) => {
             let pixels = rgba_to_u32_softbuffer(&rgba);
+            let convert_done = Instant::now();
             for (dst, src) in buf.iter_mut().zip(pixels.iter()) {
                 *dst = *src;
             }
+            let copy_done = Instant::now();
             // present() fails if the Android window was destroyed after
             // the epoch check. Ignore that error; do not panic.
             let _ = buf.present();
+            let present_done = Instant::now();
+            if frame_log_enabled() {
+                eprintln!(
+                    "tekto present: surface {:.2} ms, convert {:.2} ms, blit {:.2} ms, present {:.2} ms",
+                    (resize_done - resize_start).as_secs_f64() * 1000.0,
+                    (convert_done - resize_done).as_secs_f64() * 1000.0,
+                    (copy_done - convert_done).as_secs_f64() * 1000.0,
+                    (present_done - copy_done).as_secs_f64() * 1000.0
+                );
+            }
         }
         Err(err) => {
             eprintln!("tekto: window surface unavailable ({err}); not presenting");
         }
     }
+    if frame_log_enabled() {
+        eprintln!(
+            "tekto frame {:.2} ms (layout {:.2}, paint {:.2}, present {:.2})",
+            frame_start.elapsed().as_secs_f64() * 1000.0,
+            (layout_done - frame_start).as_secs_f64() * 1000.0,
+            (paint_done - layout_done).as_secs_f64() * 1000.0,
+            (Instant::now() - paint_done).as_secs_f64() * 1000.0
+        );
+    }
     sync_ime(state);
+}
+
+/// `TEKTO_FRAME_LOG=1` prints one line per painted frame (debug builds).
+fn frame_log_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| cfg!(debug_assertions) && std::env::var_os("TEKTO_FRAME_LOG").is_some())
 }
 
 #[cfg(all(feature = "gpu", target_os = "android"))]
@@ -978,6 +1074,7 @@ fn begin_resize(state: &mut State, direction: ResizeDirection, screen: (f64, f64
         size: (size.width, size.height),
         scale: state.window.scale_factor(),
         last: (origin.x, origin.y, size.width, size.height),
+        pending: None,
     });
 }
 
@@ -1043,13 +1140,15 @@ fn resize_follow(state: &mut State, screen: (f64, f64)) {
         width.round() as u32,
         height.round() as u32,
     );
-    if rect == session.last {
+    if rect == session.last || session.pending == Some(rect) {
         return;
     }
+    // Hold the newest rect for the next frame instead of resizing the window
+    // more often than it can paint; that backlog is what felt laggy.
     if let Some(session) = state.resize.as_mut() {
-        session.last = rect;
+        session.pending = Some(rect);
     }
-    set_window_rect(&state.window, rect.0, rect.1, rect.2, rect.3);
+    state.window.request_redraw();
 }
 
 /// Snap a dragged window to halves, quarters, or maximised at a monitor edge.
