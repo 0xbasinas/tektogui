@@ -29,7 +29,6 @@ pub struct PointerSession {
     pub pointer_down: bool,
     press_origin: Option<(f32, f32)>,
     drag_scroll: Option<NodeId>,
-    capture: Option<NodeId>,
     text_capture: Option<(NodeId, usize)>,
     dragged: bool,
     pub active_touch: Option<u64>,
@@ -146,20 +145,22 @@ pub fn apply_pointer_op(
         PointerOp::Begin { x, y } => {
             pointer.pointer_down = true;
             pointer.cursor = Some((x, y));
-            pointer.capture = tree.hit(x, y).filter(|id| {
+            let slider = tree.hit(x, y).filter(|id| {
                 tree.get(*id)
                     .is_some_and(|n| n.kind == tekto_tree::NodeKind::Slider && !n.disabled)
             });
-            if let Some(id) = pointer.capture {
-                let focus_changed = tree.focus != Some(id);
-                let _ = tree.set_focus(id);
-                let changed = set_slider_from_x(tree, id, x) || focus_changed;
-                pointer.press_origin = Some((x, y));
-                pointer.dragged = false;
-                return PointerEffect {
-                    redraw: changed,
-                    click_at: None,
-                };
+            if let Some(id) = slider {
+                if tree.capture_pointer(id).is_ok() {
+                    let focus_changed = tree.focus != Some(id);
+                    let _ = tree.set_focus(id);
+                    let changed = set_slider_from_x(tree, id, x) || focus_changed;
+                    pointer.press_origin = Some((x, y));
+                    pointer.dragged = false;
+                    return PointerEffect {
+                        redraw: changed,
+                        click_at: None,
+                    };
+                }
             }
             if pointer.active_touch.is_none() {
                 if let Some(id) = tree.hit(x, y).filter(|id| {
@@ -191,12 +192,12 @@ pub fn apply_pointer_op(
         }
         PointerOp::Drag { x, y } => {
             pointer.cursor = Some((x, y));
-            if let Some(id) = pointer.capture {
+            if let Some(id) = tree.pointer_capture() {
                 if tree
                     .get(id)
                     .is_none_or(|n| n.disabled || n.kind != tekto_tree::NodeKind::Slider)
                 {
-                    pointer.capture = None;
+                    tree.release_pointer();
                     pointer.dragged = true;
                     return PointerEffect::quiet();
                 }
@@ -240,7 +241,7 @@ pub fn apply_pointer_op(
         }
         PointerOp::End { commit } => {
             let was_down = pointer.pointer_down;
-            let captured = pointer.capture.take().is_some();
+            let captured = tree.release_pointer().is_some();
             pointer.text_capture = None;
             pointer.pointer_down = false;
             pointer.drag_scroll = None;
@@ -392,6 +393,7 @@ mod tests {
             PointerOp::Begin { x: 20.0, y: 30.0 },
             0.0,
         );
+        assert_eq!(tree.pointer_capture(), Some(slider));
         apply_pointer_op(
             &mut pointer,
             &mut tree,
@@ -407,7 +409,7 @@ mod tests {
             20.0,
         );
         assert!(end.click_at.is_none());
-        assert!(pointer.capture.is_none());
+        assert!(tree.pointer_capture().is_none());
         apply_pointer_op(
             &mut pointer,
             &mut tree,
@@ -415,6 +417,7 @@ mod tests {
             30.0,
         );
         tree.remove(slider).unwrap();
+        assert_eq!(tree.pointer_capture(), None);
         apply_pointer_op(
             &mut pointer,
             &mut tree,
