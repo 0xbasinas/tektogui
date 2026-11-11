@@ -22,6 +22,7 @@ export function hostFromExports(exports) {
     memory,
     tekto_alloc: alloc,
     tekto_apply_ops: applyOpsExport,
+    tekto_set_fallback_font: setFallbackFontExport,
     tekto_render_png: renderExport,
     tekto_reset: resetExport,
     tekto_out_ptr: outPtr,
@@ -31,6 +32,7 @@ export function hostFromExports(exports) {
     !memory ||
     typeof alloc !== "function" ||
     typeof applyOpsExport !== "function" ||
+    typeof setFallbackFontExport !== "function" ||
     typeof renderExport !== "function"
   ) {
     throw new Error("tekto wasm exports are missing (rebuild tekto-wasm)");
@@ -51,6 +53,17 @@ export function hostFromExports(exports) {
   return {
     /** Apply a HostOp JSON array. Returns created ids. */
     applyOps,
+    /** Set a font or collection before text initialization. */
+    setFallbackFont(bytes) {
+      if (!(bytes instanceof Uint8Array)) throw new TypeError("font bytes must be a Uint8Array");
+      // alloc may grow memory and detach a view into the module's memory.
+      const copy = new Uint8Array(bytes);
+      const ptr = alloc(copy.length);
+      new Uint8Array(memory.buffer).set(copy, ptr);
+      setFallbackFontExport(ptr, copy.length);
+      const body = JSON.parse(textDecoder.decode(readOut(memory, outPtr, outLen)));
+      if (!body.ok) throw new Error(body.error || "setting fallback font failed");
+    },
     /** Drop the scene. The next create returns id 1. */
     reset() {
       resetExport();
