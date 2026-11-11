@@ -153,17 +153,26 @@ impl ApplicationHandler<AppEvent> for App {
             crate::expire_ime_echo(&mut state.last_ime_commit);
             sync_ime(state);
         }
-        let running = self
+        let (running, next_blink) = self
             .state
             .as_ref()
             .and_then(|state| state.tree.lock().ok())
-            .is_some_and(|tree| tree.animations_running());
+            .map(|tree| (tree.animations_running(), tree.next_caret_toggle_ms()))
+            .unwrap_or((false, None));
         if running {
             if let Some(state) = self.state.as_mut() {
                 state.window.request_redraw();
             }
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + Duration::from_millis(16),
+            ));
+        } else if let Some(ms) = next_blink {
+            // Only the caret has to change; wake at the next on/off edge.
+            if let Some(state) = self.state.as_mut() {
+                state.window.request_redraw();
+            }
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(ms.max(1.0).round() as u64),
             ));
         } else {
             let field_focused = self.state.as_ref().is_some_and(|state| {

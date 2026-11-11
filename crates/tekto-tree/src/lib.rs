@@ -1055,6 +1055,8 @@ pub struct Tree {
     /// Set when a change may affect layout. The window skips layout while
     /// only paint properties (colour, opacity) animate.
     pub(crate) layout_dirty: bool,
+    /// Clock value when the caret was last moved or edited, for blink reset.
+    pub(crate) caret_origin_ms: f64,
 }
 
 impl Default for Tree {
@@ -1083,6 +1085,7 @@ impl Tree {
             flings: Vec::new(),
             tokens: Tokens::default(),
             layout_dirty: true,
+            caret_origin_ms: 0.0,
         }
     }
 
@@ -1142,6 +1145,47 @@ impl Tree {
     /// Called by the layout pass once bounds are written.
     pub fn clear_layout_dirty(&mut self) {
         self.layout_dirty = false;
+    }
+
+    /// Half-period of the caret blink, in milliseconds.
+    pub const CARET_BLINK_MS: f64 = 530.0;
+
+    /// Whether the caret should be painted on this frame.
+    pub fn caret_visible(&self) -> bool {
+        if !self.caret_blinking() {
+            return false;
+        }
+        let elapsed = (self.time_ms - self.caret_origin_ms).max(0.0);
+        ((elapsed / Self::CARET_BLINK_MS).floor() as u64).is_multiple_of(2)
+    }
+
+    /// A focused, enabled text field with no composition is blinking.
+    pub fn caret_blinking(&self) -> bool {
+        self.focus.is_some_and(|id| {
+            self.get(id).is_some_and(|node| {
+                node.kind == NodeKind::TextField && !node.disabled && node.preedit.is_empty()
+            })
+        })
+    }
+
+    /// Milliseconds until the caret should switch on or off, if it blinks.
+    pub fn next_caret_toggle_ms(&self) -> Option<f64> {
+        if !self.caret_blinking() {
+            return None;
+        }
+        let elapsed = (self.time_ms - self.caret_origin_ms).max(0.0);
+        let period = 2.0 * Self::CARET_BLINK_MS;
+        let phase = elapsed % period;
+        Some(if phase < Self::CARET_BLINK_MS {
+            Self::CARET_BLINK_MS - phase
+        } else {
+            period - phase
+        })
+    }
+
+    /// Show the caret solid and restart the blink from now.
+    pub fn reset_caret_blink(&mut self) {
+        self.caret_origin_ms = self.time_ms;
     }
 
     pub fn ids(&self) -> impl Iterator<Item = NodeId> + '_ {
@@ -1589,6 +1633,7 @@ impl Tree {
             }
         }
         self.focus = Some(id);
+        self.reset_caret_blink();
         Ok(())
     }
 

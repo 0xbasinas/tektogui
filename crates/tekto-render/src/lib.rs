@@ -482,6 +482,7 @@ fn paint_node_opacity<R: Renderer>(
     }
     if node.kind == tekto_tree::NodeKind::TextField
         && tree.focus == Some(id)
+        && tree.caret_visible()
         && node.composed_caret().is_some()
     {
         let inset = node.layout.padding;
