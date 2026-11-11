@@ -52,6 +52,7 @@ Tools in the first slice:
 | `ui.accesskit` | Dump AccessKit roles, labels, bounds, and focus (same ids) |
 | `ui.screenshot` | CPU-rendered PNG |
 | `ui.click` | Click a node id (focus + last_click; a real window click uses the same hit test) |
+| `ui.key` | Press `Tab`, `Shift+Tab`, `Enter`, `Space`, or `Backspace` on the focused node (`{"name":"Tab"}`). Also available as `POST /key` and `tekto key Tab` |
 | `ui.type` | Insert plain characters at the caret of a text field and focus it. Not an IME |
 | `ui.patch` | Live-edit text, name, fill, color, or fontSize on a running node. Returns `{ ok, node }`. |
 | `app.state` | Focus and last click as JSON |
@@ -66,7 +67,7 @@ Live patches change the running tree immediately and do not require a reload. `P
 
 A list (`kind` `list`) is a column of `list_item` rows. Each row's id is stable and is the AccessKit `ListItem` id. The list id is the AccessKit `List`. A tall list from `tekto::list` has a `scroll` parent; a short one does not. After layout, a scrolling list keeps only the visible rows plus 64px overscan as children. The window is the list's own position in the scroll, so padding and earlier siblings count. Rows outside that window are not painted. Their ids still exist until the list is removed or the row is moved with `append`. Scroll height stays the full stack.
 
-A text field (`kind` `text_field`) stores its committed value in `text` and its accessible label in `name`. `ui.patch` with `text` replaces the value, clears any preedit, and leaves `name` alone. `ui.type` inserts plain characters at the caret (control characters are skipped), drops a preedit without committing it, and focuses that field. Backspace is a desktop key on the focused field, not part of `ui.type`. AccessKit role is `TextInput`, with the same stable id and label `name`. The AccessKit value is the committed text plus the current preedit, if the desktop IME is composing.
+A text field (`kind` `text_field`) stores its committed value in `text` and its accessible label in `name`. `ui.patch` with `text` replaces the value, clears any preedit, and leaves `name` alone. `ui.type` inserts plain characters at the caret (control characters are skipped), drops a preedit without committing it, and focuses that field. Use `ui.key` with `Backspace` to edit the focused field. AccessKit role is `TextInput`, with the same stable id and label `name`. The AccessKit value is the committed text plus the current preedit, if the desktop IME is composing.
 
 The pretty tree shows both, for example `text_field#2 name="Title" value="Hello"`. Strings use Rust debug escaping; a missing name is `null`, and a missing value is shown as `""`. Each string is limited to its first 120 Unicode scalar values, followed by ` (truncated)` outside the quotes when longer. The structured dump retains the full name and committed value. The pretty value excludes IME preedit, like the structured dump.
 

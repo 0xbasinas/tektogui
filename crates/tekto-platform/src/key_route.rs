@@ -1,4 +1,4 @@
-use tekto_tree::{FieldKey, NodeId, NodeKind, Tree};
+use tekto_tree::{route_named_key, NamedActionKey, NodeId, Tree};
 pub use winit::event::ElementState;
 pub use winit::keyboard::{Key, ModifiersState, NamedKey};
 
@@ -16,26 +16,37 @@ pub fn route_key(
     }
     let chord = mods.control_key() || mods.alt_key() || mods.super_key();
     if !chord && *key == Key::Named(NamedKey::Tab) {
-        return (tree.traverse_focus(mods.shift_key()), None);
+        return route_named_key(
+            tree,
+            if mods.shift_key() {
+                NamedActionKey::ShiftTab
+            } else {
+                NamedActionKey::Tab
+            },
+            repeat,
+        );
     }
-    let button = tree
-        .focus
-        .filter(|id| tree.get(*id).is_some_and(|n| n.kind == NodeKind::Button));
     if !chord
         && (key == &Key::Named(NamedKey::Enter)
             || key == &Key::Named(NamedKey::Space)
             || matches!(key, Key::Character(value) if value == " "))
     {
-        if let Some(id) = button {
-            return (false, (!repeat).then_some(id));
+        let action = if *key == Key::Named(NamedKey::Enter) {
+            NamedActionKey::Enter
+        } else {
+            NamedActionKey::Space
+        };
+        let result = route_named_key(tree, action, repeat);
+        if tree.focus.is_some_and(|id| {
+            tree.get(id)
+                .is_some_and(|n| n.kind == tekto_tree::NodeKind::Button)
+        }) {
+            return result;
         }
     }
     if *key == Key::Named(NamedKey::Backspace) {
         *last_ime_commit = None;
-        return (
-            tree.apply_field_key(FieldKey::Backspace).unwrap_or(false),
-            None,
-        );
+        return route_named_key(tree, NamedActionKey::Backspace, repeat);
     }
     if chord {
         return (false, None);
@@ -66,7 +77,7 @@ pub fn deliver_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tekto_tree::ImeEvent;
+    use tekto_tree::{ImeEvent, NodeKind};
 
     #[test]
     fn routing_focus_activation_and_ime() {
