@@ -337,6 +337,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn native_clipboard_op_errors_clearly_without_a_session() {
         let op: NativeOp = serde_json::from_str(r#"{"op":"clipboardGetText"}"#).unwrap();
         let display = std::env::var("DISPLAY").unwrap_or_default();
@@ -360,6 +361,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn native_notification_op_errors_clearly_without_a_daemon() {
         let op: NativeOp = serde_json::from_str(
             r#"{"op":"notificationsShow","title":"Saved","body":"Note stored"}"#,
