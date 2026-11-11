@@ -282,6 +282,7 @@ mod tests {
                 last_writeback: Mutex::new(None),
                 action_gate: Arc::new(Mutex::new(())),
                 click_js: Mutex::new(None),
+                input_js: Mutex::new(None),
                 history: Mutex::new(None),
             };
             let mut pointer = PointerSession::default();
