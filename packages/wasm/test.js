@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { renderToOps } from "../jsx-runtime/src/index.js";
 import { Notes } from "../jsx-runtime/notes-app.js";
-import { blitPng, decodePng, resizeCanvas } from "./src/canvas.js";
+import { attachCanvasInput, blitPng, decodePng, resizeCanvas } from "./src/canvas.js";
 import { choosePaintBackend, detectWebGl2, detectWebGpu, paintPreferred } from "./src/gpu.js";
 import { connectWasm, hostFromExports } from "./src/index.js";
 import { wasmPath as findWasmPath } from "./src/wasm-path.js";
@@ -88,7 +88,7 @@ test("font host copies aliased bytes across memory growth and reports errors", (
       seen = Array.from(new Uint8Array(memory.buffer, ptr, len));
       new Uint8Array(memory.buffer, 200, output.length).set(output);
     },
-    tekto_apply_ops() {}, tekto_render_png() {}, tekto_reset() {},
+    tekto_apply_ops() {}, tekto_render_png() {}, tekto_click_at() {}, tekto_scroll_at() {}, tekto_reset() {},
     tekto_out_ptr() { return 200; }, tekto_out_len() { return output.length; },
   };
   const host = hostFromExports(exports);
@@ -473,3 +473,47 @@ const PNG_1X1 = new Uint8Array([
   0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0, 5, 0, 1,
   255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ]);
+
+
+test("canvas input scales coordinates, wheel units and cleans up", () => {
+  const listeners = new Map();
+  const canvas = { width: 400, height: 200,
+    getBoundingClientRect: () => ({ left: 10, top: 20, width: 200, height: 100 }),
+    addEventListener: (name, fn) => listeners.set(name, fn),
+    removeEventListener: (name, fn) => { if (listeners.get(name) === fn) listeners.delete(name); },
+  };
+  const calls = [];
+  const host = { clickAt: (...args) => (calls.push(args), 2), scrollAt: (...args) => (calls.push(args), 0) };
+  let paints = 0, prevented = 0;
+  const dispose = attachCanvasInput(host, canvas, () => paints++);
+  listeners.get("click")({ button: 0, clientX: 60, clientY: 45 });
+  for (const [deltaMode, deltaY] of [[0, 5], [1, 2], [2, 1]]) {
+    listeners.get("wheel")({ clientX: 60, clientY: 45, deltaMode, deltaY, preventDefault: () => prevented++ });
+  }
+  assert.deepEqual(calls, [[400, 200, 100, 50], [400, 200, 100, 50, 10], [400, 200, 100, 50, 96], [400, 200, 100, 50, 200]]);
+  canvas.width = 200; canvas.height = 100;
+  listeners.get("click")({ button: 0, clientX: 60, clientY: 45 });
+  assert.deepEqual(calls.at(-1), [200, 100, 50, 25]);
+  assert.equal(paints, 5); assert.equal(prevented, 3);
+  dispose(); assert.equal(listeners.size, 0);
+});
+
+test("wasm input hits and scrolls the rendered tree", async (t) => {
+  if (!requireOrSkip(t, existsSync(wasmPath), `no wasm module at ${wasmPath}`)) return;
+  const host = await connectWasm(readFileSync(wasmPath));
+  const button = host.create("button");
+  host.setProp(button, "width", "100"); host.setProp(button, "height", "40");
+  host.renderPng(100, 80);
+  assert.equal(host.clickAt(100, 80, 10, 10), button);
+  host.reset();
+  const scroll = host.create("scroll");
+  host.setProp(scroll, "width", "100"); host.setProp(scroll, "height", "80");
+  const child = host.create("rect");
+  host.setProp(child, "width", "100"); host.setProp(child, "height", "300");
+  host.append(scroll, child);
+  host.renderPng(100, 80);
+  assert.equal(host.scrollAt(100, 80, 10, 10, 30), 30);
+  host.renderPng(100, 80);
+  assert.equal(host.scrollAt(100, 80, 10, 10, 10000), 220);
+  assert.equal(host.scrollAt(100, 80, 10, 10, -10000), 0);
+});

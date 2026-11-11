@@ -47,3 +47,17 @@ export function resizeCanvas(
   width: number,
   height: number,
 ): Promise<Uint8Array>;
+
+/** Structural input surface used by host pages. */
+export interface InputCanvas extends PixelCanvas {
+  getBoundingClientRect(): { left: number; top: number; width: number; height: number };
+  addEventListener(type: string, listener: (event: any) => void, options?: { passive: boolean }): void;
+  removeEventListener(type: string, listener: (event: any) => void): void;
+}
+
+/** Attach input listeners; the returned function removes them. */
+export function attachCanvasInput(
+  host: Pick<TektoWasmHost, "renderPng" | "clickAt" | "scrollAt">,
+  canvas: InputCanvas,
+  repaint?: () => void | Promise<unknown>,
+): () => void;

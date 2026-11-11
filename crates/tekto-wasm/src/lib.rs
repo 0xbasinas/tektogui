@@ -52,6 +52,30 @@ pub fn render_png(width: u32, height: u32) -> Result<Vec<u8>, String> {
     })
 }
 
+/// Hit-test using the supplied viewport and update the stored tree.
+pub fn click_at(width: u32, height: u32, x: f32, y: f32) -> Option<u64> {
+    if width == 0 || height == 0 || !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    TREE.with(|tree| {
+        let mut tree = tree.borrow_mut();
+        layout_tree(&mut tree, width as f32, height as f32);
+        tree.click_at(x, y).map(|id| id.raw())
+    })
+}
+
+/// Scroll the container under the point, in layout pixels.
+pub fn scroll_at(width: u32, height: u32, x: f32, y: f32, delta: f32) -> Option<f32> {
+    if width == 0 || height == 0 || !x.is_finite() || !y.is_finite() || !delta.is_finite() {
+        return None;
+    }
+    TREE.with(|tree| {
+        let mut tree = tree.borrow_mut();
+        layout_tree(&mut tree, width as f32, height as f32);
+        tree.scroll_at(x, y, delta)
+    })
+}
+
 /// Pointer ABI used by the browser glue. Host tests call the functions above.
 #[cfg(target_arch = "wasm32")]
 mod ffi {
@@ -154,6 +178,18 @@ mod ffi {
         }
     }
 
+    /// Returns the hit node id, or zero when there is no hit.
+    #[no_mangle]
+    pub extern "C" fn tekto_click_at(width: u32, height: u32, x: f32, y: f32) -> f64 {
+        super::click_at(width, height, x, y).unwrap_or(0) as f64
+    }
+
+    /// Returns the scroll offset, or NaN when there is no scroll target.
+    #[no_mangle]
+    pub extern "C" fn tekto_scroll_at(width: u32, height: u32, x: f32, y: f32, delta: f32) -> f32 {
+        super::scroll_at(width, height, x, y, delta).unwrap_or(f32::NAN)
+    }
+
     /// # Safety
     ///
     /// Same contract as [`tekto_apply_ops`].
@@ -212,6 +248,19 @@ mod tests {
         let png = render_png(120, 40).expect("png");
         assert!(png.starts_with(b"\x89PNG"), "not a PNG");
         assert!(png.len() > 32);
+    }
+
+    #[test]
+    fn click_persists_focus_after_render() {
+        reset();
+        apply_ops_json(r#"[{"op":"create","kind":"button"}]"#).unwrap();
+        render_png(100, 80).unwrap();
+        assert_eq!(click_at(100, 80, 10.0, 10.0), Some(1));
+        TREE.with(|tree| {
+            let tree = tree.borrow();
+            assert_eq!(tree.focus.map(|id| id.raw()), Some(1));
+            assert_eq!(tree.last_click.map(|id| id.raw()), Some(1));
+        });
     }
 
     #[test]
