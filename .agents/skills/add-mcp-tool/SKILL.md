@@ -24,7 +24,7 @@ The stdio MCP server (`tekto mcp`) is a proxy for the `ui.*` and other `app.*` t
 | `ui.tree` | `GET /tree` (JSON) and `GET /tree.txt` | `tekto tree` uses `/tree.txt` |
 | `ui.accesskit` | `GET /accesskit` | none |
 | `ui.screenshot` | `GET /screenshot` | `tekto screenshot [out]` |
-| `ui.click` | `POST /click` `{"id":N}` | `tekto click N` (sets focus and `last_click`; also logged) |
+| `ui.click` | `POST /click` `{"id":N}` | `tekto click N` (sets focus and `last_click`; also logged). Retained desktop JS button callbacks run; callback errors are returned and logged. No callback timeout |
 | `ui.type` | `POST /type` `{"id":N,"text":"…"}` inserts plain characters into a text field at the caret and focuses it. Not an IME; Backspace is desktop-only | none |
 | `ui.patch` | `POST /patch` | `tekto patch ID [--text] [--fill] [--color] [--font-size] [--padding] [--gap]` (positional id; HTTP/MCP also accept `name` and `fontSize`). Response is `{ ok, node, writeback }`. |
 | `app.state` | `GET /state` | none |
@@ -42,7 +42,7 @@ Constants live in `crates/tekto-mcp/src/lib.rs` (`serve`, `handle_client_locked`
 - `MAX_CLIENTS = 8`: at most eight connections in flight. The accept loop closes any extra connection at once, with no response and no dispatch. Capacity returns when a worker finishes.
 - `IO_DEADLINE = 5s`, absolute, not per read or write. The request (headers and body) must arrive within 5 seconds of accept, even if a client trickles one byte at a time. The response gets a separate 5 seconds to write. On a miss the connection is dropped with no HTTP error body, so a slow reader cannot hold a slot.
 - Requests: headers up to 64 KiB, whole buffered request up to 2 MiB. A body shorter than `Content-Length` is an error, not a partial request.
-- Handlers run one at a time (a dispatch lock) so patch and writeback keep request order. Keep new routes short.
+- Most handlers run one at a time under a dispatch lock; click delivery runs outside that lock and uses the handle action gate, which also orders supported patches and JS mounts. Keep new routes short. Do not reenter gated handle actions from callbacks or change hooks.
 - IPv6: `DevEndpoint::base_url()` brackets the host (`http://[::1]:PORT`).
 
 Clients should retry after a closed or timed-out connection. Keep `docs/agent-guide.md` in sync if these numbers change.

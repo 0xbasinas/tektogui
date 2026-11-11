@@ -1,4 +1,4 @@
-# TSX events and reactive text (integration in progress)
+# Desktop TSX events and reactive text
 
 The retained QuickJS session supports the following narrow syntax:
 
@@ -30,9 +30,26 @@ provides `remove`; cleanup failures do not replace the original mount error.
 Static hosts without `remove` cannot roll back a failed mount and should discard
 their candidate tree.
 
-**Desktop action delivery is not wired yet.** The retained session is an
-engine API, not a working desktop event path. A host without the registration
-and disposal hooks throws when mounting this syntax, including `renderToOps`
-and the current web host. Web parity is not claimed. Callback errors are
-returned by the session to its caller; the desktop integration must surface
-them in its logs and agent responses.
+With QuickJS enabled, `tekto dev --js path/to/app.tsx` bundles an exported
+`App` (or default function) and supplies `createEffect` to `mount`. A completed
+pointer click, Enter or Space on a focused button, and `ui.click` all deliver
+one click to the current session. Callback errors are logged; agent clicks
+also return the error. The tree is redrawn even if a callback throws.
+
+A Rust embedder can use `create_handle`, `install_js_runtime`, and
+`run_windowed_with_handle` to run a retained session without a dev server.
+Mount a bundled IIFE with the owner before starting the window, and shut down
+the owner when finished. Handle clicks and patches are ordered with mounts;
+a successful reload replaces callbacks and resets signal state, while a failed
+reload keeps the previous session. Do not synchronously reenter handle actions
+from Rust event or notification hooks: the action gate is held during delivery.
+Direct concurrent mutation or replacement through the raw tree Arc during an
+active JS session is unsupported and bypasses this ordering.
+
+This surface is desktop QuickJS only. A host without registration and disposal
+hooks throws when mounting it, including `renderToOps` and the current web
+host. Web parity is not claimed.
+
+Callbacks and native operations have no execution time limit or cancellation.
+A callback that never returns blocks the owner and callers waiting on it,
+including reload and shutdown. Run only trusted app code.

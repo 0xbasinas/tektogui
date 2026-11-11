@@ -1,8 +1,8 @@
-use tekto_tree::{FieldKey, NodeKind, Tree};
-use winit::event::ElementState;
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use tekto_tree::{FieldKey, NodeId, NodeKind, Tree};
+pub use winit::event::ElementState;
+pub use winit::keyboard::{Key, ModifiersState, NamedKey};
 
-pub(crate) fn route_key(
+pub fn route_key(
     tree: &mut Tree,
     key: &Key,
     text: Option<&str>,
@@ -10,13 +10,13 @@ pub(crate) fn route_key(
     repeat: bool,
     mods: ModifiersState,
     last_ime_commit: &mut Option<String>,
-) -> bool {
+) -> (bool, Option<NodeId>) {
     if state != ElementState::Pressed {
-        return false;
+        return (false, None);
     }
     let chord = mods.control_key() || mods.alt_key() || mods.super_key();
     if !chord && *key == Key::Named(NamedKey::Tab) {
-        return tree.traverse_focus(mods.shift_key());
+        return (tree.traverse_focus(mods.shift_key()), None);
     }
     let button = tree
         .focus
@@ -27,22 +27,40 @@ pub(crate) fn route_key(
             || matches!(key, Key::Character(value) if value == " "))
     {
         if let Some(id) = button {
-            return !repeat && tree.click(id).is_ok();
+            return (false, (!repeat).then_some(id));
         }
     }
     if *key == Key::Named(NamedKey::Backspace) {
         *last_ime_commit = None;
-        return tree.apply_field_key(FieldKey::Backspace).unwrap_or(false);
+        return (
+            tree.apply_field_key(FieldKey::Backspace).unwrap_or(false),
+            None,
+        );
     }
     if chord {
-        return false;
+        return (false, None);
     }
-    let Some(text) = text else { return false };
+    let Some(text) = text else {
+        return (false, None);
+    };
     let plain: String = text.chars().filter(|c| !c.is_control()).collect();
     if !crate::accept_keyboard_text(last_ime_commit, &plain) {
-        return false;
+        return (false, None);
     }
-    tree.type_keyboard_text(&plain).unwrap_or(false)
+    (tree.type_keyboard_text(&plain).unwrap_or(false), None)
+}
+
+/// Route a keyboard event through the live action gate and callback delivery.
+pub fn deliver_key(
+    handle: &tekto_mcp::SharedTreeHandle,
+    key: &Key,
+    text: Option<&str>,
+    state: ElementState,
+    repeat: bool,
+    mods: ModifiersState,
+    echo: &mut Option<String>,
+) -> Result<bool, tekto_mcp::McpError> {
+    handle.route_action(|tree| route_key(tree, key, text, state, repeat, mods, echo))
 }
 
 #[cfg(test)]
@@ -62,7 +80,8 @@ mod tests {
         let press = ElementState::Pressed;
         let tab = Key::Named(NamedKey::Tab);
         let mut route = |tree: &mut Tree, key: &Key, text, state, repeat, mods| {
-            route_key(tree, key, text, state, repeat, mods, &mut echo)
+            let (changed, click) = route_key(tree, key, text, state, repeat, mods, &mut echo);
+            changed || click.is_some_and(|id| tree.click(id).is_ok())
         };
         assert!(route(
             &mut tree,

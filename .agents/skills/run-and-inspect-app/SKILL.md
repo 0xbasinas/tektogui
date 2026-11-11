@@ -27,7 +27,7 @@ The process prints a URL like `Tekto dev server at http://127.0.0.1:PORT`. The e
 
 ## CLI (needs a running dev server, except screenshot)
 
-`tekto click <id>` records a click (focus + `last_click`, and a `clicked #id` log). A real left-click in the window does the same, using logical pixels (`physical / scale_factor`) and the tree hit test. There is **no** `tekto type` subcommand. `tekto patch` takes a positional id, not `--id`. Colors are `#rrggbb` or `#rrggbbaa`.
+`tekto click <id>` records a click (focus + `last_click`, and a `clicked #id` log). A real left-click in the window does the same, using logical pixels (`physical / scale_factor`) and the tree hit test. With a retained desktop QuickJS session, a button `onClick` also runs. A completed pointer click and Enter or Space on a focused button use the same delivery. There is **no** `tekto type` subcommand. `tekto patch` takes a positional id, not `--id`. Colors are `#rrggbb` or `#rrggbbaa`.
 
 ```bash
 cargo run -p tekto-cli -- inspect   # prints http://127.0.0.1:PORT/inspector
@@ -82,6 +82,8 @@ cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx
 # Desktop window (use a safe display on the shared box, e.g. Xvfb :99):
 cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx
 ```
+
+In TSX, reactive text is `text={() => signal()}` and button callbacks are `onClick={() => ...}`. This is desktop QuickJS only. See `docs/tsx-events.md` for syntax and limits (no callback timeout, no raw concurrent tree mutation, no reentry of gated handle actions).
 
 The process prints `js bundle Nms` on the first load and `js reload Nms` after a save (bundle + eval + swap). The Rust window and dev server stay up; the JS side remounts from source, so in-memory signal state resets. A failed rebuild prints a short error to stderr and `GET /logs` / `app.logs`. `--no-watch` loads once.
 

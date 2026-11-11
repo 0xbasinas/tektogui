@@ -16,7 +16,7 @@ const DRAG_SLOP: f32 = 4.0;
 
 /// Phase of one finger. Mapped from winit in the desktop loop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FingerPhase {
+pub enum FingerPhase {
     Started,
     Moved,
     Ended,
@@ -24,20 +24,20 @@ pub(crate) enum FingerPhase {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct PointerSession {
-    pub(crate) cursor: Option<(f32, f32)>,
-    pub(crate) pointer_down: bool,
+pub struct PointerSession {
+    pub cursor: Option<(f32, f32)>,
+    pub pointer_down: bool,
     press_origin: Option<(f32, f32)>,
     drag_scroll: Option<NodeId>,
     dragged: bool,
-    pub(crate) active_touch: Option<u64>,
+    pub active_touch: Option<u64>,
     /// While set, cursor motion and left-button presses are dropped.
-    pub(crate) swallow_mouse: bool,
+    pub swallow_mouse: bool,
 }
 
 /// What the window loop should do after one pointer event.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum PointerOp {
+pub enum PointerOp {
     Ignore,
     Begin {
         x: f32,
@@ -55,9 +55,9 @@ pub(crate) enum PointerOp {
 
 /// Scroll bookkeeping plus an optional click the caller must deliver.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct PointerEffect {
-    pub(crate) redraw: bool,
-    pub(crate) click_at: Option<(f32, f32)>,
+pub struct PointerEffect {
+    pub redraw: bool,
+    pub click_at: Option<(f32, f32)>,
 }
 
 impl PointerEffect {
@@ -70,7 +70,7 @@ impl PointerEffect {
 }
 
 impl PointerSession {
-    pub(crate) fn on_cursor_moved(&mut self, x: f32, y: f32) -> PointerOp {
+    pub fn on_cursor_moved(&mut self, x: f32, y: f32) -> PointerOp {
         if self.swallow_mouse {
             return PointerOp::Ignore;
         }
@@ -82,7 +82,7 @@ impl PointerSession {
         }
     }
 
-    pub(crate) fn on_left_button(&mut self, pressed: bool) -> PointerOp {
+    pub fn on_left_button(&mut self, pressed: bool) -> PointerOp {
         if self.swallow_mouse {
             if !pressed {
                 self.swallow_mouse = false;
@@ -100,7 +100,7 @@ impl PointerSession {
         }
     }
 
-    pub(crate) fn on_touch(&mut self, id: u64, phase: FingerPhase, x: f32, y: f32) -> PointerOp {
+    pub fn on_touch(&mut self, id: u64, phase: FingerPhase, x: f32, y: f32) -> PointerOp {
         self.cursor = Some((x, y));
         match phase {
             FingerPhase::Started => {
@@ -133,7 +133,7 @@ impl PointerSession {
     }
 }
 
-pub(crate) fn apply_pointer_op(
+pub fn apply_pointer_op(
     pointer: &mut PointerSession,
     tree: &mut Tree,
     op: PointerOp,
@@ -188,6 +188,22 @@ pub(crate) fn apply_pointer_op(
             }
         }
     }
+}
+
+/// Apply a gesture and deliver a completed click through the live action gate.
+pub fn deliver_pointer(
+    handle: &tekto_mcp::SharedTreeHandle,
+    pointer: &mut PointerSession,
+    op: PointerOp,
+    now_ms: f64,
+) -> Result<bool, tekto_mcp::McpError> {
+    handle.route_action(|tree| {
+        let effect = apply_pointer_op(pointer, tree, op, now_ms);
+        (
+            effect.redraw,
+            effect.click_at.and_then(|(x, y)| tree.hit(x, y)),
+        )
+    })
 }
 
 #[cfg(test)]

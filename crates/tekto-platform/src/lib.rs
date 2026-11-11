@@ -134,6 +134,17 @@ pub fn start_handle(
     width: u32,
     height: u32,
 ) -> Result<DevSession, PlatformError> {
+    let (handle, viewport) = create_handle(runtime, width, height);
+    let ep = tekto_mcp::start_dev_server(handle.clone())?;
+    Ok((handle, ep, viewport))
+}
+
+/// Create a live action handle without starting a dev server.
+pub fn create_handle(
+    runtime: &AppRuntime,
+    width: u32,
+    height: u32,
+) -> (Arc<SharedTreeHandle>, Arc<Mutex<Viewport>>) {
     let mut tree = runtime.tree.clone();
     layout_tree(&mut tree, width as f32, height as f32);
     let tree = Arc::new(Mutex::new(tree));
@@ -165,10 +176,11 @@ pub fn start_handle(
         pending_js: Mutex::new(None),
         apply_js: Mutex::new(None),
         last_writeback: Mutex::new(None),
+        action_gate: Arc::new(Mutex::new(())),
+        click_js: Mutex::new(None),
         history: Mutex::new(None),
     });
-    let ep = tekto_mcp::start_dev_server(handle.clone())?;
-    Ok((handle, ep, viewport))
+    (handle, viewport)
 }
 
 pub fn rgba_to_u32_softbuffer(rgba: &[u8]) -> Vec<u32> {
@@ -194,14 +206,14 @@ mod gpu_policy;
         not(target_os = "ios")
     )
 ))]
-mod pointer_route;
+pub mod pointer_route;
 
 #[cfg(all(
     feature = "desktop",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
-mod key_route;
+pub mod key_route;
 pub use gpu_policy::{gpu_paint_allowed, wants_gpu_paint};
 
 #[cfg(any(test, all(feature = "desktop", target_os = "android")))]
@@ -216,6 +228,8 @@ mod android_overlay;
     not(target_os = "ios")
 ))]
 mod desktop;
+#[cfg(all(feature = "desktop", not(target_os = "android")))]
+pub use desktop::run_windowed_with_handle;
 #[cfg(all(
     feature = "desktop",
     target_os = "android",
