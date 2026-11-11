@@ -197,11 +197,21 @@ mod tests {
     #[test]
     fn bundles_notes_app_when_esbuild_is_present() {
         if which_esbuild().is_none() {
+            assert_ne!(
+                std::env::var("TEKTO_REQUIRE_ESBUILD").as_deref(),
+                Ok("1"),
+                "esbuild is required"
+            );
             return;
         }
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let entry = root.join("examples/notes/src/app.tsx");
         if !entry.is_file() {
+            assert_ne!(
+                std::env::var("TEKTO_REQUIRE_ESBUILD").as_deref(),
+                Ok("1"),
+                "Notes TSX entry is required"
+            );
             return;
         }
         let js = bundle(&entry).expect("bundle");
