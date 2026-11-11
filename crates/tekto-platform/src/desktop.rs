@@ -95,6 +95,8 @@ struct State {
     close_requested: bool,
     /// Active edge resize for an undecorated window.
     resize: Option<ResizeSession>,
+    /// Size the next frame must paint, even before winit reports WM_SIZE.
+    resize_forced: Option<(u32, u32)>,
     /// Last press on the drag region, for double-click to maximise.
     last_title_press: Option<(Instant, (f32, f32))>,
     /// A bar drag is in progress and may end at a screen edge.
@@ -170,6 +172,7 @@ impl ApplicationHandler<AppEvent> for App {
             anim_origin: Instant::now(),
             close_requested: false,
             resize: None,
+            resize_forced: None,
             last_title_press: None,
             snap_drag: false,
             #[cfg(feature = "a11y-os")]
@@ -367,9 +370,17 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     } else {
                         if let Some(session) = state.resize.take() {
-                            if let Some(rect) = session.pending {
+                            let size = if let Some(rect) = session.pending {
                                 set_window_rect(&state.window, rect.0, rect.1, rect.2, rect.3);
-                            }
+                                (rect.2, rect.3)
+                            } else {
+                                let size = state.window.inner_size();
+                                (size.width, size.height)
+                            };
+                            // Paint the final size even if winit has not
+                            // delivered WM_SIZE yet.
+                            state.resize_forced = Some(size);
+                            state.window.request_redraw();
                             release_mouse();
                             return;
                         }
@@ -593,11 +604,17 @@ impl Painter {
     }
 
     /// Present straight to the window surface when the GPU path has one.
-    fn present_window(&mut self) -> Option<Result<bool, tekto_render::RenderError>> {
+    fn present_window(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Option<Result<bool, tekto_render::RenderError>> {
+        #[cfg(not(feature = "gpu"))]
+        let _ = (width, height);
         match self {
             Painter::Cpu(_) => None,
             #[cfg(feature = "gpu")]
-            Painter::Gpu(renderer) => Some(renderer.present_window()),
+            Painter::Gpu(renderer) => Some(renderer.present_window(width, height)),
         }
     }
 }
@@ -626,8 +643,21 @@ fn window_insets(_state: &State, _scale: f32) -> WindowInsets {
     WindowInsets::default()
 }
 
-fn relayout_window(state: &mut State) {
+fn relayout_window(state: &mut State, forced: Option<(u32, u32)>) -> (u32, u32) {
     let (lw, lh, scale, pw, ph) = window_logical_and_physical(&state.window);
+    // A pending resize rect is the size this frame must paint, even if winit
+    // has not delivered the new WM_SIZE yet.
+    let (pw, ph) = forced.unwrap_or((pw, ph));
+    let lw = if forced.is_some() {
+        pw as f32 / scale
+    } else {
+        lw
+    };
+    let lh = if forced.is_some() {
+        ph as f32 / scale
+    } else {
+        lh
+    };
     let _ = state.renderer.resize(pw, ph);
     state.renderer.set_scale(scale);
     let next = Viewport {
@@ -662,6 +692,7 @@ fn relayout_window(state: &mut State) {
         let now_ms = state.anim_origin.elapsed().as_secs_f64() * 1000.0;
         tree.advance(now_ms);
     }
+    (pw, ph)
 }
 
 fn redraw(state: &mut State) {
@@ -671,6 +702,7 @@ fn redraw(state: &mut State) {
     }
     let frame_start = Instant::now();
     // One window rect per painted frame keeps geometry and content in step.
+    let mut forced = state.resize_forced.take();
     if let Some(session) = state.resize {
         if let Some(rect) = session.pending {
             set_window_rect(&state.window, rect.0, rect.1, rect.2, rect.3);
@@ -678,14 +710,14 @@ fn redraw(state: &mut State) {
                 session.last = rect;
                 session.pending = None;
             }
+            forced = Some((rect.2, rect.3));
         }
     }
-    relayout_window(state);
+    let (pw, ph) = relayout_window(state, forced);
     let layout_done = Instant::now();
     if !crate::lifecycle::may_present(state.epoch) {
         return;
     }
-    let (_lw, _lh, _scale, pw, ph) = window_logical_and_physical(&state.window);
     if let Ok(tree) = state.tree.lock() {
         state.renderer.paint(&tree, state.clear);
         publish_accesskit(
@@ -695,7 +727,7 @@ fn redraw(state: &mut State) {
         );
     }
     let paint_done = Instant::now();
-    match state.renderer.present_window() {
+    match state.renderer.present_window(pw, ph) {
         Some(Ok(true)) => {
             if frame_log_enabled() {
                 eprintln!(
