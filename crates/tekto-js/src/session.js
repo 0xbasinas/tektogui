@@ -1,6 +1,7 @@
 // Session-local functions stay in QuickJS; no callback crosses the HostOp boundary.
 (() => {
   const clicks = new Map();
+  const inputs = new Map();
   const cleanups = new Map();
   const children = new Map();
   const append = tekto.append;
@@ -8,6 +9,10 @@
   tekto.onClick = (id, fn) => {
     if (typeof fn !== "function") throw new TypeError("onClick needs a function");
     clicks.set(id, fn);
+  };
+  tekto.onInput = (id, fn) => {
+    if (typeof fn !== "function") throw new TypeError("onInput needs a function");
+    inputs.set(id, fn);
   };
   tekto.onDispose = (id, fn) => {
     if (typeof fn !== "function") throw new TypeError("onDispose needs a function");
@@ -21,6 +26,7 @@
       const descendants = children.get(node) || [];
       children.delete(node);
       clicks.delete(node);
+      inputs.delete(node);
       const list = cleanups.get(node) || [];
       cleanups.delete(node);
       for (const ids of children.values()) ids.delete(node);
@@ -34,7 +40,7 @@
   };
   globalThis.__tektoDisposeSession = () => {
     let firstError, failed = false;
-    const ids = new Set([...children.keys(), ...clicks.keys(), ...cleanups.keys()]);
+    const ids = new Set([...children.keys(), ...clicks.keys(), ...inputs.keys(), ...cleanups.keys()]);
     for (const id of ids) {
       try { forget(id); } catch (error) { if (!failed) { firstError = error; failed = true; } }
     }
@@ -48,6 +54,12 @@
   };
   tekto.remove = (id) => { remove(id); forget(id); };
   globalThis.__tektoForgetNode = forget;
+  globalThis.__tektoDispatchInput = (id, value) => {
+    const fn = inputs.get(id);
+    if (!fn) return false;
+    fn(value);
+    return true;
+  };
   globalThis.__tektoDispatchClick = (id) => {
     const fn = clicks.get(id);
     if (!fn) return false;

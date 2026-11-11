@@ -706,12 +706,18 @@ fn apply_ime(state: &mut State, ime: Ime) {
             ImeEvent::Commit(text)
         }
     };
-    let changed = state
-        .tree
-        .lock()
-        .ok()
-        .and_then(|mut tree| tree.apply_ime(event).ok())
-        .unwrap_or(false);
+    let changed = if let Some(handle) = &state.handle {
+        handle
+            .route_action(|tree| (tree.apply_ime(event).unwrap_or(false), None))
+            .unwrap_or(true)
+    } else {
+        state
+            .tree
+            .lock()
+            .ok()
+            .and_then(|mut tree| tree.apply_ime(event).ok())
+            .unwrap_or(false)
+    };
     if changed {
         state.window.request_redraw();
     }

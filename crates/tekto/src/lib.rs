@@ -129,6 +129,12 @@ pub fn install_js_runtime(
     *handle.click_js.lock().expect("click_js") = Some(std::sync::Arc::new(move |id| {
         click_owner.dispatch_click_locked(id.raw()).map(|_| ())
     }));
+    let input_owner = owner.clone();
+    *handle.input_js.lock().expect("input_js") = Some(std::sync::Arc::new(move |id, value| {
+        input_owner
+            .dispatch_input_locked(id.raw(), value)
+            .map(|_| ())
+    }));
     let reload = owner.clone();
     *handle.apply_js.lock().expect("apply_js") =
         Some(std::sync::Arc::new(move |js| reload.mount(js).map(|_| ())));
