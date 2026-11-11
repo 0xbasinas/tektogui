@@ -3,7 +3,7 @@
 //! This is the same tree agents get from MCP `ui.tree` and `GET /accesskit`.
 //! Screen readers and coding agents share one source of truth.
 
-use accesskit::{Node, NodeId, Rect, Role, Tree, TreeUpdate};
+use accesskit::{Node, NodeId, Rect, Role, Toggled, Tree, TreeUpdate};
 use serde::Serialize;
 use tekto_tree::{NodeKind, Tree as SceneTree};
 
@@ -42,6 +42,7 @@ pub struct AccessKitNodeDump {
     pub id: u64,
     pub role: String,
     pub disabled: bool,
+    pub toggled: Option<bool>,
     pub label: Option<String>,
     pub value: Option<String>,
     pub bounds: [f64; 4],
@@ -58,6 +59,7 @@ pub fn dump(scene: &SceneTree) -> Option<AccessKitDump> {
             id: id.0,
             role: format!("{:?}", node.role()),
             disabled: node.is_disabled(),
+            toggled: node.toggled().map(|value| value == Toggled::True),
             label: node.label().map(|s| s.to_string()),
             value: node.value().map(|s| s.to_string()),
             bounds: node.bounds().map_or([0.0; 4], |r| [r.x0, r.y0, r.x1, r.y1]),
@@ -75,6 +77,13 @@ fn collect(scene: &SceneTree, id: tekto_tree::NodeId, out: &mut Vec<(NodeId, Nod
         return;
     };
     let mut node = Node::new(role_for(src.kind));
+    if src.kind == NodeKind::Checkbox {
+        node.set_toggled(if src.checked {
+            Toggled::True
+        } else {
+            Toggled::False
+        });
+    }
     if src.disabled {
         node.set_disabled();
     }
@@ -118,6 +127,7 @@ fn role_for(kind: NodeKind) -> Role {
         NodeKind::Rect => Role::GenericContainer,
         NodeKind::Text => Role::Label,
         NodeKind::Button => Role::Button,
+        NodeKind::Checkbox => Role::CheckBox,
         NodeKind::TextField => Role::TextInput,
         NodeKind::Scroll => Role::ScrollView,
         NodeKind::List => Role::List,
