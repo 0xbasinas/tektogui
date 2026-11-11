@@ -45,13 +45,15 @@ enum AppEvent {
 #[derive(Clone, Copy)]
 struct ResizeSession {
     direction: ResizeDirection,
-    /// Physical cursor position when the press started.
+    /// Physical screen position of the pointer when the press started.
     start: (f64, f64),
     /// Physical outer position at the start.
     origin: (i32, i32),
     /// Physical inner size at the start.
     size: (u32, u32),
     scale: f64,
+    /// Last rect sent to the OS, so a still pointer sends nothing.
+    last: (i32, i32, u32, u32),
 }
 
 /// Distance from an edge that starts a resize, in logical pixels.
@@ -282,7 +284,12 @@ impl ApplicationHandler<AppEvent> for App {
                     let scale = state.window.scale_factor();
                     let (x, y) = logical_from_physical(position.x, position.y, scale);
                     if state.resize.is_some() {
-                        resize_follow(state, (x, y));
+                        if let Ok(origin) = state.window.outer_position() {
+                            resize_follow(
+                                state,
+                                (origin.x as f64 + position.x, origin.y as f64 + position.y),
+                            );
+                        }
                         return;
                     }
                     let op = state.pointer.on_cursor_moved(x, y);
@@ -304,18 +311,24 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(state) = self.state.as_mut() {
                     let pressed = button_state == ElementState::Pressed;
                     if pressed {
+                        let scale = state.window.scale_factor();
                         let cursor = state
                             .pointer
                             .cursor
                             .filter(|_| !state.pointer.swallow_mouse);
                         if let (Some(cursor), false) = (cursor, state.window.is_decorated()) {
                             let size = state.window.inner_size();
-                            let scale = state.window.scale_factor() as f32;
-                            let width = size.width as f32 / scale;
-                            let height = size.height as f32 / scale;
+                            let width = size.width as f32 / scale as f32;
+                            let height = size.height as f32 / scale as f32;
                             if let Some(direction) = edge_direction(cursor, width, height) {
-                                begin_resize(state, direction, cursor);
-                                capture_mouse(&state.window);
+                                if let Ok(origin) = state.window.outer_position() {
+                                    let screen = (
+                                        origin.x as f64 + cursor.0 as f64 * scale,
+                                        origin.y as f64 + cursor.1 as f64 * scale,
+                                    );
+                                    begin_resize(state, direction, screen);
+                                    capture_mouse(&state.window);
+                                }
                                 return;
                             }
                         }
@@ -883,27 +896,69 @@ fn release_mouse() {
 #[cfg(not(target_os = "windows"))]
 fn release_mouse() {}
 
-fn begin_resize(state: &mut State, direction: ResizeDirection, cursor: (f32, f32)) {
+/// Move and size the window in one step where the platform allows it.
+#[cfg(target_os = "windows")]
+fn set_window_rect(window: &Window, x: i32, y: i32, width: u32, height: u32) {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    unsafe extern "system" {
+        fn SetWindowPos(
+            hwnd: isize,
+            after: isize,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            flags: u32,
+        ) -> i32;
+    }
+    if let Ok(handle) = window.window_handle() {
+        if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+            // Safety: the HWND belongs to this window. One call keeps position
+            // and size in step, so a resize frame does not render at a stale rect.
+            unsafe {
+                SetWindowPos(
+                    handle.hwnd.get(),
+                    0,
+                    x,
+                    y,
+                    width as i32,
+                    height as i32,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_window_rect(window: &Window, x: i32, y: i32, width: u32, height: u32) {
+    window.set_outer_position(PhysicalPosition::new(x, y));
+    let _ = window.request_inner_size(PhysicalSize::new(width, height));
+}
+
+fn begin_resize(state: &mut State, direction: ResizeDirection, screen: (f64, f64)) {
     let Ok(origin) = state.window.outer_position() else {
         return;
     };
     let size = state.window.inner_size();
-    let scale = state.window.scale_factor();
     state.resize = Some(ResizeSession {
         direction,
-        start: (cursor.0 as f64 * scale, cursor.1 as f64 * scale),
+        start: screen,
         origin: (origin.x, origin.y),
         size: (size.width, size.height),
-        scale,
+        scale: state.window.scale_factor(),
+        last: (origin.x, origin.y, size.width, size.height),
     });
 }
 
-fn resize_follow(state: &mut State, cursor: (f32, f32)) {
+fn resize_follow(state: &mut State, screen: (f64, f64)) {
     let Some(session) = state.resize else {
         return;
     };
-    let dx = cursor.0 as f64 * session.scale - session.start.0;
-    let dy = cursor.1 as f64 * session.scale - session.start.1;
+    let dx = screen.0 - session.start.0;
+    let dy = screen.1 - session.start.1;
     let mut x = session.origin.0 as f64;
     let mut y = session.origin.1 as f64;
     let mut width = session.size.0 as f64;
@@ -952,13 +1007,19 @@ fn resize_follow(state: &mut State, cursor: (f32, f32)) {
         }
         height = min_height;
     }
-    state
-        .window
-        .set_outer_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
-    let _ = state.window.request_inner_size(PhysicalSize::new(
+    let rect = (
+        x.round() as i32,
+        y.round() as i32,
         width.round() as u32,
         height.round() as u32,
-    ));
+    );
+    if rect == session.last {
+        return;
+    }
+    if let Some(session) = state.resize.as_mut() {
+        session.last = rect;
+    }
+    set_window_rect(&state.window, rect.0, rect.1, rect.2, rect.3);
 }
 
 /// Snap a dragged window to halves, quarters, or maximised at a monitor edge.
@@ -969,12 +1030,16 @@ fn snap_window(state: &mut State) {
     let Some(cursor) = state.pointer.cursor else {
         return;
     };
+    let Ok(origin) = state.window.outer_position() else {
+        return;
+    };
     let Some(monitor) = state.window.current_monitor() else {
         return;
     };
     let scale = state.window.scale_factor();
-    let cx = cursor.0 as f64 * scale;
-    let cy = cursor.1 as f64 * scale;
+    // The pointer session stores window-relative coordinates; snap tests the screen.
+    let cx = origin.x as f64 + cursor.0 as f64 * scale;
+    let cy = origin.y as f64 + cursor.1 as f64 * scale;
     let pos = monitor.position();
     let size = monitor.size();
     let left = pos.x as f64;
