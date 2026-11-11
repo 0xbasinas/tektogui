@@ -1,4 +1,4 @@
-use tekto_tree::{route_named_key, NamedActionKey, NodeId, Tree};
+use tekto_tree::{route_named_key, FieldKey, NamedActionKey, NodeId, Tree};
 pub use winit::event::ElementState;
 pub use winit::keyboard::{Key, ModifiersState, NamedKey};
 
@@ -51,6 +51,18 @@ pub fn route_key(
     if chord {
         return (false, None);
     }
+    let field_key = match key {
+        Key::Named(NamedKey::ArrowLeft) => Some(FieldKey::Left),
+        Key::Named(NamedKey::ArrowRight) => Some(FieldKey::Right),
+        Key::Named(NamedKey::Home) => Some(FieldKey::Home),
+        Key::Named(NamedKey::End) => Some(FieldKey::End),
+        Key::Named(NamedKey::Delete) => Some(FieldKey::Delete),
+        _ => None,
+    };
+    if let Some(key) = field_key {
+        *last_ime_commit = None;
+        return (tree.apply_field_key(key).unwrap_or(false), None);
+    }
     let Some(text) = text else {
         return (false, None);
     };
@@ -78,6 +90,81 @@ pub fn deliver_key(
 mod tests {
     use super::*;
     use tekto_tree::{ImeEvent, NodeKind};
+
+    #[test]
+    fn routes_field_navigation_and_delete() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        tree.get_mut(field).unwrap().text = Some("aé你".into());
+        tree.get_mut(field).unwrap().caret = 3;
+        tree.set_focus(field).unwrap();
+        let mut echo = None;
+        for key in [
+            NamedKey::Home,
+            NamedKey::ArrowRight,
+            NamedKey::Delete,
+            NamedKey::End,
+            NamedKey::ArrowLeft,
+        ] {
+            assert!(
+                route_key(
+                    &mut tree,
+                    &Key::Named(key),
+                    None,
+                    ElementState::Pressed,
+                    false,
+                    ModifiersState::empty(),
+                    &mut echo
+                )
+                .0
+            );
+        }
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("a你"));
+        assert_eq!(tree.get(field).unwrap().caret, 1);
+        assert!(
+            !route_key(
+                &mut tree,
+                &Key::Named(NamedKey::Delete),
+                None,
+                ElementState::Released,
+                false,
+                ModifiersState::empty(),
+                &mut echo
+            )
+            .0
+        );
+        assert!(
+            !route_key(
+                &mut tree,
+                &Key::Named(NamedKey::Home),
+                None,
+                ElementState::Pressed,
+                false,
+                ModifiersState::CONTROL,
+                &mut echo
+            )
+            .0
+        );
+        tree.apply_ime(ImeEvent::Preedit {
+            text: "文".into(),
+            cursor: None,
+        })
+        .unwrap();
+        assert!(
+            !route_key(
+                &mut tree,
+                &Key::Named(NamedKey::Delete),
+                None,
+                ElementState::Pressed,
+                false,
+                ModifiersState::empty(),
+                &mut echo
+            )
+            .0
+        );
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("a你"));
+    }
 
     #[test]
     fn routing_focus_activation_and_ime() {
