@@ -28,7 +28,7 @@ The stdio MCP server (`tekto mcp`) is a proxy for the `ui.*` and other `app.*` t
 | `ui.key` | `POST /key` `{"name":"Tab"}` | `tekto key <name>`; names: `Tab`, `Shift+Tab`, `Enter`, `Space`, `Backspace` |
 | `ui.scroll` | `POST /scroll` `{"id":N,"delta":N}` | `tekto scroll ID --by N`; returns the clamped `offset` |
 | `ui.type` | `POST /type` `{"id":N,"text":"…"}` inserts plain characters into a text field at the caret and focuses it. Not an IME; use `ui.key` for Backspace | none |
-| `ui.patch` | `POST /patch` | `tekto patch ID [--text] [--fill] [--color] [--font-size] [--padding] [--gap]` (positional id; HTTP/MCP also accept `name` and `fontSize`). Response is `{ ok, node, writeback }`. |
+| `ui.patch` | `POST /patch` | `tekto patch ID [--text] [--fill] [--color] [--font-size] [--padding] [--gap] [--disabled <bool>]` (positional id; HTTP/MCP also accept `name` and `fontSize`; `disabled` applies to buttons and text fields). Response is `{ ok, node, writeback }`. |
 | `app.state` | `GET /state` | none |
 | `app.states` | `GET /states` | `tekto states` |
 | `app.restore` | `POST /states/restore` `{"index":N}` | `tekto restore N` |
