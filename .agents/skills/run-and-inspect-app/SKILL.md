@@ -83,6 +83,26 @@ cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx
 cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx
 ```
 
+### Interactive counter (desktop only)
+
+`examples/counter/app.tsx` is a separate interactive example. Notes stays the default and is unchanged. Run it with:
+
+```bash
+cargo run -p tekto-cli --features quickjs -- dev --js examples/counter/app.tsx
+```
+
+In another terminal, look up ids in the tree. Do not hard-code them. Find the `button` named `Increment` and the `text` named `Count`, then use the button's real id:
+
+```bash
+cargo run -p tekto-cli -- tree
+cargo run -p tekto-cli -- click ID
+cargo run -p tekto-cli -- tree
+```
+
+The Count text should read 0, then 1 after one click, then 2 after another. Its id and the button id stay stable during the session. A window click on the button, then Enter or Space while it has focus, also activates it. `ui.click` (MCP) and `POST /click` do the same. Callback errors are logged (`app.logs`), and agent clicks also return the error. Reload (saving the file) remounts from source and resets Count to 0.
+
+Limits: desktop QuickJS only, not the web host; each JS call has the fixed one-second budget below; run trusted code only. See `docs/tsx-events.md`.
+
 In TSX, reactive text is `text={() => signal()}` and button callbacks are `onClick={() => ...}`. This is desktop QuickJS only. See `docs/tsx-events.md` for syntax and limits (no raw concurrent tree mutation, no reentry of gated handle actions).
 
 Each host-backed JS call (evaluation, click callback, forget, disposal) has a fixed one-second budget in `crates/tekto-js/src/engine.rs`. There is no setting to change it. QuickJS checks the deadline periodically and interrupts JS, so a runaway loop returns a budget error (`QuickJS execution budget exceeded (1 second)`); click failures are also logged (`GET /logs` / `app.logs`). Native Rust calls and lock waits are not generally preemptible, so this is not a strict wall-clock limit. A failed reload keeps the old session. An interrupted callback keeps the session, but changes it already made are not rolled back. Interrupted cleanup can leave cleanups unfinished, and a retired session drops the rest.
