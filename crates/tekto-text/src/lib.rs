@@ -148,6 +148,11 @@ impl TextEngine {
     }
 }
 
+/// Return the UTF-8 byte index nearest a point in a laid out text block.
+pub fn cursor_index(layout: &Layout<[u8; 4]>, x: f32, y: f32) -> usize {
+    parley::editing::Cursor::from_point(layout, x, y).index()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

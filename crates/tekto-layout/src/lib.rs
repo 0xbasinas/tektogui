@@ -73,6 +73,34 @@ pub fn layout_tree_with_text(
     place_carets(tree, text);
 }
 
+/// Resolve a pointer position to a field's character index using painted text layout.
+pub fn field_caret_at(tree: &Tree, id: NodeId, x: f32, y: f32) -> Option<usize> {
+    let node = tree.get(id)?;
+    if node.kind != NodeKind::TextField || node.disabled {
+        return None;
+    }
+    let value = node.text.as_deref().unwrap_or("");
+    if value.is_empty() {
+        return Some(0);
+    }
+    let inset = node.layout.padding;
+    let max_width = if node.bounds.width > 0.0 {
+        Some((node.bounds.width - 2.0 * inset).max(0.0))
+    } else {
+        None
+    };
+    TEXT.with(|engine| {
+        let mut engine = engine.borrow_mut();
+        let layout = engine.layout(value, node.font_size, [0, 0, 0, 255], max_width);
+        let byte = tekto_text::cursor_index(
+            &layout,
+            x - node.bounds.x - inset,
+            y - node.bounds.y - inset,
+        );
+        Some(value[..byte].chars().count())
+    })
+}
+
 fn place_carets(tree: &mut Tree, text: &mut TextEngine) {
     let ids: Vec<NodeId> = tree
         .ids()
@@ -1231,5 +1259,35 @@ mod tests {
             child_again.x
         );
         assert!((child_again.y - child_start.y).abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
+mod pointer_caret_tests {
+    use super::*;
+    use tekto_tree::Rect;
+
+    #[test]
+    fn pointer_positions_insert_at_the_laid_out_character() {
+        for (value, x, expected) in [
+            ("Hello", 1.0, "!Hello"),
+            ("Hello", 17.0, "He!llo"),
+            ("Hello", 180.0, "Hello!"),
+            ("éclair", 15.0, "éc!lair"),
+        ] {
+            let mut tree = Tree::new();
+            let root = tree.add(NodeKind::Window, None).unwrap();
+            let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+            let node = tree.get_mut(field).unwrap();
+            node.bounds = Rect::new(20.0, 10.0, 200.0, 40.0);
+            node.layout.padding = 8.0;
+            node.font_size = 16.0;
+            node.text = Some(value.into());
+            let caret = field_caret_at(&tree, field, 28.0 + x, 22.0).unwrap();
+            tree.click(field).unwrap();
+            tree.get_mut(field).unwrap().caret = caret;
+            tree.type_keyboard_text("!").unwrap();
+            assert_eq!(tree.get(field).unwrap().text.as_deref(), Some(expected));
+        }
     }
 }
