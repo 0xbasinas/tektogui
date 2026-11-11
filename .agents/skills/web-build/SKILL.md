@@ -79,7 +79,8 @@ Live `ui.patch` uses the same JSON as desktop `POST /patch` (`id` plus `text`, `
 
 ```bash
 cargo build -p tekto-wasm --target wasm32-unknown-unknown
-cp "$CARGO_TARGET_DIR/wasm32-unknown-unknown/debug/tekto_wasm.wasm" packages/wasm/tekto_wasm.wasm
+# run from the repo root; with CARGO_TARGET_DIR unset the target dir is ./target
+cp "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/debug/tekto_wasm.wasm" packages/wasm/tekto_wasm.wasm
 # from packages/wasm: python3 -m http.server 8080
 # open http://127.0.0.1:8080/notes.html   (Notes at 640×400, resize buttons)
 # open http://127.0.0.1:8080/gpu.html     (CPU blit; ?gpu=1 tries WebGPU, then the blit)
