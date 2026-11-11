@@ -32,6 +32,33 @@ fn build() -> (
     (tree, built.list, scroll_id, ids)
 }
 
+#[test]
+fn agent_scroll_changes_virtual_rows_after_layout() {
+    use std::sync::{Arc, Mutex};
+    use tekto_mcp::{AppHandle, SharedTreeHandle};
+    let (mut tree, list_id, scroll_id, ids) = build();
+    layout_tree(&mut tree, 240.0, 320.0);
+    let handle = SharedTreeHandle {
+        tree: Arc::new(Mutex::new(tree)),
+        render: Arc::new(|_| Ok(Vec::new())),
+        logs: Arc::new(Mutex::new(Vec::new())),
+        on_change: Mutex::new(None),
+        pending_js: Mutex::new(None),
+        apply_js: Mutex::new(None),
+        last_writeback: Mutex::new(None),
+        action_gate: Arc::new(Mutex::new(())),
+        click_js: Mutex::new(None),
+        history: Mutex::new(None),
+    };
+    assert!(list_items(&handle.tree(), list_id).contains(&ids[0]));
+    assert_eq!(handle.scroll(scroll_id, 4800.0).unwrap(), 4800.0);
+    let mut tree = handle.tree.lock().unwrap();
+    layout_tree(&mut tree, 240.0, 320.0);
+    let shown = list_items(&tree, list_id);
+    assert!(shown.contains(&ids[100]));
+    assert!(!shown.contains(&ids[0]));
+}
+
 fn leak_label(index: usize) -> &'static str {
     Box::leak(format!("Row {index}").into_boxed_str())
 }

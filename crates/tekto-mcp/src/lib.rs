@@ -60,6 +60,9 @@ pub trait AppHandle: Send + Sync {
     fn key(&self, _key: NamedActionKey) -> Result<(), McpError> {
         Err(McpError::msg("key is not wired up yet"))
     }
+    fn scroll(&self, _id: NodeId, _delta: f32) -> Result<f32, McpError> {
+        Err(McpError::msg("scroll is not wired up yet"))
+    }
     fn type_text(&self, id: NodeId, text: &str) -> Result<(), McpError> {
         let _ = (id, text);
         Err(McpError::msg(
@@ -284,6 +287,24 @@ impl AppHandle for SharedTreeHandle {
             }
         })
         .map(|_| ())
+    }
+
+    fn scroll(&self, id: NodeId, delta: f32) -> Result<f32, McpError> {
+        if !delta.is_finite() {
+            return Err(McpError::msg("delta must be finite"));
+        }
+        let _gate = self
+            .action_gate
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?;
+        let offset = self
+            .tree
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?
+            .scroll_by(id, delta)
+            .map_err(|e| McpError::msg(e.to_string()))?;
+        self.notify_change();
+        Ok(offset)
     }
 
     fn type_text(&self, id: NodeId, text: &str) -> Result<(), McpError> {
@@ -591,7 +612,7 @@ fn handle_client_locked(
         stream: &mut stream,
         deadline: Instant::now() + IO_DEADLINE,
     })?;
-    let (status, content_type, body_bytes) = if matches!(&request, Some((method, path, _)) if method == "POST" && (path == "/click" || path == "/key"))
+    let (status, content_type, body_bytes) = if matches!(&request, Some((method, path, _)) if method == "POST" && (path == "/click" || path == "/key" || path == "/scroll"))
     {
         process_http_request(handle.as_ref(), request)
     } else {
@@ -750,6 +771,23 @@ fn dispatch(
             handle.key(key)?;
             ok_json(json!({"ok": true}))
         }
+        ("POST", "/scroll") => {
+            let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
+            let id = v
+                .get("id")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| McpError::msg("missing or invalid id"))?;
+            let delta = v
+                .get("delta")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| McpError::msg("missing or invalid delta"))?
+                as f32;
+            if !delta.is_finite() {
+                return Err(McpError::msg("delta must be finite"));
+            }
+            let offset = handle.scroll(NodeId::from_raw(id), delta)?;
+            ok_json(json!({"ok": true, "offset": offset}))
+        }
         ("POST", "/type") => {
             let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
             let id = v
@@ -900,6 +938,7 @@ fn tool_list() -> Value {
         {"name": "ui.accesskit", "description": "Dump the AccessKit tree (roles, labels, bounds, focus) with the same stable ids.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.screenshot", "description": "Take a PNG screenshot using the CPU renderer.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.click", "description": "Click a node by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}}, "required": ["id"]}},
+        {"name": "ui.scroll", "description": "Scroll a container by logical pixels and return the clamped offset.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}, "delta": {"type": "number"}}, "required": ["id", "delta"]}},
         {"name": "ui.key", "description": "Press a named key on the focused node.", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "enum": ["Tab", "Shift+Tab", "Enter", "Space", "Backspace"]}}, "required": ["name"]}},
         {"name": "ui.type", "description": "Insert plain characters at the caret of a text field (by stable id) and focus it. Not an IME: no composition or candidate window. Use ui.key for Backspace.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
         {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, fontSize, padding, or gap. Returns the updated node and a writeback report. Applies immediately (no reload). Unique literals in the app project are written back to source; ambiguous edits stay in the runtime tree.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}, "padding": {"type": "number"}, "gap": {"type": "number"}}, "required": ["id"]}},
@@ -950,6 +989,10 @@ fn call_tool(params: &Value) -> Result<Value, McpError> {
         }
         "ui.click" => {
             let (_, body) = http_post(&format!("{base}/click"), &args)?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
+        "ui.scroll" => {
+            let (_, body) = http_post(&format!("{base}/scroll"), &args)?;
             Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
         }
         "ui.key" => {
@@ -1186,6 +1229,59 @@ mod tests {
             key["inputSchema"]["properties"]["name"]["enum"],
             json!(["Tab", "Shift+Tab", "Enter", "Space", "Backspace"])
         );
+    }
+
+    #[test]
+    fn scroll_route_clamps_and_rejects_invalid_input() {
+        let handle = http_test_handle();
+        let id = {
+            let mut tree = handle.tree.lock().unwrap();
+            let id = tree
+                .add(NodeKind::Scroll, Some(NodeId::from_raw(1)))
+                .unwrap();
+            let node = tree.get_mut(id).unwrap();
+            node.bounds.height = 100.0;
+            node.scroll_extent = 350.0;
+            id
+        };
+        let changes = Arc::new(AtomicUsize::new(0));
+        let seen = changes.clone();
+        *handle.on_change.lock().unwrap() = Some(Arc::new(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }));
+        let request = |body: String| {
+            process_http_request(&handle, Some(("POST".into(), "/scroll".into(), body)))
+        };
+        for (delta, expected) in [(1000.0, 250.0), (-1000.0, 0.0)] {
+            let (status, _, body) = request(json!({"id": id.raw(), "delta": delta}).to_string());
+            assert_eq!(status, "200 OK");
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap()["offset"],
+                expected
+            );
+        }
+        assert_eq!(changes.load(Ordering::SeqCst), 2);
+        for body in [
+            "{}".to_string(),
+            r#"{"id":1,"delta":3}"#.into(),
+            format!(r#"{{"id":{},"delta":1e100}}"#, id.raw()),
+            format!(r#"{{"id":{},"delta":"NaN"}}"#, id.raw()),
+        ] {
+            let (status, _, body) = request(body);
+            assert_eq!(status, "400 Bad Request");
+            assert!(String::from_utf8(body).unwrap().contains("error"));
+        }
+        let (status, _, body) = request(r#"{"id":999,"delta":3}"#.into());
+        assert_eq!(status, "404 Not Found");
+        assert!(String::from_utf8(body).unwrap().contains("unknown node"));
+        let tools = tool_list();
+        let scroll = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "ui.scroll")
+            .unwrap();
+        assert_eq!(scroll["inputSchema"]["required"], json!(["id", "delta"]));
     }
 
     fn http_test_handle() -> SharedTreeHandle {
