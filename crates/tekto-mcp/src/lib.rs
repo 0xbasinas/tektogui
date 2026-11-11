@@ -112,6 +112,7 @@ pub type OnChangeFn = Arc<dyn Fn() + Send + Sync>;
 /// Evaluates a JS bundle and swaps the tree. Installed by `tekto dev --js`.
 pub type ApplyJsFn = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
+/// Delivers a committed field value to the retained JS session.
 pub type InputJsFn = Arc<dyn Fn(NodeId, String) -> Result<(), String> + Send + Sync>;
 
 pub type ClickJsFn = Arc<dyn Fn(NodeId) -> Result<(), String> + Send + Sync>;

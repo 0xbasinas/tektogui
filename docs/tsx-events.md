@@ -80,5 +80,5 @@ Preedit, caret movement, patches, disabled fields, and edits that leave the
 value unchanged do not call it. The tree lock is released before delivery; the
 action gate keeps delivery ordered with reloads and other actions. Callbacks
 use the same one-second budget, error logging, redraw, and session lifecycle
-as `onClick`. Agent actions return callback errors. Controlled inputs and web
+as `onClick`. Agent actions return callback errors; desktop events log them. Controlled inputs and web
 callbacks are not supported.
