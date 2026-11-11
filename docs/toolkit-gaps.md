@@ -6,7 +6,7 @@ The integrated nightly includes Android app-private files and the Rust Notebook.
 
 ## Input and text
 
-Tekto has Parley text, bundled Roboto, and a single-line field. On the shared Linux/Windows desktop path, IME preedit and commit are handled and the OS gets a caret position. Selection, arrow keys, copy and paste in the field, and marked-range highlighting are missing. A Windows IME session still needs a runtime check. `ui.type` inserts plain text; it does not simulate an IME.
+Tekto has Parley text, bundled Roboto, and a single-line field. On the shared Linux/Windows desktop path, IME preedit and commit are handled and the OS gets a caret position. Desktop pointer clicks place the caret at the nearest painted character. Agent `ui.click` and `Tree::click(id)` place it at the end. The WASM/browser `click_at` path is not covered by this change. Selection, copy and paste in the field, and marked-range highlighting are missing. A Windows IME session still needs a runtime check. `ui.type` inserts plain text; it does not simulate an IME.
 
 Android uses a native `EditText` overlay and copies its string into the tree. That string can include unconfirmed composition; it is not a separate Tekto preedit. Live typing and portrait keyboard-inset checks still need a device or free emulator. This is narrower than the editing, international input, and text controls expected from Flutter or platform toolkits. See [agent guide](agent-guide.md) for the current input paths.
 

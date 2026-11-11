@@ -155,19 +155,30 @@ impl SharedTreeHandle {
         &self,
         route: impl FnOnce(&mut Tree) -> (bool, Option<NodeId>, Option<usize>),
     ) -> Result<bool, McpError> {
-        let _gate = self
-            .action_gate
-            .lock()
-            .map_err(|e| McpError::msg(e.to_string()))?;
-        let (changed, id) = {
-            let mut tree = self.tree.lock().map_err(|e| McpError::msg(e.to_string()))?;
-            let (changed, id, caret) = route(&mut tree);
+        self.route_activated_action(|tree| {
+            let (changed, id, caret) = route(tree);
             if let Some(id) = id {
                 tree.click(id).map_err(|e| McpError::msg(e.to_string()))?;
                 if let (Some(caret), Some(node)) = (caret, tree.get_mut(id)) {
                     node.caret = caret.min(node.text.as_deref().unwrap_or("").chars().count());
                 }
             }
+            Ok((changed, id))
+        })
+    }
+
+    /// Run a route that performs its own activation under the action gate.
+    pub fn route_activated_action(
+        &self,
+        route: impl FnOnce(&mut Tree) -> Result<(bool, Option<NodeId>), McpError>,
+    ) -> Result<bool, McpError> {
+        let _gate = self
+            .action_gate
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?;
+        let (changed, id) = {
+            let mut tree = self.tree.lock().map_err(|e| McpError::msg(e.to_string()))?;
+            let (changed, id) = route(&mut tree)?;
             (changed, id)
         };
         if let Some(id) = id {

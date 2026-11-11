@@ -132,3 +132,5 @@ HTTP endpoints also include `POST /reload`.
 ## Verify
 
 After `dev --headless`, `tekto tree` prints a tree and `tekto screenshot` writes a PNG starting with the bytes `89 50 4E 47`. Stop the dev process when you are done so the endpoint file is cleared (`dev --headless` clears it after Enter).
+
+Desktop pointer clicks place the caret at the nearest painted character. Agent `ui.click` and `Tree::click(id)` place it at the end. The WASM/browser `click_at` path is not covered by this change.
