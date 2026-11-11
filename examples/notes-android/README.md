@@ -42,7 +42,10 @@ adb wait-for-device
 # wait until: adb shell getprop sys.boot_completed  ->  1
 
 # Install the APK you already built. `tekto dev --android` rebuilds, so do not use it while the emulator is up.
-adb install -r target/debug/apk/notes.apk
+# Path below is the debug path seen in one log (see "APK path" note). Use the path cargo-apk2 printed
+# for your build; with CARGO_TARGET_DIR set, it is under that directory, not ./target.
+APK="${CARGO_TARGET_DIR:-target}/debug/apk/notes.apk"
+adb install -r "$APK"
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 adb forward tcp:8474 tcp:8474
 
@@ -50,6 +53,8 @@ cargo run -p tekto-cli -- tree
 adb exec-out screencap -p > /workspace/tektogui-shots/notes-android.png
 adb emu kill   # stop only this emulator
 ```
+
+APK path: one recorded cargo-apk2 log (`/workspace/audit-logs/apk.log`, command line not recorded) shows a debug APK at `<target dir>/debug/apk/notes.apk` with only an x86_64 library. That is all that was observed. The path for the default multi-ABI build, a `--target` build, or a `--release` build (`.../release/apk/` is a guess) is not verified. Read the path cargo-apk2 prints and use it for `adb install`. If `CARGO_TARGET_DIR` is set, replace `target` with it. No Android build or emulator run was done for this doc.
 
 The dev server on the device listens on `127.0.0.1:8474`. After `adb forward`, host `tekto tree` / `tekto screenshot` / `tekto patch` work the same as on desktop.
 
@@ -107,7 +112,10 @@ emulator -avd beddcode30 -no-window -memory 2048 -accel off &
 adb wait-for-device
 until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done
 
-adb install -r target/debug/apk/notes.apk
+# Path below is the debug path seen in one log (see "APK path" note). Use the path cargo-apk2 printed
+# for your build; with CARGO_TARGET_DIR set, it is under that directory, not ./target.
+APK="${CARGO_TARGET_DIR:-target}/debug/apk/notes.apk"
+adb install -r "$APK"
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 sleep 3
 mkdir -p /workspace/tektogui-shots
