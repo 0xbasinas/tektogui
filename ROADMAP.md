@@ -76,3 +76,8 @@ Still in Month 1:
 - [x] Honest list of what is still weaker than Flutter or a native toolkit ([#65](https://github.com/0xbasinas/tektogui/issues/65); see [toolkit gaps](docs/toolkit-gaps.md))
 
 Web, GPU, iOS, and perfect IME may slip. If they do, we cut scope rather than rush a wrapper around someone else's engine.
+
+## After Month 6 — research list
+
+A later research pass (November 2026) lists possible new crates, packages, and extensions. See the [Round 3 research roadmap](docs/roadmap/round3-research.md). That list is not a promise, and it has not been opened as GitHub issues.
+
