@@ -275,7 +275,9 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(state) = self.state.as_mut() {
-                    relayout_window(state);
+                    // The redraw path re-reads the viewport and lays out once.
+                    // Laying out here as well doubled the work on every step
+                    // of a live resize and made the window look frozen.
                     state.window.request_redraw();
                 }
             }
@@ -896,6 +898,31 @@ fn release_mouse() {
 #[cfg(not(target_os = "windows"))]
 fn release_mouse() {}
 
+/// Physical screen position of the pointer, independent of window movement.
+#[cfg(target_os = "windows")]
+fn screen_cursor() -> Option<(f64, f64)> {
+    #[repr(C)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+    unsafe extern "system" {
+        fn GetCursorPos(point: *mut Point) -> i32;
+    }
+    let mut point = Point { x: 0, y: 0 };
+    // Safety: `point` is a valid POINT for the duration of the call.
+    if unsafe { GetCursorPos(&mut point) } != 0 {
+        Some((point.x as f64, point.y as f64))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn screen_cursor() -> Option<(f64, f64)> {
+    None
+}
+
 /// Move and size the window in one step where the platform allows it.
 #[cfg(target_os = "windows")]
 fn set_window_rect(window: &Window, x: i32, y: i32, width: u32, height: u32) {
@@ -939,6 +966,7 @@ fn set_window_rect(window: &Window, x: i32, y: i32, width: u32, height: u32) {
 }
 
 fn begin_resize(state: &mut State, direction: ResizeDirection, screen: (f64, f64)) {
+    let screen = screen_cursor().unwrap_or(screen);
     let Ok(origin) = state.window.outer_position() else {
         return;
     };
@@ -954,6 +982,8 @@ fn begin_resize(state: &mut State, direction: ResizeDirection, screen: (f64, f64
 }
 
 fn resize_follow(state: &mut State, screen: (f64, f64)) {
+    // Global cursor position does not lag when the window itself moves.
+    let screen = screen_cursor().unwrap_or(screen);
     let Some(session) = state.resize else {
         return;
     };
