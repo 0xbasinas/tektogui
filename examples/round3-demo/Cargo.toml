@@ -1,0 +1,12 @@
+[package]
+name = "round3-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Hands-on demo for the round 3 features: tokens, animation, responsive split pane, pointer capture"
+publish = false
+
+[dependencies]
+tekto = { path = "../../crates/tekto" }
