@@ -113,9 +113,9 @@ pub fn button(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId, Wi
 
 /// A single-line text field. `label` is the accessible name; `value` is `text`.
 ///
-/// The caret starts at the end of `value`. Full IME (composition, candidates,
-/// marked text) is not implemented. Desktop keys that produce a character,
-/// and Backspace, edit `value` when the field is focused.
+/// The caret starts at the end of `value`. Desktop character keys, Backspace,
+/// and Delete edit the focused field; Left, Right, Home, and End move the caret
+/// by Unicode scalar values. These keys are ignored during IME preedit.
 pub fn text_field(
     tree: &mut Tree,
     parent: NodeId,

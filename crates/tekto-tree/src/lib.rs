@@ -543,6 +543,11 @@ fn clamp_char_boundary(s: &str, index: usize) -> usize {
 pub enum FieldKey {
     Insert(char),
     Backspace,
+    Left,
+    Right,
+    Home,
+    End,
+    Delete,
 }
 
 /// One winit input-method event, without a winit dependency.
@@ -1079,6 +1084,15 @@ impl Tree {
                     caret -= 1;
                 }
             }
+            FieldKey::Left => caret = caret.saturating_sub(1),
+            FieldKey::Right => caret = (caret + 1).min(chars.len()),
+            FieldKey::Home => caret = 0,
+            FieldKey::End => caret = chars.len(),
+            FieldKey::Delete => {
+                if caret < chars.len() {
+                    chars.remove(caret);
+                }
+            }
         }
         node.text = Some(chars.into_iter().collect());
         node.caret = caret;
@@ -1520,6 +1534,58 @@ mod tests {
         let other = tree.add(NodeKind::Text, Some(root)).unwrap();
         tree.set_focus(other).unwrap();
         assert!(!tree.apply_field_key(FieldKey::Insert('x')).unwrap());
+    }
+
+    #[test]
+    fn field_caret_keys_edit_unicode_and_clamp_during_preedit() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        tree.get_mut(field).unwrap().text = Some("aé你🙂".into());
+        tree.get_mut(field).unwrap().caret = 4;
+        tree.set_focus(field).unwrap();
+        for key in [
+            FieldKey::Left,
+            FieldKey::Left,
+            FieldKey::Delete,
+            FieldKey::Insert('界'),
+        ] {
+            assert!(tree.apply_field_key(key).unwrap());
+        }
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("aé界🙂"));
+        assert_eq!(tree.get(field).unwrap().caret, 3);
+        for key in [FieldKey::Home, FieldKey::Left, FieldKey::Left] {
+            tree.apply_field_key(key).unwrap();
+        }
+        assert_eq!(tree.get(field).unwrap().caret, 0);
+        tree.apply_field_key(FieldKey::Delete).unwrap();
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("é界🙂"));
+        for key in [FieldKey::End, FieldKey::Right, FieldKey::Delete] {
+            tree.apply_field_key(key).unwrap();
+        }
+        assert_eq!(tree.get(field).unwrap().caret, 3);
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("é界🙂"));
+        tree.apply_field_key(FieldKey::Home).unwrap();
+        tree.apply_field_key(FieldKey::Right).unwrap();
+        assert_eq!(tree.get(field).unwrap().caret, 1);
+        tree.apply_ime(ImeEvent::Preedit {
+            text: "文".into(),
+            cursor: None,
+        })
+        .unwrap();
+        for key in [
+            FieldKey::Left,
+            FieldKey::Right,
+            FieldKey::Home,
+            FieldKey::End,
+            FieldKey::Delete,
+        ] {
+            assert!(!tree.apply_field_key(key).unwrap());
+        }
+        let node = tree.get(field).unwrap();
+        assert_eq!(node.caret, 1);
+        assert_eq!(node.text.as_deref(), Some("é界🙂"));
+        assert_eq!(node.preedit, "文");
     }
 
     #[test]

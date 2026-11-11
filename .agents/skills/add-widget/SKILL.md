@@ -37,7 +37,7 @@ JSX lowers through `@tektogui/jsx-runtime` `mount` / `renderToOps` (`window`, `g
 
 ## Text field limits
 
-`text_field` accepts printable characters and Backspace on the desktop when it is focused (`Tree::apply_field_key`, wired from winit `KeyboardInput`). When focus is a text field, the window calls `set_ime_allowed(true)` and handles `WindowEvent::Ime`: `Preedit` sets `preedit` (shown at the caret; AccessKit value includes it) and `Commit` inserts into `text` and clears the preedit. That path is shared Linux and Windows code. Tests inject `ImeEvent` with no display and no IME daemon. `ui.type` / `POST /type` insert plain characters at the caret and drop a preedit. Clicking the field moves the caret to the end and clears a preedit. Agents read the committed value with node `text` (`ui.tree`, `ui.patch`). `name` stays the label. AccessKit value is `Node::composed_text` (committed plus preedit).
+`text_field` accepts printable characters, Backspace, Delete, Left, Right, Home, and End on the desktop when it is focused (`Tree::apply_field_key`, wired from winit `KeyboardInput`). Those named keys move or delete by Unicode scalar values and are ignored during preedit. When focus is a text field, the window calls `set_ime_allowed(true)` and handles `WindowEvent::Ime`: `Preedit` sets `preedit` (shown at the caret; AccessKit value includes it) and `Commit` inserts into `text` and clears the preedit. That path is shared Linux and Windows code. Tests inject `ImeEvent` with no display and no IME daemon. `ui.type` / `POST /type` insert plain characters at the caret and drop a preedit. Clicking the field moves the caret to the end and clears a preedit. Agents read the committed value with node `text` (`ui.tree`, `ui.patch`). `name` stays the label. AccessKit value is `Node::composed_text` (committed plus preedit).
 
 Still open:
 
@@ -46,7 +46,7 @@ Still open:
 - No Android soft keyboard (`set_ime_allowed` on Android would show one later; do not start an emulator for this).
 - No Windows runtime IME session in CI. The same `desktop.rs` match is what Windows builds use.
 - A keyboard string equal to the last IME commit is dropped only until the event queue goes idle (`about_to_wait`). That catches a Windows echo in the same burst. A later press of the same string is inserted. Printable keys call `Tree::type_keyboard_text`, which does nothing while a preedit is showing. `set_focus` clears the previous field's preedit.
-- No selection, arrow keys, copy, or paste
+- No selection, copy, or paste
 - `ui.type` does not send Backspace or a composition
 
 ## Verify
