@@ -12,7 +12,7 @@ CPU paint is the default. `@tektogui/wasm/canvas` (`paintCanvas`, `resizeCanvas`
 ## What builds
 
 - `crates/tekto-wasm` — tree, layout, text, CPU renderer (`tiny-skia`), `HostOp` / `apply_ops`. No `quickjs`. `gpu` is optional and off by default.
-- `packages/wasm` (`@tektogui/wasm`) — `connectWasm`, `applyOps`, `renderPng`, and `create` / `setText` / `setProp` / `append` / `remove` for `mount`. No DOM.
+- `packages/wasm` (`@tektogui/wasm`) — `connectWasm`, `applyOps`, `renderPng`, and `create` / `setText` / `setProp` / `append` / `remove` for `mount`. No DOM. `setFallbackFont(Uint8Array)` configures one caller-licensed fallback font or collection before text initialization. Configuration lasts for the WASM instance; `reset()` clears the tree, not fonts. Invalid bytes throw without freezing configuration. See `docs/wasm-fonts.md`.
 - `packages/wasm/src/canvas.js` (`@tektogui/wasm/canvas`) — blit and basic resize. No new crates.
 - `packages/wasm/src/gpu.js` (`@tektogui/wasm/gpu`) — feature detect and CPU fallback. No new npm packages.
 - `packages/wasm/dev.js` — one-command host page for a TSX entry (default Notes). `applyUiPatch` (`@tektogui/wasm/patch`) is the live patch hook. No new crates and no npm packages. The dev page uses the CPU blit.
@@ -48,6 +48,8 @@ The wasm path is chosen from the environment only (`packages/wasm/src/wasm-path.
 These are Node tests. They do not show that the wasm core or the host glue works in a browser. Browser runtime compatibility is not checked by CI.
 
 `node --test packages/wasm/test.js` mounts the Notes JSX tree, compares `renderPng(640, 400)` to `crates/tekto/tests/snapshots/notes-headless.png`, blits those pixels onto a fake canvas, and resizes to 393×240. `node --test packages/wasm/tsx-test.js` bundles `examples/notes/src/app.tsx` with esbuild (MIT binary on `PATH`) and mounts that same sketch on the wasm host. It also starts the web dev server and checks `POST /patch`. No display. Do not use displays :1 or :2. In ordinary mode both tests skip when the wasm file or esbuild is missing. With `TEKTO_REQUIRE_WASM=1` (set by `npm run test:wasm:required`) a missing module or esbuild fails instead, and the script also fails if any test skips.
+
+The WASM tests use fresh instances for valid, invalid, and late font configuration; Roboto is not evidence of CJK coverage. The CJK test is optional: it runs only when `TEKTO_TEST_CJK_FONT` points at a separately supplied, licensed font, and no font is committed.
 
 `RUSTFLAGS=-D warnings` is set in CI. Do not enable `quickjs` or `gpu` on these commands.
 

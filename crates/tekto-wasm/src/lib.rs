@@ -8,7 +8,7 @@
 //! to paint the same tree on a WebGPU canvas, and otherwise uses that blit.
 //!
 //! On `wasm32-unknown-unknown` the cdylib exports a tiny C ABI
-//! (`tekto_alloc`, `tekto_apply_ops`, `tekto_render_png`, `tekto_reset`,
+//! (`tekto_alloc`, `tekto_apply_ops`, `tekto_set_fallback_font`, `tekto_render_png`, `tekto_reset`,
 //! `tekto_out_ptr`, `tekto_out_len`). `@tektogui/wasm` is the JS side.
 //! Copy `tekto_out_*` bytes before the next call; the module reuses one
 //! output buffer.
@@ -117,6 +117,27 @@ mod ffi {
         let parsed = read_utf8(ptr, len).and_then(|json| super::apply_ops_json(&json));
         let body = match parsed {
             Ok(created) => serde_json::json!({ "ok": true, "created": created }),
+            Err(error) => serde_json::json!({ "ok": false, "error": error }),
+        };
+        publish(body.to_string().as_bytes());
+    }
+
+    /// Configure a fallback font from copied bytes, before text initialization.
+    /// Publishes a JSON object with `ok` and, on failure, `error`.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be non-null and valid for `len` bytes for this call.
+    #[no_mangle]
+    pub unsafe extern "C" fn tekto_set_fallback_font(ptr: *const u8, len: u32) {
+        let result = if ptr.is_null() {
+            Err("null font pointer")
+        } else {
+            let bytes = std::slice::from_raw_parts(ptr, len as usize).to_vec();
+            tekto_text::set_fallback_font(bytes)
+        };
+        let body = match result {
+            Ok(()) => serde_json::json!({ "ok": true }),
             Err(error) => serde_json::json!({ "ok": false, "error": error }),
         };
         publish(body.to_string().as_bytes());

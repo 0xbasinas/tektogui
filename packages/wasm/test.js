@@ -7,7 +7,7 @@ import { renderToOps } from "../jsx-runtime/src/index.js";
 import { Notes } from "../jsx-runtime/notes-app.js";
 import { blitPng, decodePng, resizeCanvas } from "./src/canvas.js";
 import { choosePaintBackend, detectWebGl2, detectWebGpu, paintPreferred } from "./src/gpu.js";
-import { connectWasm } from "./src/index.js";
+import { connectWasm, hostFromExports } from "./src/index.js";
 import { wasmPath as findWasmPath } from "./src/wasm-path.js";
 import { requireOrSkip } from "./test-prerequisites.js";
 
@@ -32,6 +32,71 @@ test("wasm host applies HostOps and returns a PNG", async (t) => {
   const again = host.applyOps([{ op: "create", kind: "rect" }]);
   assert.deepEqual(again, [1]);
   await assert.rejects(() => Promise.resolve().then(() => host.applyOps([{ op: "create", kind: "dom-node" }])));
+});
+
+test("fallback font config uses isolated module lifetime", async (t) => {
+  if (!requireOrSkip(t, existsSync(wasmPath), `no wasm module at ${wasmPath}`)) return;
+  const moduleBytes = readFileSync(wasmPath);
+  const font = readFileSync(fileURLToPath(new URL("../../crates/tekto-text/fonts/Roboto-Regular.ttf", import.meta.url)));
+  const host = await connectWasm(moduleBytes);
+  assert.throws(() => host.setFallbackFont(new Uint8Array([0, 1, 2])), /no usable fonts/);
+  host.reset();
+  host.setFallbackFont(font);
+  assert.throws(() => host.setFallbackFont(font), /already initialized/);
+  host.reset();
+  assert.throws(() => host.setFallbackFont(font), /already initialized/);
+  const id = host.create("text");
+  host.setText(id, "Font configuration");
+  assert.deepEqual(Array.from(host.renderPng(120, 40).slice(0, 8)), [137, 80, 78, 71, 13, 10, 26, 10]);
+
+  const late = await connectWasm(moduleBytes);
+  const lateId = late.create("text");
+  late.setText(lateId, "Initialize text");
+  late.renderPng(120, 40);
+  late.reset();
+  assert.throws(() => late.setFallbackFont(font), /already initialized/);
+});
+
+test("optional supplied CJK font renders distinct missing glyphs", async (t) => {
+  if (!process.env.TEKTO_TEST_CJK_FONT) return;
+  if (!requireOrSkip(t, existsSync(wasmPath), `no wasm module at ${wasmPath}`)) return;
+  const moduleBytes = readFileSync(wasmPath);
+  async function render(text, font) {
+    const host = await connectWasm(moduleBytes);
+    if (font) host.setFallbackFont(font);
+    const id = host.create("text");
+    host.setText(id, text);
+    return host.renderPng(80, 40);
+  }
+  const font = readFileSync(process.env.TEKTO_TEST_CJK_FONT);
+  const defaultA = await render("漢");
+  const defaultB = await render("字");
+  assert.deepEqual(defaultA, defaultB);
+  assert.notDeepEqual(await render("漢", font), await render("字", font));
+});
+
+test("font host copies aliased bytes across memory growth and reports errors", () => {
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const input = new Uint8Array(memory.buffer, 10, 3);
+  input.set([1, 2, 3]);
+  let output = new TextEncoder().encode('{"ok":true}');
+  let seen;
+  const exports = {
+    memory,
+    tekto_alloc() { memory.grow(1); return 100; },
+    tekto_set_fallback_font(ptr, len) {
+      seen = Array.from(new Uint8Array(memory.buffer, ptr, len));
+      new Uint8Array(memory.buffer, 200, output.length).set(output);
+    },
+    tekto_apply_ops() {}, tekto_render_png() {}, tekto_reset() {},
+    tekto_out_ptr() { return 200; }, tekto_out_len() { return output.length; },
+  };
+  const host = hostFromExports(exports);
+  host.setFallbackFont(input);
+  assert.deepEqual(seen, [1, 2, 3]);
+  output = new TextEncoder().encode('{"ok":false,"error":"bad font"}');
+  assert.throws(() => host.setFallbackFont(new Uint8Array([4])), /bad font/);
+  assert.throws(() => host.setFallbackFont([1]), TypeError);
 });
 
 /** In-memory canvas. No display and no DOM. */
