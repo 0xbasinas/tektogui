@@ -145,3 +145,9 @@ requests omit Origin. Android `adb forward` works using a loopback Host on
 the host machine, including when the forwarded port differs from the device
 port. These checks do not authenticate local clients or protect an exposed
 listener from clients that can forge headers.
+
+The server accepts at most eight concurrent connections; it closes excess
+connections. Each request has five seconds total to send its headers and body,
+and each response has five seconds total to write. These are local development
+limits; retry after a stalled connection times out. Headers are limited to
+64 KiB and the full buffered request to 2 MiB.
