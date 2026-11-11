@@ -1,6 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { jsx, jsxs, isElement, Fragment, componentSchema } from "./src/index.js";
+import { jsx, jsxs, isElement, Fragment, componentSchema, appBar, appBarAction } from "./src/index.js";
+
+test("app bar helper builds a banner with quiet actions", () => {
+  const bar = appBar("Notes", [appBarAction("Save")]);
+  assert.equal(bar.type, "rect");
+  const ops = renderToOps(bar);
+  assert.ok(ops.some((op) => op.op === "setProp" && op.key === "fill" && op.value === "#3a424a"));
+  assert.ok(ops.some((op) => op.op === "setText" && op.text === "Notes"));
+  assert.ok(ops.some((op) => op.op === "setProp" && op.key === "fill" && op.value === "none"));
+  assert.ok(ops.some((op) => op.op === "setText" && op.text === "Save"));
+});
 
 test("jsx builds a plain element, not a DOM node", () => {
   const el = jsxs("window", { title: "Notes", children: [jsx("text", { children: "Hi" })] });
