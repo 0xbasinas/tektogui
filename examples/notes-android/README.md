@@ -42,7 +42,7 @@ adb wait-for-device
 # wait until: adb shell getprop sys.boot_completed  ->  1
 
 # Install the APK you already built. `tekto dev --android` rebuilds, so do not use it while the emulator is up.
-adb install -r target/x86_64-linux-android/debug/apk/notes.apk
+adb install -r target/debug/apk/notes.apk
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 adb forward tcp:8474 tcp:8474
 
@@ -107,7 +107,7 @@ emulator -avd beddcode30 -no-window -memory 2048 -accel off &
 adb wait-for-device
 until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done
 
-adb install -r target/x86_64-linux-android/debug/apk/notes.apk
+adb install -r target/debug/apk/notes.apk
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 sleep 3
 mkdir -p /workspace/tektogui-shots

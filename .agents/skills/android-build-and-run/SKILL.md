@@ -70,8 +70,7 @@ cargo apk2 build -p notes-android --target x86_64-linux-android
 cargo run -p tekto-cli -- build --target android
 ```
 
-The APK is typically at
-`target/<triple>/debug/apk/notes.apk` (or `.../release/apk/` with `--release`).
+The APK is at `$CARGO_TARGET_DIR/debug/apk/notes.apk` (default `target/debug/apk/notes.apk`; `.../release/apk/` with `--release`). There is no `<triple>` folder, even with `--target`. This is the path in the recorded cargo-apk2 audit log; the emulator was not started for this doc fix.
 Package id: `com.tektogui.notes`. Activity: `android.app.NativeActivity`.
 The activity *must* declare `android.app.lib_name` = `notes_android` (cargo-apk2 does not insert this unless the key is already in the manifest; without it NativeActivity looks for `libmain.so` and crashes).
 
@@ -86,7 +85,7 @@ cargo check -p notes-android --target aarch64-linux-android
 
 Do not put this in PR CI. Do not start the emulator if another heavy build is running, and do not run heavy `cargo test` / compiles in parallel with it. This machine often has `/dev/kvm` but no permission, so you **must** pass `-accel off` (TCG, software). Be patient: a cold boot can take several minutes. `-gpu swiftshader_indirect` is optional.
 
-Build the APK first (see Package), with the emulator stopped. Reuse `target/x86_64-linux-android/debug/apk/notes.apk` when it is already current. `tekto dev --android` rebuilds the APK; do not run it while the emulator is up.
+Build the APK first (see Package), with the emulator stopped. Reuse `target/debug/apk/notes.apk` when it is already current. `tekto dev --android` rebuilds the APK; do not run it while the emulator is up.
 
 ```bash
 source ~/.android-env.sh
@@ -99,7 +98,7 @@ adb shell getprop sys.boot_completed
 Then install and launch the APK you already built:
 
 ```bash
-adb install -r target/x86_64-linux-android/debug/apk/notes.apk
+adb install -r target/debug/apk/notes.apk
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 adb forward tcp:8474 tcp:8474
 ```
@@ -193,7 +192,7 @@ emulator -avd beddcode30 -no-window -memory 2048 -accel off &
 adb wait-for-device
 until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done
 
-adb install -r target/x86_64-linux-android/debug/apk/notes.apk
+adb install -r target/debug/apk/notes.apk
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 sleep 3
 mkdir -p /workspace/tektogui-shots

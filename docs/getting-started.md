@@ -60,7 +60,15 @@ cargo run -- --headless --out hello.png
 
 That writes a compiling Rust app, a `src/app.tsx` sketch, and a README. The app depends on this checkout by path, so you only need a Rust toolchain.
 
-`npm create tektogui hello` (or `npx create-tektogui hello`) does the same thing by calling `tekto new`.
+`npm create tektogui hello` (or `npx create-tektogui hello`) is not a standalone installer. It is a thin wrapper that needs a tektogui checkout: it exits with an error if `crates/tekto-cli` is not next to the package, and it runs `cargo run -p tekto-cli -- new <name>` with `TEKTO_ROOT` set to that checkout. That `cargo run` uses your current folder, so run it from inside the checkout. The name must be one directory name, not a path.
+
+To scaffold somewhere else, build the CLI once and call it with `TEKTO_ROOT`:
+
+```bash
+cargo build -p tekto-cli
+cd /some/other/folder
+TEKTO_ROOT=/path/to/tektogui /path/to/tektogui/target/debug/tekto new hello
+```
 
 ## Write a tiny Rust app
 

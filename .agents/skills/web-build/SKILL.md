@@ -43,6 +43,8 @@ TEKTO_REQUIRE_WASM=1 node --test packages/wasm/test.js   # direct Node run, modu
 
 The wasm file is found in this order: `TEKTO_WASM`, then `$CARGO_TARGET_DIR/wasm32-unknown-unknown/debug/tekto_wasm.wasm`, then `target/...`. A relative `CARGO_TARGET_DIR` resolves from the repo root.
 
+`TEKTO_WASM=/abs/path/tekto_wasm.wasm` points the tests (and `node packages/wasm/dev.js`) at a specific wasm file, for example one built into a private `CARGO_TARGET_DIR`. Required mode also needs `esbuild` on `PATH` (or `ESBUILD`).
+
 These are Node tests. They do not show that the wasm core or the host glue works in a browser. Browser runtime compatibility is not checked by CI.
 
 `node --test packages/wasm/test.js` mounts the Notes JSX tree, compares `renderPng(640, 400)` to `crates/tekto/tests/snapshots/notes-headless.png`, blits those pixels onto a fake canvas, and resizes to 393×240. `node --test packages/wasm/tsx-test.js` bundles `examples/notes/src/app.tsx` with esbuild (MIT binary on `PATH`) and mounts that same sketch on the wasm host. It also starts the web dev server and checks `POST /patch`. No display. Do not use displays :1 or :2. In ordinary mode both tests skip when the wasm file or esbuild is missing. With `TEKTO_REQUIRE_WASM=1` (set by `npm run test:wasm:required`) a missing module or esbuild fails instead, and the script also fails if any test skips.
