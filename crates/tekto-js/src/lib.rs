@@ -21,9 +21,11 @@ mod engine;
 pub use engine::JsSession;
 
 mod bundle;
+mod permissions;
 mod watch;
 
 pub use bundle::{bundle, find_packages_root, make_wrapper, which_esbuild};
+pub use permissions::{NativeCapability, NativePermissions};
 pub use tekto_native::{apply_native_op, NativeOp};
 pub use watch::{collect_watch_files, spawn_watcher};
 
@@ -122,31 +124,58 @@ pub trait Host {
     /// Apply `ops` in order. For each [`HostOp::Create`], the new stable
     /// id is pushed onto the returned list (other ops are not).
     fn apply(&mut self, ops: &[HostOp]) -> Result<Vec<u64>, JsError>;
+
+    /// Whether a retained session may run this native call.
+    ///
+    /// The default allows it, so a host that does not configure permissions
+    /// keeps its previous behaviour. [`TreeHost`] checks its
+    /// [`NativePermissions`]; a narrower embedding can override this.
+    fn allow_native(&mut self, _op: &NativeOp) -> bool {
+        true
+    }
 }
 
 /// A [`Host`] that writes into a Tekto [`Tree`].
 #[derive(Clone, Default)]
 pub struct TreeHost {
     pub tree: Rc<RefCell<Tree>>,
+    pub permissions: NativePermissions,
 }
 
 impl TreeHost {
     pub fn new() -> Self {
         Self {
             tree: Rc::new(RefCell::new(Tree::new())),
+            permissions: NativePermissions::default(),
         }
     }
 
     pub fn from_tree(tree: Tree) -> Self {
         Self {
             tree: Rc::new(RefCell::new(tree)),
+            permissions: NativePermissions::default(),
         }
+    }
+
+    /// Narrow or widen the native call families this host allows.
+    pub fn set_native_permissions(&mut self, permissions: NativePermissions) {
+        self.permissions = permissions;
+    }
+
+    /// Builder form of [`Self::set_native_permissions`].
+    pub fn with_native_permissions(mut self, permissions: NativePermissions) -> Self {
+        self.permissions = permissions;
+        self
     }
 }
 
 impl Host for TreeHost {
     fn apply(&mut self, ops: &[HostOp]) -> Result<Vec<u64>, JsError> {
         apply_ops(&mut self.tree.borrow_mut(), ops)
+    }
+
+    fn allow_native(&mut self, op: &NativeOp) -> bool {
+        self.permissions.allows_op(op)
     }
 }
 
@@ -467,6 +496,52 @@ pub fn eval_module(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tree_host_permissions_gate_native_ops() {
+        let mut host = TreeHost::new();
+        assert!(host.allow_native(&NativeOp::ClipboardGetText));
+        host.set_native_permissions(NativePermissions::deny_all());
+        assert!(!host.allow_native(&NativeOp::ClipboardGetText));
+        host.set_native_permissions(NativePermissions::from_names(["clipboard"]).unwrap());
+        assert!(host.allow_native(&NativeOp::ClipboardGetText));
+        assert!(!host.allow_native(&NativeOp::TrayHide));
+        assert!(host
+            .with_native_permissions(NativePermissions::allow_all())
+            .allow_native(&NativeOp::TrayHide));
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn native_permissions_block_apply_native_op() {
+        let mut host = TreeHost::new().with_native_permissions(NativePermissions::deny_all());
+        let session = JsSession::new().unwrap();
+        let error = session
+            .eval(
+                r#"tekto.applyNativeOp('{"op":"clipboardGetText"}')"#,
+                &mut host,
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("native capability `clipboard` is not allowed"),
+            "{error}"
+        );
+        host.set_native_permissions(NativePermissions::from_names(["clipboard"]).unwrap());
+        let error = session
+            .eval(
+                r#"tekto.applyNativeOp('{"op":"trayTakeClick"}')"#,
+                &mut host,
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("native capability `tray` is not allowed"),
+            "{error}"
+        );
+    }
 
     #[cfg(feature = "quickjs")]
     #[test]

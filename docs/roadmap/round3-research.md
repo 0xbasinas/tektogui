@@ -210,15 +210,9 @@ These three work well together, and can share the `tekto-test` crate above.
 
 ### JS native permission list
 
-- **Name:** Deny-by-default capabilities for `tekto.applyNativeOp`.
-- **What it does:** An app declares which native calls TSX may use (files, clipboard, tray, shortcuts, and so on). Anything else returns a clear error. A good default for agent-generated apps is narrow.
-- **Why:** Tauri v2 capabilities are the model (ideas only). Agents write code; an open native bridge is a real risk.
-- **Priority:** medium–high. **Size:** S–M.
-- **Crates it touches:** `tekto-js`, `tekto-native`, maybe a `tekto.permissions.json` read by the CLI or host.
-- **Design notes:** First slice is a flat allow-list, not per-path scopes or permission prompt dialogs.
-- **DX fit:** Improves the agent story without new deps. Default builds unchanged. Errors are easy for agents to read.
-- **Acceptance:** An allowed clipboard call works; a denied file call fails clearly. Missing config means a documented default (narrow or "all documented ops", but the choice must be explicit).
-- **Licence:** Own MIT code. Tauri is MIT OR Apache-2.0 and is a reference only; do not copy its permission crate.
+**Implemented:** `tekto-js` has a flat capability set — `clipboard`, `files`, `notifications`, `tray`, `shortcuts` — as `NativeCapability`, with `NativePermissions` storing the allowed set. `TreeHost` carries permissions and honours them in `Host::allow_native`; `tekto.applyNativeOp` checks before the platform call and throws `native capability `<name>` is not allowed for this app; the host must opt in with NativePermissions`. `NativePermissions::from_names(["clipboard", "files"])` parses configuration, `all` expands to every family, an unknown name lists the accepted ones, and `deny_all` / `only` / `allow` / `deny` cover the rest. The default is `allow_all` so existing apps keep working, and an embedding that runs agent-written TSX narrows it explicitly; both choices are documented on the type. Tests cover name parsing and rejection, every op mapping to one family, `TreeHost` gating with and without QuickJS, and the JS error text.
+
+**Remaining:** No `tekto.permissions.json` is read by the CLI or desktop host yet, so narrowing is a Rust API call today. Checks are per family, not per path or per call, and there are no permission prompts. Wiring a generated-app template with a narrow default is a later slice.
 
 ### Typed native API and template types
 
