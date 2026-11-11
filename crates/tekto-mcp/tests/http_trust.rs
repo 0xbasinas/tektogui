@@ -28,6 +28,7 @@ fn inspector_patch_writes_source_and_reload_without_origin() {
         last_writeback: Mutex::new(None),
         action_gate: Arc::new(Mutex::new(())),
         click_js: Mutex::new(None),
+        input_js: Mutex::new(None),
         history: Mutex::new(None),
     });
     let endpoint = start_dev_server(handle.clone()).unwrap();

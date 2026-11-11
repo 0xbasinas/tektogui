@@ -112,12 +112,15 @@ pub type OnChangeFn = Arc<dyn Fn() + Send + Sync>;
 /// Evaluates a JS bundle and swaps the tree. Installed by `tekto dev --js`.
 pub type ApplyJsFn = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
+pub type InputJsFn = Arc<dyn Fn(NodeId, String) -> Result<(), String> + Send + Sync>;
+
 pub type ClickJsFn = Arc<dyn Fn(NodeId) -> Result<(), String> + Send + Sync>;
 
 pub struct SharedTreeHandle {
     /// Serializes supported handle actions with retained session reloads.
     pub action_gate: Arc<Mutex<()>>,
     pub click_js: Mutex<Option<ClickJsFn>>,
+    pub input_js: Mutex<Option<InputJsFn>>,
     /// Direct concurrent mutation is unsupported while a JS session is active.
     /// Use handle operations so they are ordered with clicks and reloads.
     pub tree: Arc<Mutex<Tree>>,
@@ -135,6 +138,13 @@ pub struct SharedTreeHandle {
     pub last_writeback: Mutex<Option<writeback::WritebackReport>>,
     /// Opt-in JSON store. `None` means the app is not recording history.
     pub history: Mutex<Option<Arc<Mutex<Store<Value>>>>>,
+}
+
+fn field_value(tree: &Tree, id: Option<NodeId>) -> Option<(NodeId, String)> {
+    let id = id?;
+    let node = tree.get(id)?;
+    (node.kind == tekto_tree::NodeKind::TextField)
+        .then(|| (id, node.text.clone().unwrap_or_default()))
 }
 
 impl SharedTreeHandle {
@@ -176,10 +186,18 @@ impl SharedTreeHandle {
             .action_gate
             .lock()
             .map_err(|e| McpError::msg(e.to_string()))?;
-        let (changed, id) = {
+        let (changed, id, input) = {
             let mut tree = self.tree.lock().map_err(|e| McpError::msg(e.to_string()))?;
+            let before = field_value(&tree, tree.focus);
             let (changed, id) = route(&mut tree)?;
-            (changed, id)
+            let after = field_value(&tree, tree.focus);
+            let input = match (before, after) {
+                (Some((old_id, old)), Some((id, value))) if old_id == id && old != value => {
+                    Some((id, value))
+                }
+                _ => None,
+            };
+            (changed, id, input)
         };
         if let Some(id) = id {
             self.log(format!("clicked #{id}"));
@@ -197,7 +215,22 @@ impl SharedTreeHandle {
                 hook(id).map_err(McpError::msg)?;
             }
         }
+        self.deliver_input(input)?;
         Ok(changed || id.is_some())
+    }
+
+    fn deliver_input(&self, input: Option<(NodeId, String)>) -> Result<(), McpError> {
+        if let Some((id, value)) = input {
+            let hook = self
+                .input_js
+                .lock()
+                .map_err(|e| McpError::msg(e.to_string()))?
+                .clone();
+            if let Some(hook) = hook {
+                hook(id, value).map_err(McpError::msg)?;
+            }
+        }
+        Ok(())
     }
 
     fn notify_change(&self) {
@@ -338,13 +371,17 @@ impl AppHandle for SharedTreeHandle {
             .lock()
             .map_err(|e| McpError::msg(e.to_string()))?;
         let mut tree = self.tree.lock().expect("tree lock");
+        let before = field_value(&tree, Some(id));
         tree.insert_text(id, text)
             .map_err(|e| McpError::msg(e.to_string()))?;
+        let after = field_value(&tree, Some(id));
+        let input = if before != after { after } else { None };
         drop(tree);
         if let Ok(mut logs) = self.logs.lock() {
             logs.push(format!("typed into #{id}"));
         }
         self.notify_change();
+        self.deliver_input(input)?;
         Ok(())
     }
 
@@ -1322,6 +1359,7 @@ mod tests {
             last_writeback: Mutex::new(None),
             action_gate: Arc::new(Mutex::new(())),
             click_js: Mutex::new(None),
+            input_js: Mutex::new(None),
             history: Mutex::new(None),
         }
     }
@@ -1473,6 +1511,7 @@ mod tests {
             last_writeback: Mutex::new(None),
             action_gate: Arc::new(Mutex::new(())),
             click_js: Mutex::new(None),
+            input_js: Mutex::new(None),
             history: Mutex::new(None),
         };
         handle.click(t).unwrap();
@@ -1517,6 +1556,7 @@ mod tests {
             last_writeback: Mutex::new(None),
             action_gate: Arc::new(Mutex::new(())),
             click_js: Mutex::new(None),
+            input_js: Mutex::new(None),
             history: Mutex::new(None),
         };
         let err = handle
@@ -1544,6 +1584,7 @@ mod tests {
             last_writeback: Mutex::new(None),
             action_gate: Arc::new(Mutex::new(())),
             click_js: Mutex::new(None),
+            input_js: Mutex::new(None),
             history: Mutex::new(Some(store)),
         };
         let (_s, _c, body) = dispatch(&handle, "GET", "/states", "").unwrap();
@@ -1573,6 +1614,7 @@ mod tests {
             last_writeback: Mutex::new(None),
             action_gate: Arc::new(Mutex::new(())),
             click_js: Mutex::new(None),
+            input_js: Mutex::new(None),
             history: Mutex::new(None),
         };
         let listed = off.states_json();
@@ -1652,6 +1694,7 @@ mod tests {
                 last_writeback: Mutex::new(None),
                 action_gate: Arc::new(Mutex::new(())),
                 click_js: Mutex::new(None),
+                input_js: Mutex::new(None),
                 history: Mutex::new(None),
             },
             "GET",

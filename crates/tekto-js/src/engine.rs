@@ -111,6 +111,19 @@ impl JsSession {
         })
     }
 
+    /// Deliver a committed field value to a registered input handler.
+    pub fn dispatch_input(
+        &self,
+        id: u64,
+        value: &str,
+        host: &mut dyn Host,
+    ) -> Result<bool, JsError> {
+        self.run(host, |ctx| {
+            let f: rquickjs::Function = ctx.globals().get("__tektoDispatchInput")?;
+            f.call((id, value))
+        })
+    }
+
     /// Forget a removed subtree before an id can be reused. The host must pass
     /// every removed id when removal happened outside JavaScript.
     pub fn forget_node(&self, id: u64, host: &mut dyn Host) -> Result<(), JsError> {

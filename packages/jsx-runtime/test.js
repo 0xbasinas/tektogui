@@ -195,3 +195,15 @@ test("disabled controls lower their state to host props", () => {
     assert.ok(ops.some((op) => op.op === "setProp" && op.key === "disabled" && op.value === "true"));
   }
 });
+
+// Input handlers are registered only on retained text fields.
+{
+  let callback;
+  const host = { create: () => 1, setText() {}, setProp() {}, append() {}, remove() {}, onInput: (_id, fn) => { callback = fn; } };
+  let value = '';
+  mount(jsx('text_field', { onInput: v => { value = v; } }), host);
+  callback('hello');
+  assert.equal(value, 'hello');
+  assert.throws(() => renderToOps(jsx('text_field', { onInput() {} })), /retained QuickJS/);
+  assert.throws(() => mount(jsx('button', { onInput() {} }), host), /text_field/);
+}

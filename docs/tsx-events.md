@@ -28,8 +28,7 @@ the dev server exposes the AccessKit tree without it.
 The `text` function is evaluated immediately and when its signals change. It
 updates the existing text node; it does not rebuild the tree. Use it only on a
 `text` element without children. `onClick` accepts a no-argument function only
-on `button`. Other dynamic props, function children, text-input callbacks and
-reconciliation are not supported. An effect is disposed when its node is
+on `button`. A `text_field` accepts `onInput={(value) => ...}` on desktop QuickJS. Other dynamic props, function children and reconciliation are not supported. An effect is disposed when its node is
 removed through the session host. Retire a session by calling `JsSession::dispose` with its host before dropping it.
 For ordinary cleanup errors it tries the remaining cleanups, reports the first error,
 and clears their registrations. An execution interruption can stop cleanup early. Drop alone cannot run host-backed cleanup.
@@ -73,3 +72,13 @@ unfinished; retiring the session drops the remaining JavaScript state.
 The deadline is checked only while QuickJS executes. Native Rust host operations and
 lock waits cannot generally be preempted, so this is not a strict wall-clock limit.
 Run only trusted app code.
+
+A field's `onInput` receives its complete committed string once after each edit
+action, including desktop typing, agent type, deletion, and IME commit. A
+multi-character insertion or commit produces one callback with the final value.
+Preedit, caret movement, patches, disabled fields, and edits that leave the
+value unchanged do not call it. The tree lock is released before delivery; the
+action gate keeps delivery ordered with reloads and other actions. Callbacks
+use the same one-second budget, error logging, redraw, and session lifecycle
+as `onClick`. Agent actions return callback errors. Controlled inputs and web
+callbacks are not supported.
