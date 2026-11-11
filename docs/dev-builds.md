@@ -34,9 +34,34 @@ The `tekto` crate still Android-checks with `--no-default-features --features cp
 
 Nothing unexpected showed up in the default graph that we should gate or drop in Month 1.
 
+## Local JavaScript tests
+
+`npm test` runs the PR CI files plus the WASM and bundler suites. Any case that
+needs esbuild skips when neither `ESBUILD` nor `esbuild` on `PATH` resolves, and
+the run still exits 0. A green local run therefore does not prove that bundling
+works. Install esbuild once and point `ESBUILD` at it:
+
+```bash
+npm install --prefix "$TMPDIR/tekto-esbuild" --no-save --no-package-lock esbuild@0.25.12
+ESBUILD="$TMPDIR/tekto-esbuild/node_modules/.bin/esbuild" npm test
+```
+
+Windows PowerShell. Node cannot start the `.cmd` shim without a shell, so point
+`ESBUILD` at the native binary:
+
+```powershell
+npm install --prefix "$env:TEMP\tekto-esbuild" --no-save --no-package-lock esbuild@0.25.12
+$env:ESBUILD = "$env:TEMP\tekto-esbuild\node_modules\@esbuild\win32-x64\esbuild.exe"
+npm test
+```
+
+`packages/build/test.js` runs on PR CI, but its bundling case skips there too.
+The WASM job installs esbuild and fails instead of skipping, so that job is the
+real bundler gate.
+
 ## CI caches and times
 
-Linux `fmt` + `clippy -D warnings` + `cargo test --workspace --all-targets` runs on every PR and every push. That one test command is what runs the record/replay integration test and the headless Notes PNG compare. Windows and Android compile jobs run only on `push` to `nightly`, or on `workflow_dispatch` with `full=true`. The WASM and QuickJS job runs on `push` to `nightly` or any `workflow_dispatch`, not on PR CI. It builds the WASM core, checks `tekto` with `--no-default-features --features cpu,js`, runs the required Node WASM and `tekto-js` QuickJS tests, verifies the existing owner tests are discovered and runs all `tekto` QuickJS owner tests, and compile-checks `tekto-cli` with QuickJS. Both QuickJS test steps set `TEKTO_REQUIRE_ESBUILD=1`, so esbuild-dependent owner and example regressions fail instead of skipping when esbuild is missing. Swatinem/rust-cache and concurrency cancel are on. The added owner and CLI steps have not yet been timed in CI.
+Linux `fmt` + `clippy -D warnings` + `cargo test --workspace --all-targets` runs on every PR and every push. That one test command is what runs the record/replay integration test and the headless Notes PNG compare. The scaffold test writes an app and typechecks it, but its full `cargo check` is opt-in with `TEKTO_SCAFFOLD_CHECK=1`: it resolves and builds a separate dependency graph, which needs the network and does not belong on every PR. Windows and Android compile jobs run only on `push` to `nightly`, or on `workflow_dispatch` with `full=true`. The WASM and QuickJS job runs on `push` to `nightly` or any `workflow_dispatch`, not on PR CI. It builds the WASM core, checks `tekto` with `--no-default-features --features cpu,js`, runs the required Node WASM and `tekto-js` QuickJS tests, verifies the existing owner tests are discovered and runs all `tekto` QuickJS owner tests, and compile-checks `tekto-cli` with QuickJS. Both QuickJS test steps set `TEKTO_REQUIRE_ESBUILD=1`, so esbuild-dependent owner and example regressions fail instead of skipping when esbuild is missing. Swatinem/rust-cache and concurrency cancel are on. The added owner and CLI steps have not yet been timed in CI.
 
 Times from GitHub-hosted Linux (UTC, job "Linux check", step "Test (includes headless snapshot)"):
 

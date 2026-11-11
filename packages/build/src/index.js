@@ -4,9 +4,9 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { delimiter, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
@@ -17,8 +17,39 @@ export function repoRoot() {
   return resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 }
 
+/**
+ * Map a Windows npm or pnpm shim to the native esbuild binary next to it.
+ * `spawnSync` cannot start a `.cmd` or extensionless shim without a shell.
+ */
+export function resolveEsbuildBinary(
+  candidate,
+  { platform = process.platform, arch = process.arch, exists = existsSync } = {},
+) {
+  if (platform !== "win32" || !candidate || /\.exe$/i.test(candidate)) return candidate;
+  const native = resolve(
+    dirname(candidate),
+    "node_modules",
+    "@esbuild",
+    `win32-${arch}`,
+    "esbuild.exe",
+  );
+  return exists(native) ? native : candidate;
+}
+
 export function esbuildBin() {
-  return process.env.ESBUILD || "esbuild";
+  const configured = process.env.ESBUILD;
+  if (configured) return resolveEsbuildBinary(configured);
+  if (process.platform !== "win32") return "esbuild";
+  for (const dir of (process.env.PATH || "").split(delimiter).filter(Boolean)) {
+    const exe = resolve(dir, "esbuild.exe");
+    if (existsSync(exe)) return exe;
+    const shim = resolve(dir, "esbuild.cmd");
+    if (existsSync(shim)) {
+      const native = resolveEsbuildBinary(shim);
+      if (native !== shim) return native;
+    }
+  }
+  return "esbuild";
 }
 
 export function wrapperSource(entry, target = "web") {
@@ -61,9 +92,13 @@ export function bundleApp(entry, outfile, { target = "web" } = {}) {
     rmSync(scratch, { recursive: true, force: true });
   }
   if (result.error) {
+    const missing = result.error.code === "ENOENT" || result.error.code === "EINVAL";
     const err = new Error(
-      result.error.code === "ENOENT"
-        ? "esbuild not found on PATH (or $ESBUILD)"
+      missing
+        ? "esbuild not found on PATH (or $ESBUILD)" +
+            (process.platform === "win32"
+              ? "; on Windows point ESBUILD at esbuild.exe, not the .cmd shim"
+              : "")
         : result.error.message,
     );
     err.code = result.error.code;

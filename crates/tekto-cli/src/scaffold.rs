@@ -304,12 +304,17 @@ mod tests {
                 .expect("node for generated project typecheck");
             assert!(status.success(), "generated app failed to typecheck");
         }
-        let status = Command::new("cargo")
-            .args(["check", "--manifest-path"])
-            .arg(dest.join("Cargo.toml"))
-            .env("CARGO_TARGET_DIR", repo.join("target"))
-            .status()
-            .expect("cargo");
-        assert!(status.success(), "generated app failed to cargo check");
+        // A full check of a generated app resolves and compiles the whole
+        // dependency graph, which needs the network and several minutes on a
+        // cold cache. Opt in with TEKTO_SCAFFOLD_CHECK=1. PR CI leaves it off.
+        if std::env::var_os("TEKTO_SCAFFOLD_CHECK").is_some() {
+            let status = Command::new("cargo")
+                .args(["check", "--manifest-path"])
+                .arg(dest.join("Cargo.toml"))
+                .env("CARGO_TARGET_DIR", repo.join("target"))
+                .status()
+                .expect("cargo");
+            assert!(status.success(), "generated app failed to cargo check");
+        }
     }
 }

@@ -2,15 +2,49 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
-import { bundleApp, wrapperSource, esbuildBin } from "./src/index.js";
+import { bundleApp, wrapperSource, esbuildBin, resolveEsbuildBinary } from "./src/index.js";
 
 test("wrapper escapes paths and rejects invalid targets", () => {
   assert.match(wrapperSource('C:/path with spaces/a"b.tsx'), /a\\"b/);
   assert.match(wrapperSource("/app.tsx", "desktop"), /globalThis\.tekto/);
   assert.throws(() => wrapperSource("/app.tsx", "bad"), /unknown build target/);
+});
+
+test("windows shims resolve to the native esbuild binary", () => {
+  const shim = join("npm", "esbuild.cmd");
+  const native = resolve(
+    dirname(shim),
+    "node_modules",
+    "@esbuild",
+    "win32-x64",
+    "esbuild.exe",
+  );
+  const seen = [];
+  const resolveWindows = (candidate) =>
+    resolveEsbuildBinary(candidate, {
+      platform: "win32",
+      arch: "x64",
+      exists: (path) => {
+        seen.push(path);
+        return path === native;
+      },
+    });
+  assert.equal(resolveWindows(shim), native);
+  assert.ok(seen.includes(native));
+  // A native path, another platform, and a missing sibling stay untouched.
+  assert.equal(resolveWindows(native), native);
+  assert.equal(resolveEsbuildBinary(shim, { platform: "linux" }), shim);
+  assert.equal(
+    resolveEsbuildBinary(shim, {
+      platform: "win32",
+      arch: "arm64",
+      exists: () => false,
+    }),
+    shim,
+  );
 });
 
 test("CLI reports invalid arguments", () => {
