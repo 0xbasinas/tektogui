@@ -175,9 +175,11 @@ impl GpuRenderer {
     ///
     /// Returns `Ok(false)` when no surface was attached, so the caller can
     /// fall back to the softbuffer path.
-    pub fn present_window(&mut self) -> Result<bool, RenderError> {
+    pub fn present_window(&mut self, width: u32, height: u32) -> Result<bool, RenderError> {
+        let width = width.max(1);
+        let height = height.max(1);
         let mut inner = self.inner.borrow_mut();
-        let (surface, config) = match (inner.surface.take(), inner.config.take()) {
+        let (surface, mut config) = match (inner.surface.take(), inner.config.take()) {
             (Some(surface), Some(config)) => (surface, config),
             (surface, config) => {
                 inner.surface = surface;
@@ -185,6 +187,11 @@ impl GpuRenderer {
                 return Ok(false);
             }
         };
+        if config.width != width || config.height != height {
+            config.width = width;
+            config.height = height;
+            surface.configure(&inner.device, &config);
+        }
         drop(inner);
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
