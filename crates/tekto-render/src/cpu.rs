@@ -88,6 +88,123 @@ impl Renderer for CpuRenderer {
             .fill_rect(r, &paint, Transform::identity(), mask.as_ref());
     }
 
+    fn fill_rrect(&mut self, rect: Rect, radius: f32, color: TektoColor) {
+        // Early-out only; the path keeps the full rect and the mask clips.
+        if clip_rect(rect, self.clip_bounds()).is_none() {
+            return;
+        }
+        let Some(path) = rounded_rect_path(rect, radius) else {
+            self.fill_rect(rect, color);
+            return;
+        };
+        let s = self.scale;
+        let mut paint = Paint::default();
+        paint.set_color(to_color(color));
+        paint.anti_alias = true;
+        let mask = self.clip_mask();
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::EvenOdd,
+            Transform::from_scale(s, s),
+            mask.as_ref(),
+        );
+    }
+
+    fn stroke_rrect(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        width: f32,
+        color: TektoColor,
+    ) {
+        // A ring between the outer rounded rect and the inset inner one.
+        // Even-odd fill turns the band between them into the border.
+        if clip_rect(rect, self.clip_bounds()).is_none() {
+            return;
+        }
+        let width = width.max(0.0);
+        if width <= 0.0 {
+            return;
+        }
+        let Some(mut pb) = rounded_rect_builder(rect, radius) else {
+            self.fill_rect(rect, color);
+            return;
+        };
+        let inset = Rect::new(
+            rect.x + width,
+            rect.y + width,
+            (rect.width - 2.0 * width).max(0.0),
+            (rect.height - 2.0 * width).max(0.0),
+        );
+        let inner_radius = (radius - width).max(0.0);
+        if let Some(inner) = rounded_rect_path(inset, inner_radius) {
+            pb.push_path(&inner);
+        }
+        let Some(path) = pb.finish() else {
+            return;
+        };
+        let s = self.scale;
+        let mut paint = Paint::default();
+        paint.set_color(to_color(color));
+        paint.anti_alias = true;
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::EvenOdd,
+            Transform::from_scale(s, s),
+            None,
+        );
+    }
+
+    fn draw_line(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        thickness: f32,
+        color: TektoColor,
+    ) {
+        let thickness = thickness.max(0.0);
+        if thickness <= 0.0 {
+            return;
+        }
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        let len = (dx * dx + dy * dy).sqrt();
+        let mut pb = PathBuilder::new();
+        if len < f32::EPSILON {
+            // Degenerate line: a round dot.
+            let half = thickness / 2.0;
+            pb.push_circle(x0, y0, half);
+        } else {
+            let h = thickness / 2.0;
+            let nx = -dy / len * h;
+            let ny = dx / len * h;
+            pb.move_to(x0 + nx, y0 + ny);
+            pb.line_to(x1 + nx, y1 + ny);
+            pb.line_to(x1 - nx, y1 - ny);
+            pb.line_to(x0 - nx, y0 - ny);
+            pb.close();
+        }
+        let Some(path) = pb.finish() else {
+            return;
+        };
+        let s = self.scale;
+        let mut paint = Paint::default();
+        paint.set_color(to_color(color));
+        paint.anti_alias = true;
+        let mask = self.clip_mask();
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::from_scale(s, s),
+            mask.as_ref(),
+        );
+    }
+
     fn draw_text(
         &mut self,
         text: &str,
@@ -218,6 +335,38 @@ fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
 
 fn to_color(c: TektoColor) -> Color {
     Color::from_rgba8(c.r, c.g, c.b, c.a)
+}
+
+/// Build a rounded-rect path with cubic bezier corners. The radius is
+/// clamped to half the shorter side. `None` for an empty rect.
+fn rounded_rect_builder(rect: Rect, radius: f32) -> Option<PathBuilder> {
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        return None;
+    }
+    let r = radius.clamp(0.0, rect.width.min(rect.height) / 2.0);
+    let (x, y, w, h) = (rect.x, rect.y, rect.width, rect.height);
+    let mut pb = PathBuilder::new();
+    if r <= 0.0 {
+        pb.push_rect(tiny_skia::Rect::from_xywh(x, y, w, h)?);
+        return Some(pb);
+    }
+    // Cubic control distance for a 90-degree arc.
+    let k = 0.552_284_8 * r;
+    pb.move_to(x + r, y);
+    pb.line_to(x + w - r, y);
+    pb.cubic_to(x + w - r + k, y, x + w, y + r - k, x + w, y + r);
+    pb.line_to(x + w, y + h - r);
+    pb.cubic_to(x + w, y + h - r + k, x + w - r + k, y + h, x + w - r, y + h);
+    pb.line_to(x + r, y + h);
+    pb.cubic_to(x + r - k, y + h, x, y + h - r + k, x, y + h - r);
+    pb.line_to(x, y + r);
+    pb.cubic_to(x, y + r - k, x + r - k, y, x + r, y);
+    pb.close();
+    Some(pb)
+}
+
+fn rounded_rect_path(rect: Rect, radius: f32) -> Option<tiny_skia::Path> {
+    rounded_rect_builder(rect, radius)?.finish()
 }
 
 fn render_glyph_run(

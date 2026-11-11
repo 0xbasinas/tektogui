@@ -402,6 +402,17 @@ pub struct Node {
     /// Paint multiplier for this node and its children. 1 is solid, 0 is hidden.
     #[serde(default = "default_opacity")]
     pub opacity: f32,
+    /// Corner radius in logical pixels for the paint pass.
+    #[serde(default)]
+    pub radius: f32,
+    /// Border stroke color. Drawn inside the node bounds when set;
+    /// `border_width` zero hides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_color: Option<Color>,
+    /// Border stroke width in logical pixels. Ignored when `border_color` is
+    /// unset.
+    #[serde(default = "default_border_width")]
+    pub border_width: f32,
 }
 
 /// A detached row or spacer still belongs to `list_id`. A row whose parent
@@ -422,6 +433,12 @@ fn claim_with_list(
 }
 
 fn default_opacity() -> f32 {
+    1.0
+}
+
+/// Default border stroke width in logical pixels for a node that sets a
+/// border color.
+fn default_border_width() -> f32 {
     1.0
 }
 
@@ -464,6 +481,9 @@ impl Node {
             list_pad_top: 0,
             list_pad_bottom: 0,
             opacity: 1.0,
+            radius: 0.0,
+            border_color: None,
+            border_width: 1.0,
         }
     }
 
@@ -596,6 +616,15 @@ pub struct NodePatch {
     /// Also accepted as `fontSize` in JSON / MCP.
     #[serde(default, alias = "fontSize")]
     pub font_size: Option<f32>,
+    /// Corner radius in logical pixels.
+    #[serde(default)]
+    pub radius: Option<f32>,
+    /// Border stroke color.
+    #[serde(default)]
+    pub border_color: Option<String>,
+    /// Border stroke width in logical pixels.
+    #[serde(default)]
+    pub border_width: Option<f32>,
     /// Uniform padding in logical pixels. Also accepted as JSX `padding`.
     #[serde(default)]
     pub padding: Option<f32>,
@@ -1282,6 +1311,17 @@ impl Tree {
             node.fill = Some(Color::from_hex(&fill).ok_or_else(|| TreeError {
                 message: format!("bad fill color {fill}"),
             })?);
+        }
+        if let Some(radius) = patch.radius {
+            node.radius = radius.max(0.0);
+        }
+        if let Some(border_color) = patch.border_color {
+            node.border_color = Some(Color::from_hex(&border_color).ok_or_else(|| TreeError {
+                message: format!("bad border color {border_color}"),
+            })?);
+        }
+        if let Some(border_width) = patch.border_width {
+            node.border_width = border_width.max(0.0);
         }
         if let Some(color) = patch.color {
             node.color = Some(Color::from_hex(&color).ok_or_else(|| TreeError {

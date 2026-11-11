@@ -71,6 +71,57 @@ pub trait Renderer {
     /// Clip later draws to `rect` (intersected with any clip already active).
     fn push_clip(&mut self, _rect: Rect) {}
     fn pop_clip(&mut self) {}
+    /// Fill a rectangle whose corners are rounded by `radius` logical pixels.
+    /// Backends without path support fall back to a square [`Renderer::fill_rect`].
+    fn fill_rrect(&mut self, rect: Rect, radius: f32, color: Color) {
+        let _ = radius;
+        self.fill_rect(rect, color);
+    }
+    /// Stroke the inside edge of `rect` with `width`-thick lines. Falls back
+    /// to four filled edge strips.
+    fn stroke_rrect(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        width: f32,
+        color: Color,
+    ) {
+        let w = width.max(0.0);
+        if w <= 0.0 {
+            return;
+        }
+        let _ = radius;
+        let (x, y, rw, rh) = (rect.x, rect.y, rect.width, rect.height);
+        self.fill_rect(Rect::new(x, y, rw, w), color);
+        self.fill_rect(Rect::new(x, y + rh - w, rw, w), color);
+        self.fill_rect(Rect::new(x, y, w, rh), color);
+        self.fill_rect(Rect::new(x + rw - w, y, w, rh), color);
+    }
+    /// Draw a straight line from `(x0, y0)` to `(x1, y1)` with a round-ish
+    /// `thickness`. Falls back to small filled steps along the line.
+    fn draw_line(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        thickness: f32,
+        color: Color,
+    ) {
+        let thickness = thickness.max(0.0);
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        let steps = ((dx.abs() + dy.abs()) / thickness.max(1.0)).ceil().max(1.0) as u32;
+        for step in 0..=steps {
+            let t = step as f32 / steps as f32;
+            let cx = x0 + dx * t;
+            let cy = y0 + dy * t;
+            self.fill_rect(
+                Rect::new(cx - thickness / 2.0, cy - thickness / 2.0, thickness, thickness),
+                color,
+            );
+        }
+    }
 }
 
 /// Paint a whole tree with the default look.
@@ -119,7 +170,21 @@ fn paint_node_opacity<R: Renderer>(
         return;
     }
     if let Some(fill) = node.fill {
-        renderer.fill_rect(node.bounds, with_opacity(fill, opacity));
+        if node.radius > 0.0 {
+            renderer.fill_rrect(node.bounds, node.radius, with_opacity(fill, opacity));
+        } else {
+            renderer.fill_rect(node.bounds, with_opacity(fill, opacity));
+        }
+    }
+    if let Some(border) = node.border_color {
+        let width = node.border_width;
+        if width > 0.0 {
+            if node.radius > 0.0 {
+                renderer.stroke_rrect(node.bounds, node.radius, width, with_opacity(border, opacity));
+            } else {
+                renderer.stroke_rrect(node.bounds, 0.0, width, with_opacity(border, opacity));
+            }
+        }
     }
     if tree.focus == Some(id)
         && matches!(
@@ -498,5 +563,45 @@ mod field_hint_tests {
         recorder.0.clear();
         paint_tree(&mut recorder, &tree, Color::PAGE);
         assert!(recorder.0.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod paint_primitives_tests {
+    use super::*;
+    use tekto_tree::{NodeKind, Tree};
+
+    #[test]
+    fn rounded_rect_border_and_line_pixels() {
+        let mut tree = Tree::new();
+        tree.add(NodeKind::Window, None).unwrap();
+        let card = tree.add(NodeKind::Rect, Some(tree.root().unwrap())).unwrap();
+        tree.get_mut(card).unwrap().bounds = Rect::new(10.0, 10.0, 80.0, 60.0);
+        tree.get_mut(card).unwrap().radius = 10.0;
+        tree.get_mut(card).unwrap().fill = Some(Color::BANNER);
+        tree.get_mut(card).unwrap().border_color = Some(Color::INK);
+        let mut renderer = CpuRenderer::new(100, 80).unwrap();
+        paint_tree(&mut renderer, &tree, Color::PAGE);
+        let rgba = renderer.rgba8().unwrap();
+        let at = |x: usize, y: usize| -> (u8, u8, u8) {
+            let i = (y * 100 + x) * 4;
+            (rgba[i], rgba[i + 1], rgba[i + 2])
+        };
+        // Corner is cut, so the exact corner pixel stays page-colored.
+        assert_eq!(at(10, 10), at(0, 0), "corner should be clear");
+        // Center of the card is filled.
+        let banner = at(60, 50);
+        assert_ne!(banner, at(0, 0), "center should be filled");
+        // Border ring right at the edge, away from corner rounding.
+        let edge = at(10, 50);
+        assert_ne!(edge, banner, "left edge should be the border color");
+        assert_eq!(edge, at(89, 55), "symmetric edges match");
+
+        // A line paints a diagonal run of pixels.
+        let mut renderer = CpuRenderer::new(40, 40).unwrap();
+        renderer.draw_line(2.0, 2.0, 30.0, 30.0, 2.0, Color::INK);
+        let rgba = renderer.rgba8().unwrap();
+        let mid = (20 * 40 + 20) * 4;
+        assert_eq!(&rgba[mid..mid + 3], &[Color::INK.r, Color::INK.g, Color::INK.b]);
     }
 }

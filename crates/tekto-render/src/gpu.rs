@@ -185,6 +185,92 @@ impl Renderer for GpuRenderer {
         inner.pixels = None;
     }
 
+    fn fill_rrect(&mut self, rect: Rect, radius: f32, color: TektoColor) {
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return;
+        }
+        let mut inner = self.inner.borrow_mut();
+        let s = inner.scale;
+        let r = (radius.max(0.0).min(rect.width.min(rect.height) / 2.0) * s) as f64;
+        let shape = vello::kurbo::RoundedRect::new(
+            (rect.x * s) as f64,
+            (rect.y * s) as f64,
+            ((rect.x + rect.width) * s) as f64,
+            ((rect.y + rect.height) * s) as f64,
+            r,
+        );
+        inner.scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            to_color(color),
+            None,
+            &shape,
+        );
+        inner.pixels = None;
+    }
+
+    fn stroke_rrect(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        width: f32,
+        color: TektoColor,
+    ) {
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return;
+        }
+        let mut inner = self.inner.borrow_mut();
+        let s = inner.scale;
+        let stroke_width = width.max(0.0);
+        if stroke_width <= 0.0 {
+            return;
+        }
+        let r = (radius.max(0.0).min(rect.width.min(rect.height) / 2.0) * s) as f64;
+        let inset = (stroke_width / 2.0) as f64;
+        let shape = vello::kurbo::RoundedRect::new(
+            (rect.x + stroke_width / 2.0) as f64,
+            (rect.y + stroke_width / 2.0) as f64,
+            (rect.x + rect.width - stroke_width / 2.0) as f64,
+            (rect.y + rect.height - stroke_width / 2.0) as f64,
+            (r - inset).max(0.0),
+        );
+        let stroke = vello::kurbo::Stroke::new(stroke_width as f64);
+        inner.scene.stroke(
+            &stroke,
+            Affine::IDENTITY,
+            to_color(color),
+            None,
+            &shape,
+        );
+        inner.pixels = None;
+    }
+
+    fn draw_line(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        thickness: f32,
+        color: TektoColor,
+    ) {
+        let mut inner = self.inner.borrow_mut();
+        let s = inner.scale;
+        let stroke = vello::kurbo::Stroke::new(thickness.max(0.0) as f64);
+        let shape = vello::kurbo::Line::new(
+            vello::kurbo::Point::new(x0 as f64, y0 as f64),
+            vello::kurbo::Point::new(x1 as f64, y1 as f64),
+        );
+        inner.scene.stroke(
+            &stroke,
+            vello::kurbo::Affine::scale(s as f64),
+            to_color(color),
+            None,
+            &shape,
+        );
+        inner.pixels = None;
+    }
+
     fn draw_text(
         &mut self,
         text: &str,
