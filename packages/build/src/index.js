@@ -20,20 +20,23 @@ export function repoRoot() {
 /**
  * Map a Windows npm or pnpm shim to the native esbuild binary next to it.
  * `spawnSync` cannot start a `.cmd` or extensionless shim without a shell.
+ * A global install keeps `@esbuild` under the shim's directory; a local one
+ * keeps it one level up, beside `node_modules/.bin`.
  */
 export function resolveEsbuildBinary(
   candidate,
   { platform = process.platform, arch = process.arch, exists = existsSync } = {},
 ) {
   if (platform !== "win32" || !candidate || /\.exe$/i.test(candidate)) return candidate;
-  const native = resolve(
-    dirname(candidate),
-    "node_modules",
-    "@esbuild",
-    `win32-${arch}`,
-    "esbuild.exe",
-  );
-  return exists(native) ? native : candidate;
+  const bin = dirname(candidate);
+  const archDir = `win32-${arch}`;
+  for (const root of [bin, resolve(bin, "..")]) {
+    const native = resolve(root, "node_modules", "@esbuild", archDir, "esbuild.exe");
+    if (exists(native)) return native;
+    const sibling = resolve(root, "@esbuild", archDir, "esbuild.exe");
+    if (exists(sibling)) return sibling;
+  }
+  return candidate;
 }
 
 export function esbuildBin() {
@@ -45,8 +48,9 @@ export function esbuildBin() {
     if (existsSync(exe)) return exe;
     const shim = resolve(dir, "esbuild.cmd");
     if (existsSync(shim)) {
-      const native = resolveEsbuildBinary(shim);
-      if (native !== shim) return native;
+      // pnpm keeps the native binary under `.pnpm`, so the shim is the entry
+      // point there; spawnEsbuild runs it through cmd.exe.
+      return resolveEsbuildBinary(shim);
     }
   }
   return "esbuild";
@@ -77,6 +81,23 @@ function esbuildArgs(wrapper, outfile, target = "web") {
   ];
 }
 
+function quoteArg(arg) {
+  return /[\s"]/.test(arg) ? `"${arg.replaceAll('"', '\\"')}"` : arg;
+}
+
+/**
+ * Start esbuild. A Windows `.cmd` shim (what npm, pnpm, and bun put in
+ * `node_modules/.bin`) cannot be started without a shell, and pnpm keeps its
+ * native binary under `.pnpm`, so the shim is the reliable entry point there.
+ */
+function spawnEsbuild(bin, args) {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(bin)) {
+    const command = [bin, ...args].map(quoteArg).join(" ");
+    return spawnSync(command, { encoding: "utf8", shell: true });
+  }
+  return spawnSync(bin, args, { encoding: "utf8" });
+}
+
 /** Write the bundle to `outfile` and return that path. */
 export function bundleApp(entry, outfile, { target = "web" } = {}) {
   const abs = resolve(entry);
@@ -87,7 +108,7 @@ export function bundleApp(entry, outfile, { target = "web" } = {}) {
   try {
     writeFileSync(wrapper, source);
     mkdirSync(dirname(outfile), { recursive: true });
-    result = spawnSync(esbuildBin(), esbuildArgs(wrapper, outfile, target), { encoding: "utf8" });
+    result = spawnEsbuild(esbuildBin(), esbuildArgs(wrapper, outfile, target));
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

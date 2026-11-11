@@ -34,6 +34,23 @@ test("windows shims resolve to the native esbuild binary", () => {
     });
   assert.equal(resolveWindows(shim), native);
   assert.ok(seen.includes(native));
+  // A local install keeps @esbuild beside node_modules/.bin, not inside it.
+  const localShim = join("app", "node_modules", ".bin", "esbuild.cmd");
+  const localNative = resolve(
+    dirname(localShim),
+    "..",
+    "@esbuild",
+    "win32-x64",
+    "esbuild.exe",
+  );
+  assert.equal(
+    resolveEsbuildBinary(localShim, {
+      platform: "win32",
+      arch: "x64",
+      exists: (path) => path === localNative,
+    }),
+    localNative,
+  );
   // A native path, another platform, and a missing sibling stay untouched.
   assert.equal(resolveWindows(native), native);
   assert.equal(resolveEsbuildBinary(shim, { platform: "linux" }), shim);
