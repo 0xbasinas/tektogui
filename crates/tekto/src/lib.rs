@@ -8,7 +8,9 @@ pub use tekto_a11y::{
     AccessKitDump,
 };
 #[cfg(feature = "js")]
-pub use tekto_js::{apply_ops, eval_module, Host, HostOp, JsError, TreeHost};
+pub use tekto_js::{
+    apply_ops, eval_module, Host, HostOp, JsError, NativeCapability, NativePermissions, TreeHost,
+};
 pub use tekto_layout::layout_tree;
 pub use tekto_mcp::{
     endpoint_path, read_endpoint, run_stdio_mcp, start_dev_server, AppHandle, DevEndpoint,

@@ -478,6 +478,20 @@ fn js_apply_native_op<'js>(ctx: Ctx<'js>, spec: String) -> rquickjs::Result<Valu
             return throw(&ctx, JsError::Message(format!("native op JSON: {err}")));
         }
     };
+    let allowed = match with_host(|host| Ok(host.allow_native(&op))) {
+        Ok(allowed) => allowed,
+        Err(err) => return throw(&ctx, err),
+    };
+    if !allowed {
+        let capability = crate::NativeCapability::of(&op);
+        return throw(
+            &ctx,
+            JsError::Message(format!(
+                "native capability `{}` is not allowed for this app; the host must opt in with NativePermissions",
+                capability.as_str()
+            )),
+        );
+    }
     match apply_native_host_op(&op) {
         Ok(None) => Ok(Value::new_null(ctx)),
         Ok(Some(text)) => {
