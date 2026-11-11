@@ -108,6 +108,10 @@ cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx
 
 Saving the `.tsx` rebuilds the JS bundle and swaps it into the running QuickJS runtime. The Rust core stays up. JS remounts from source, so signal state resets. The same entry can run on a device or AVD with `cargo run -p tekto-cli -- dev --js examples/notes/src/app.tsx --android` (the APK is built with `-F quickjs`; the host CLI does not need that feature).
 
+For an interactive desktop TSX app, run the separate [counter example](tsx-events.md)
+with QuickJS and esbuild. That guide covers tree inspection, clicks, keyboard
+activation, reload, and the current web limitations.
+
 ## Tests
 
 ```bash

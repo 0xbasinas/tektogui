@@ -1,18 +1,29 @@
 # Desktop TSX events and reactive text
 
-The retained QuickJS session supports the following narrow syntax:
+The desktop QuickJS [counter example](../examples/counter/app.tsx) uses
+`text={() => count()}` and `onClick={() => setCount(n => n + 1)}`. From the
+repository root, with `esbuild` on `PATH` (or `ESBUILD` set to its binary):
 
-```tsx
-import { createSignal } from "@tektogui/core";
-
-export function App() {
-  const [count, setCount] = createSignal(0);
-  return <window>
-    <text text={() => count()} />
-    <button onClick={() => setCount(n => n + 1)}>Increment</button>
-  </window>;
-}
+```bash
+cargo run -p tekto-cli --features quickjs -- dev --js examples/counter/app.tsx
 ```
+
+In another terminal, inspect the tree, find the button named `Increment`, and
+use its actual id in place of `ID`:
+
+```bash
+cargo run -p tekto-cli -- tree
+cargo run -p tekto-cli -- click ID
+cargo run -p tekto-cli -- tree
+cargo run -p tekto-cli -- click ID
+cargo run -p tekto-cli -- tree
+```
+
+The existing Count text node should show 0, then 1, then 2. Its id and the
+button id stay stable while the session runs. You can also click the button in
+the window, then press Enter or Space while it has focus. A fresh session starts
+at 0. OS screen reader integration requires the optional `a11y-os` feature;
+the dev server exposes the AccessKit tree without it.
 
 The `text` function is evaluated immediately and when its signals change. It
 updates the existing text node; it does not rebuild the tree. Use it only on a
