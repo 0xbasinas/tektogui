@@ -110,10 +110,12 @@ fn paint_node_opacity<R: Renderer>(
         renderer.fill_rect(node.bounds, with_opacity(fill, opacity));
     }
     let composed;
+    let mut placeholder = false;
     let text_to_draw = if node.kind == tekto_tree::NodeKind::TextField {
         composed = node.composed_text();
         if composed.is_empty() {
-            None
+            placeholder = true;
+            node.name.as_deref().filter(|name| !name.is_empty())
         } else {
             Some(composed.as_str())
         }
@@ -121,7 +123,10 @@ fn paint_node_opacity<R: Renderer>(
         node.text.as_deref()
     };
     if let Some(text) = text_to_draw {
-        let color = with_opacity(node.color.unwrap_or(Color::INK), opacity);
+        let color = with_opacity(
+            node.color.unwrap_or(Color::INK),
+            opacity * if placeholder { 0.55 } else { 1.0 },
+        );
         let inset = if matches!(
             node.kind,
             tekto_tree::NodeKind::Button
@@ -343,5 +348,65 @@ mod tests {
         );
         assert_eq!(renderer.width(), 200);
         assert_eq!(renderer.height(), 100);
+    }
+}
+
+#[cfg(test)]
+mod field_hint_tests {
+    use super::*;
+    use tekto_tree::NodeKind;
+
+    #[derive(Default)]
+    struct Recorder(Vec<(String, Color)>);
+    impl Renderer for Recorder {
+        fn resize(&mut self, _: u32, _: u32) -> Result<(), RenderError> {
+            Ok(())
+        }
+        fn begin_frame(&mut self, _: Color) {}
+        fn fill_rect(&mut self, _: Rect, _: Color) {}
+        fn draw_text(&mut self, text: &str, _: f32, _: f32, _: f32, color: Color, _: Option<f32>) {
+            self.0.push((text.to_owned(), color));
+        }
+        fn to_png(&self) -> Result<Vec<u8>, RenderError> {
+            Ok(Vec::new())
+        }
+        fn width(&self) -> u32 {
+            0
+        }
+        fn height(&self) -> u32 {
+            0
+        }
+        fn rgba8(&self) -> Result<Vec<u8>, RenderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn empty_name_is_quiet_and_value_and_preedit_replace_it() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        let node = tree.get_mut(field).unwrap();
+        node.name = Some("Title".into());
+        node.color = Some(Color::INK);
+        let mut recorder = Recorder::default();
+        paint_tree(&mut recorder, &tree, Color::PAGE);
+        assert_eq!(recorder.0, [("Title".into(), Color::rgba(44, 51, 58, 140))]);
+        tree.get_mut(field).unwrap().text = Some("Hello".into());
+        recorder.0.clear();
+        paint_tree(&mut recorder, &tree, Color::PAGE);
+        assert_eq!(recorder.0, [("Hello".into(), Color::INK)]);
+        let node = tree.get_mut(field).unwrap();
+        node.text = Some(String::new());
+        node.preedit = "あ".into();
+        recorder.0.clear();
+        paint_tree(&mut recorder, &tree, Color::PAGE);
+        assert_eq!(recorder.0, [("あ".into(), Color::INK)]);
+        let node = tree.get_mut(field).unwrap();
+        node.preedit.clear();
+        node.name = None;
+        recorder.0.clear();
+        paint_tree(&mut recorder, &tree, Color::PAGE);
+        assert!(recorder.0.is_empty());
     }
 }

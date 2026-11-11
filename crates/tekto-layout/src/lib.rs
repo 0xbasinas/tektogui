@@ -124,7 +124,11 @@ fn measure_text(
     let composed;
     let content = if node.kind == NodeKind::TextField {
         composed = node.composed_text();
-        composed.as_str()
+        if composed.is_empty() {
+            node.name.as_deref().unwrap_or("")
+        } else {
+            composed.as_str()
+        }
     } else {
         node.text.as_deref().unwrap_or("")
     };
