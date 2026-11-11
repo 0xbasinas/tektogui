@@ -143,3 +143,10 @@ test("text_field lowers to a labeled value", () => {
     { op: "setText", id: 1, text: "Hello" },
   ]);
 });
+
+test("empty text_field keeps its label out of the value", () => {
+  assert.deepEqual(renderToOps(jsx("text_field", { name: "Title" })), [
+    { op: "create", kind: "text_field" },
+    { op: "setProp", id: 1, key: "name", value: "Title" },
+  ]);
+});
