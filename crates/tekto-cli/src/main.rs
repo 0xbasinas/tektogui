@@ -57,6 +57,11 @@ enum Command {
     Inspect,
     /// Click a node by id (talks to the dev server).
     Click { id: u64 },
+    /// Press Tab, Shift+Tab, Enter, Space, or Backspace.
+    Key {
+        #[arg(value_parser = parse_key_name)]
+        name: String,
+    },
     /// Take a PNG screenshot from the dev server, or render headless if none is running.
     Screenshot {
         #[arg(default_value = "screenshot.png")]
@@ -84,6 +89,11 @@ enum Command {
     Restore { index: u64 },
     /// Speak the Model Context Protocol on stdio (proxies to the dev server).
     Mcp,
+}
+
+fn parse_key_name(name: &str) -> Result<String, String> {
+    tekto_mcp::validate_key_name(name)?;
+    Ok(name.to_owned())
 }
 
 fn export_notes_writeback_env() {
@@ -213,6 +223,14 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             println!("{}", String::from_utf8_lossy(&body));
         }
+        Command::Key { name } => {
+            let ep = read_endpoint()?;
+            let (_, body) = http_post(
+                &format!("{}/key", ep.base_url()),
+                &serde_json::json!({"name": name}),
+            )?;
+            println!("{}", String::from_utf8_lossy(&body));
+        }
         Command::Screenshot { out } => {
             if let Ok(ep) = read_endpoint() {
                 let (_, body) = http_get(&format!("{}/screenshot", ep.base_url()))?;
@@ -259,4 +277,19 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
         Command::Mcp => run_stdio_mcp()?,
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_key_command() {
+        for name in ["Tab", "Shift+Tab", "Enter", "Space", "Backspace"] {
+            let cli = Cli::try_parse_from(["tekto", "key", name]).unwrap();
+            assert!(matches!(cli.command, Command::Key { name: parsed } if parsed == name));
+        }
+        assert!(Cli::try_parse_from(["tekto", "key"]).is_err());
+        assert!(Cli::try_parse_from(["tekto", "key", "Escape"]).is_err());
+    }
 }

@@ -19,6 +19,55 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
+/// Named keys supported by agent input and desktop routing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NamedActionKey {
+    Tab,
+    ShiftTab,
+    Enter,
+    Space,
+    Backspace,
+}
+
+impl std::str::FromStr for NamedActionKey {
+    type Err = String;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "Tab" => Ok(Self::Tab),
+            "Shift+Tab" => Ok(Self::ShiftTab),
+            "Enter" => Ok(Self::Enter),
+            "Space" => Ok(Self::Space),
+            "Backspace" => Ok(Self::Backspace),
+            _ => Err(format!(
+                "unknown key {name:?}; expected Tab, Shift+Tab, Enter, Space, or Backspace"
+            )),
+        }
+    }
+}
+
+/// Apply a named key and return any button that should be activated.
+pub fn route_named_key(
+    tree: &mut Tree,
+    key: NamedActionKey,
+    repeat: bool,
+) -> (bool, Option<NodeId>) {
+    match key {
+        NamedActionKey::Tab => (tree.traverse_focus(false), None),
+        NamedActionKey::ShiftTab => (tree.traverse_focus(true), None),
+        NamedActionKey::Enter | NamedActionKey::Space => {
+            let button = tree
+                .focus
+                .filter(|id| tree.get(*id).is_some_and(|n| n.kind == NodeKind::Button));
+            (false, button.filter(|_| !repeat))
+        }
+        NamedActionKey::Backspace => (
+            tree.apply_field_key(FieldKey::Backspace).unwrap_or(false),
+            None,
+        ),
+    }
+}
+
 /// A committed user action on a tree node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TreeEvent {

@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tekto_tree::{NodeId, NodePatch, Store, Tree};
+use tekto_tree::{route_named_key, NamedActionKey, NodeId, NodePatch, Store, Tree};
 
 mod http_policy;
 mod stdio;
@@ -43,6 +43,11 @@ impl McpError {
     }
 }
 
+/// Check whether a key name is supported by agent input.
+pub fn validate_key_name(name: &str) -> Result<(), String> {
+    name.parse::<NamedActionKey>().map(|_| ())
+}
+
 /// What the running app can do for agents.
 pub trait AppHandle: Send + Sync {
     fn tree(&self) -> Tree;
@@ -51,6 +56,9 @@ pub trait AppHandle: Send + Sync {
     fn click(&self, id: NodeId) -> Result<(), McpError> {
         let _ = id;
         Err(McpError::msg("click is not wired up yet"))
+    }
+    fn key(&self, _key: NamedActionKey) -> Result<(), McpError> {
+        Err(McpError::msg("key is not wired up yet"))
     }
     fn type_text(&self, id: NodeId, text: &str) -> Result<(), McpError> {
         let _ = (id, text);
@@ -264,6 +272,18 @@ impl AppHandle for SharedTreeHandle {
 
     fn click(&self, id: NodeId) -> Result<(), McpError> {
         self.route_action(|_| (false, Some(id))).map(|_| ())
+    }
+
+    fn key(&self, key: NamedActionKey) -> Result<(), McpError> {
+        self.route_action(|tree| {
+            let result = route_named_key(tree, key, false);
+            if key == NamedActionKey::Space && result.1.is_none() {
+                (tree.type_keyboard_text(" ").unwrap_or(false), None)
+            } else {
+                result
+            }
+        })
+        .map(|_| ())
     }
 
     fn type_text(&self, id: NodeId, text: &str) -> Result<(), McpError> {
@@ -571,7 +591,7 @@ fn handle_client_locked(
         stream: &mut stream,
         deadline: Instant::now() + IO_DEADLINE,
     })?;
-    let (status, content_type, body_bytes) = if matches!(&request, Some((method, path, _)) if method == "POST" && path == "/click")
+    let (status, content_type, body_bytes) = if matches!(&request, Some((method, path, _)) if method == "POST" && (path == "/click" || path == "/key"))
     {
         process_http_request(handle.as_ref(), request)
     } else {
@@ -718,6 +738,16 @@ fn dispatch(
                 .and_then(|x| x.as_u64())
                 .ok_or_else(|| McpError::msg("missing id"))?;
             handle.click(NodeId::from_raw(id))?;
+            ok_json(json!({"ok": true}))
+        }
+        ("POST", "/key") => {
+            let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
+            let name = v
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| McpError::msg("missing key name"))?;
+            let key = name.parse().map_err(McpError::msg)?;
+            handle.key(key)?;
             ok_json(json!({"ok": true}))
         }
         ("POST", "/type") => {
@@ -870,7 +900,8 @@ fn tool_list() -> Value {
         {"name": "ui.accesskit", "description": "Dump the AccessKit tree (roles, labels, bounds, focus) with the same stable ids.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.screenshot", "description": "Take a PNG screenshot using the CPU renderer.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.click", "description": "Click a node by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}}, "required": ["id"]}},
-        {"name": "ui.type", "description": "Insert plain characters at the caret of a text field (by stable id) and focus it. Not an IME: no composition or candidate window. Backspace is a desktop key, not this tool.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
+        {"name": "ui.key", "description": "Press a named key on the focused node.", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "enum": ["Tab", "Shift+Tab", "Enter", "Space", "Backspace"]}}, "required": ["name"]}},
+        {"name": "ui.type", "description": "Insert plain characters at the caret of a text field (by stable id) and focus it. Not an IME: no composition or candidate window. Use ui.key for Backspace.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
         {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, fontSize, padding, or gap. Returns the updated node and a writeback report. Applies immediately (no reload). Unique literals in the app project are written back to source; ambiguous edits stay in the runtime tree.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}, "padding": {"type": "number"}, "gap": {"type": "number"}}, "required": ["id"]}},
         {"name": "app.state", "description": "Read opted-in app state as JSON.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "app.states", "description": "List time-travel frames for an opted-in store. enabled is false when the app did not record history.", "inputSchema": {"type": "object", "properties": {}}},
@@ -919,6 +950,10 @@ fn call_tool(params: &Value) -> Result<Value, McpError> {
         }
         "ui.click" => {
             let (_, body) = http_post(&format!("{base}/click"), &args)?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
+        "ui.key" => {
+            let (_, body) = http_post(&format!("{base}/key"), &args)?;
             Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
         }
         "ui.type" => {
@@ -1104,6 +1139,53 @@ mod tests {
         assert!(slow.read_to_end(&mut data).is_ok());
         assert!(data.len() < 32 * 1024 * 1024);
         assert!(http_get(&format!("http://{addr}/health")).is_ok());
+    }
+
+    #[test]
+    fn named_key_route_and_callback() {
+        let handle = http_test_handle();
+        let button = {
+            let mut tree = handle.tree.lock().unwrap();
+            let root = NodeId::from_raw(1);
+            tree.add(NodeKind::Button, Some(root)).unwrap()
+        };
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        *handle.click_js.lock().unwrap() = Some(Arc::new(move |id| {
+            seen.lock().unwrap().push(id);
+            Ok(())
+        }));
+        for name in ["Tab", "Enter"] {
+            let (status, _, _) = process_http_request(
+                &handle,
+                Some((
+                    "POST".into(),
+                    "/key".into(),
+                    json!({"name": name}).to_string(),
+                )),
+            );
+            assert_eq!(status, "200 OK");
+        }
+        assert_eq!(*calls.lock().unwrap(), vec![button]);
+        assert_eq!(handle.tree().last_click, Some(button));
+        for body in ["{}", r#"{"name":"Escape"}"#, "not json"] {
+            let (status, _, body) =
+                process_http_request(&handle, Some(("POST".into(), "/key".into(), body.into())));
+            assert_eq!(status, "400 Bad Request");
+            assert!(String::from_utf8(body).unwrap().contains("error"));
+        }
+        let tools = tool_list();
+        let key = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "ui.key")
+            .unwrap();
+        assert_eq!(key["inputSchema"]["required"], json!(["name"]));
+        assert_eq!(
+            key["inputSchema"]["properties"]["name"]["enum"],
+            json!(["Tab", "Shift+Tab", "Enter", "Space", "Backspace"])
+        );
     }
 
     fn http_test_handle() -> SharedTreeHandle {
