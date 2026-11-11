@@ -93,3 +93,10 @@ Probe edits were reverted. They are not in the tree.
 - Editing the text or platform crate still does not rebuild the heavy third-party graph; those crates are small wrappers. Their compile cost shows up on a cold check, which feature flags cannot remove from an app that windows and draws text.
 
 Rust hot-patch options (dylib, Cranelift, Subsecond) are in [rust-hot-reload.md](rust-hot-reload.md) (issue #29). None is adopted yet.
+
+## Several worktrees at once
+
+Do not share one `CARGO_TARGET_DIR` for full builds and tests across worktrees. Integration tests run the unhashed `target/debug/tekto` binary. A build in another worktree can overwrite it while a test is using it, and the test then sees the wrong binary. Independent reviewers hit this.
+
+- Give each worktree its own target: `export CARGO_TARGET_DIR=$PWD/target` (and `CARGO_BUILD_JOBS=2` on a busy box).
+- Share only the Cargo download cache (`~/.cargo/registry`, the default). That is safe.

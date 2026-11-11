@@ -51,7 +51,7 @@ TEKTO_BLESS=1 cargo test -p tekto --test headless_snapshot
 
 # JS unit tests (signals / JSX factory only; they do not paint):
 npm test
-# also: pnpm test    or    bun test ./packages/core/test.js ./packages/jsx-runtime/test.js
+# also: pnpm test    or    bun run test   (not plain `bun test`, which finds no test files)
 ```
 
 Do not start a display or an emulator for these tests.

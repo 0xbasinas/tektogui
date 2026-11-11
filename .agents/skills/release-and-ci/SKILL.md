@@ -42,7 +42,7 @@ Triggers: pull requests, pushes to `nightly` or `main`, and `workflow_dispatch`.
 Notes ships as a small release binary. Do not enable `quickjs` or `gpu` for the default package. Do not commit `dist/` artifacts. No store signing and no MSI. Requirements we have not met are in [docs/signing.md](../../../docs/signing.md). Do not buy certificates, commit keystores, or add a macOS signing job.
 
 ```bash
-export CARGO_TARGET_DIR=/path/to/this/worktree/target
+export CARGO_TARGET_DIR=/path/to/this/worktree/target   # private per worktree; see docs/dev-builds.md "Several worktrees at once"
 ./scripts/package-notes-linux.sh
 ```
 
