@@ -30,6 +30,9 @@ Short, command-accurate how-tos live in `.agents/skills/<slug>/SKILL.md`. The sa
 | [add-mcp-tool](.agents/skills/add-mcp-tool/SKILL.md) | New dev-server route, MCP tool, or CLI inspect command |
 | [release-and-ci](.agents/skills/release-and-ci/SKILL.md) | PRs into `nightly`, merge to `main`, light CI rules |
 | [pick-up-an-issue](.agents/skills/pick-up-an-issue/SKILL.md) | Start from a GitHub issue and open a small PR |
+| [windows-test](.agents/skills/windows-test/SKILL.md) | Real Windows Notes window, clipboard, and sandboxed files. Linux cargo check is not a runtime test |
+
+Windows runtime steps and the report template are in [docs/windows-handoff.md](docs/windows-handoff.md). Read that file and the `windows-test` skill before claiming a Windows pass. Do not close issues #3, #26, or #28 until a real Windows machine has run those steps. PRs for this work go to `nightly` only.
 
 ## Git
 
@@ -47,7 +50,7 @@ Short, command-accurate how-tos live in `.agents/skills/<slug>/SKILL.md`. The sa
 - One crate does one job. Put new code in the crate that already owns that job.
 - Public APIs should be small and easy to read.
 - Default features must stay lean. Optional, heavy work (QuickJS, wgpu / Vello, `a11y-os` / accesskit_winit) goes behind feature flags and is off by default.
-- New direct dependencies: only MIT, Apache-2.0, BSD, or zlib. If you add a crate, write the license in the PR. Do not add GPL or LGPL. The existing text stack already has Unicode License v3 transitives (ICU, `zerovec`, `unicode-ident`). On Windows, `arboard` pulls BSL-1.0 `clipboard-win` and `error-code`. Flag those; do not treat the graph as MIT/Apache/BSD/zlib only.
+- New direct dependencies: only MIT, Apache-2.0, BSD, or zlib. If you add a crate, write the license in the PR. Do not add GPL or LGPL. The existing text stack already has Unicode License v3 transitives (ICU, `zerovec`, `unicode-ident`). Windows clipboard uses Win32 directly; review the complete target-specific dependency graph when adding dependencies.
 - Do not invent a new DSL. TypeScript and Rust are enough.
 - Do not put HTML, CSS, or DOM types in the public app API. The web target paints our tree; apps never see the DOM.
 - Every interactive widget needs a stable node id and an AccessKit role and name. The AccessKit tree *is* the agent tree. Do not build a second parallel tree.
