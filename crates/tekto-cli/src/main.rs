@@ -51,6 +51,12 @@ enum Command {
     },
     /// Run tests, including the headless snapshot.
     Test,
+    /// Compile a JS bundle to versioned QuickJS bytecode.
+    ///
+    /// Needs a CLI built with `--features quickjs`. The output starts with the
+    /// Tekto header, and a host falls back to the source bundle when the
+    /// engine tag does not match.
+    Bytecode { input: PathBuf, out: PathBuf },
     /// Dump the live scene tree from the dev server.
     Tree,
     /// Inspect a node by id, or print the live inspector URL.
@@ -208,6 +214,26 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             let status = std::process::Command::new("cargo").arg("test").status()?;
             if !status.success() {
                 std::process::exit(status.code().unwrap_or(1));
+            }
+        }
+        Command::Bytecode { input, out } => {
+            let source = std::fs::read_to_string(&input)
+                .map_err(|error| format!("cannot read {}: {error}", input.display()))?;
+            #[cfg(feature = "quickjs")]
+            {
+                let bytes = tekto::compile_bytecode(&source, &input.display().to_string())
+                    .map_err(|error| error.to_string())?;
+                if let Some(parent) = out.parent().filter(|path| !path.as_os_str().is_empty()) {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                std::fs::write(&out, bytes)
+                    .map_err(|error| format!("cannot write {}: {error}", out.display()))?;
+                println!("wrote {}", out.display());
+            }
+            #[cfg(not(feature = "quickjs"))]
+            {
+                let _ = (source, out);
+                return Err("bytecode needs a CLI built with --features quickjs".into());
             }
         }
         Command::Tree => {

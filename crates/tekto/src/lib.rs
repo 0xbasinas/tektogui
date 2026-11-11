@@ -7,10 +7,14 @@ pub use tekto_a11y::{
     dump as accesskit_dump, tree_update as accesskit_tree_update, tree_update_with_focus,
     AccessKitDump,
 };
+#[cfg(feature = "quickjs")]
+pub use tekto_js::compile_bytecode;
 #[cfg(feature = "js")]
 pub use tekto_js::{
     apply_ops, eval_module, Host, HostOp, JsError, NativeCapability, NativePermissions, TreeHost,
 };
+#[cfg(feature = "js")]
+pub use tekto_js::{decode_bytecode, encode_bytecode, BYTECODE_ENGINE, BYTECODE_FORMAT};
 pub use tekto_layout::layout_tree;
 pub use tekto_mcp::{
     endpoint_path, read_endpoint, run_stdio_mcp, start_dev_server, AppHandle, DevEndpoint,

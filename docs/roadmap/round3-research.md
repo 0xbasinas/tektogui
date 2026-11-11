@@ -198,14 +198,9 @@ These three work well together, and can share the `tekto-test` crate above.
 
 ### QuickJS bytecode in release builds
 
-- **Name:** Precompile TSX to QuickJS bytecode for release.
-- **Why / what:** Faster cold start and no plain source shipped in release. Kiln lists this approach. Dev mode still uses source TSX.
-- **Priority:** medium. **Size:** S–M.
-- **Crates it touches:** `tekto-cli`, `tekto-js` (behind the existing `quickjs` feature).
-- **Design notes:** Store the QuickJS version next to the bytecode and fall back to source if it does not match. Verify the exact rquickjs / qjsc API before promising this. No obfuscation.
-- **DX fit:** Opt-in release path only. Default and PR CI stay clear of QuickJS.
-- **Acceptance:** A release build starts from bytecode; a version mismatch falls back safely. Dev reload is unchanged.
-- **Licence:** rquickjs and QuickJS-ng are already used (both MIT). Confirm the bytecode API in the version we ship.
+**Implemented:** `tekto-js` wraps rquickjs 0.14 module bytecode in a small envelope: magic `TEKTOQBC`, a format number, and an engine tag (`rquickjs-0.14`). `compile_bytecode(source, name)` compiles with `Module::declare` and writes with `strip_source`, so the source text is not embedded; `JsSession::eval_bytecode` parses the header, loads with `Module::load`, and runs the module. A stale format, foreign engine tag, truncation, or corrupt payload returns an error whose text says to rebuild from source, and the caller falls back to `JsSession::eval` with the original bundle. `tekto bytecode <in.js> <out.qbc>` produces the file from a CLI built with `--features quickjs`. Tests cover the header round trip and every rejection, a compiled script running from bytecode, the source marker being absent from the payload, fallback to source after a foreign tag, and a corrupt payload failing inside QuickJS.
+
+**Remaining:** This is opt-in and crate/CLI level. No Rust app or Android release path loads a `.qbc` yet, dev reload still bundles and evaluates source, and the engine tag is a hand-maintained constant that must be bumped when rquickjs or QuickJS-ng changes. Bytecode is compiled as a module, so a bundle must not depend on script-mode top-level `this`. No obfuscation was added.
 
 ### Animation upgrades (small)
 
