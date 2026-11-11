@@ -42,7 +42,7 @@ jobs:
       - name: Test (replay + headless PNG compare)
         run: cargo test --workspace --all-targets
       - name: JS package tests
-        run: node --test packages/core/test.js packages/jsx-runtime/test.js
+        run: node --test packages/core/test.js packages/jsx-runtime/test.js packages/create-tektogui/test/index.test.js
 
   windows:
     name: Windows compile
