@@ -20,6 +20,12 @@ pub struct CpuRenderer {
     scale: f32,
     /// Logical clip rectangles. Empty means no clip.
     clips: Vec<Rect>,
+    /// Last image converted to premultiplied tiny-skia pixels, keyed by
+    /// [`tekto_image::Image::id`]. One entry avoids a full copy per frame
+    /// without keeping every image in memory.
+    image_cache: Option<(u64, Pixmap)>,
+    #[cfg(test)]
+    image_cache_hits: u64,
 }
 
 impl CpuRenderer {
@@ -32,7 +38,15 @@ impl CpuRenderer {
             text: TextEngine::new(),
             scale: 1.0,
             clips: Vec::new(),
+            image_cache: None,
+            #[cfg(test)]
+            image_cache_hits: 0,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn image_cache_hits(&self) -> u64 {
+        self.image_cache_hits
     }
 
     /// Paint logical coordinates into a physical pixmap.
@@ -60,19 +74,29 @@ impl Renderer for CpuRenderer {
         if !bounds.x.is_finite() || !bounds.y.is_finite() || !opacity.is_finite() {
             return;
         }
-        let mut pixels = image.pixels().to_vec();
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            let alpha = u16::from(pixel[3]);
-            for channel in &mut pixel[..3] {
-                *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
-            }
-        }
         let Some(size) = tiny_skia::IntSize::from_wh(image.width(), image.height()) else {
             return;
         };
-        let Some(pixmap) = Pixmap::from_vec(pixels, size) else {
-            return;
-        };
+        let cached = matches!(&self.image_cache, Some((id, _)) if *id == image.id());
+        if cached {
+            #[cfg(test)]
+            {
+                self.image_cache_hits += 1;
+            }
+        } else {
+            let mut pixels = image.pixels().to_vec();
+            // tiny-skia stores premultiplied RGBA; the app supplies straight alpha.
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                let alpha = u16::from(pixel[3]);
+                for channel in &mut pixel[..3] {
+                    *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+                }
+            }
+            let Some(pixmap) = Pixmap::from_vec(pixels, size) else {
+                return;
+            };
+            self.image_cache = Some((image.id(), pixmap));
+        }
         let transform = Transform::from_row(
             width / image.width() as f32 * self.scale,
             0.0,
@@ -87,8 +111,10 @@ impl Renderer for CpuRenderer {
             opacity: opacity.clamp(0.0, 1.0),
             ..Default::default()
         };
-        self.pixmap
-            .draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, mask.as_ref());
+        if let Some((_, pixmap)) = &self.image_cache {
+            self.pixmap
+                .draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, mask.as_ref());
+        }
         self.pop_clip();
     }
     fn width(&self) -> u32 {

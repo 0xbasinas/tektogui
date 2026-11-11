@@ -629,6 +629,23 @@ mod tests {
     use tekto_tree::{Color, Rect};
 
     #[test]
+    fn repeated_image_frames_reuse_premultiplied_pixels() {
+        let image = tekto_image::Image::new(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 128]).unwrap();
+        let mut renderer = CpuRenderer::new(8, 8).unwrap();
+        let bounds = Rect::new(2.0, 2.0, 4.0, 4.0);
+        for _ in 0..3 {
+            renderer.begin_frame(Color::PAGE);
+            renderer.draw_image(&image, bounds, tekto_image::Fit::Contain, 1.0);
+            renderer.rgba8().unwrap();
+        }
+        assert_eq!(renderer.image_cache_hits(), 2);
+        // A different buffer with the same bytes must not reuse the cache.
+        let other = tekto_image::Image::new(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 128]).unwrap();
+        renderer.draw_image(&other, bounds, tekto_image::Fit::Contain, 1.0);
+        assert_eq!(renderer.image_cache_hits(), 2);
+    }
+
+    #[test]
     fn animation_frames_differ_and_stay_cheap() {
         use std::time::Instant;
         use tekto_tree::{NodeKind, StyleTransition, Tree};

@@ -35,6 +35,9 @@ struct Inner {
     /// Logical clips. A layer is pushed for each one.
     clip_depth: usize,
     pixels: Option<Vec<u8>>,
+    /// Last uploaded image keyed by [`tekto_image::Image::id`]. The pixel
+    /// copy and format conversion happen once per image, not once per frame.
+    image: Option<(u64, vello::peniko::ImageData)>,
 }
 
 pub struct GpuRenderer {
@@ -108,6 +111,7 @@ impl GpuRenderer {
                 adapter_name,
                 clip_depth: 0,
                 pixels: None,
+                image: None,
             }),
         })
     }
@@ -155,16 +159,28 @@ impl Renderer for GpuRenderer {
         if !bounds.x.is_finite() || !bounds.y.is_finite() || !opacity.is_finite() {
             return;
         }
-        let data = vello::peniko::ImageData {
-            data: image.pixels().to_vec().into(),
-            format: vello::peniko::ImageFormat::Rgba8,
-            alpha_type: vello::peniko::ImageAlphaType::Alpha,
-            width: image.width(),
-            height: image.height(),
-        };
         self.push_clip(bounds);
         {
             let mut inner = self.inner.borrow_mut();
+            let cached = inner
+                .image
+                .as_ref()
+                .filter(|(id, _)| *id == image.id())
+                .map(|(_, data)| data.clone());
+            let data = match cached {
+                Some(data) => data,
+                None => {
+                    let data = vello::peniko::ImageData {
+                        data: image.pixels().to_vec().into(),
+                        format: vello::peniko::ImageFormat::Rgba8,
+                        alpha_type: vello::peniko::ImageAlphaType::Alpha,
+                        width: image.width(),
+                        height: image.height(),
+                    };
+                    inner.image = Some((image.id(), data.clone()));
+                    data
+                }
+            };
             let s = inner.scale;
             let transform = Affine::new([
                 f64::from(width / image.width() as f32 * s),

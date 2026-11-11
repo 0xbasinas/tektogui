@@ -1,12 +1,18 @@
 //! Validated, app-supplied RGBA pixels. No decoder or network access.
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fmt, sync::Arc};
 
 /// Maximum dimension and allocation of a single image.
 pub const MAX_DIMENSION: u32 = 8192;
 pub const MAX_BYTES: usize = 64 * 1024 * 1024;
 
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Clone, Debug)]
 pub struct Image {
+    /// Identity for renderer caches. Clones keep the same id because they
+    /// share the same pixels.
+    id: u64,
     width: u32,
     height: u32,
     pixels: Arc<[u8]>,
@@ -70,7 +76,9 @@ impl Image {
                     rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]);
                 }
             }
-            png::ColorType::Indexed => return Err(ImageError("unsupported PNG color format")),
+            // EXPAND above turns palette and transparency chunks into RGB or
+            // RGBA, so a palette image never reaches this arm.
+            _ => return Err(ImageError("unsupported PNG color format")),
         }
         Self::new(frame.width, frame.height, rgba)
     }
@@ -88,10 +96,15 @@ impl Image {
             return Err(ImageError("RGBA byte length does not match dimensions"));
         }
         Ok(Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             width,
             height,
             pixels: pixels.into(),
         })
+    }
+    /// Stable identity for this pixel buffer. Renderers cache by it.
+    pub fn id(&self) -> u64 {
+        self.id
     }
     pub fn width(&self) -> u32 {
         self.width
@@ -145,6 +158,15 @@ mod tests {
             Some((-50.0, 0.0, 200.0, 100.0))
         );
         assert_eq!(fit(&image, f32::NAN, 100.0, Fit::Cover), None);
+    }
+
+    #[test]
+    fn ids_identify_shared_pixels_only() {
+        let image = Image::new(1, 1, vec![1, 2, 3, 4]).unwrap();
+        let copy = image.clone();
+        let other = Image::new(1, 1, vec![1, 2, 3, 4]).unwrap();
+        assert_eq!(image.id(), copy.id());
+        assert_ne!(image.id(), other.id());
     }
 
     #[cfg(feature = "png")]

@@ -30,7 +30,7 @@ The latest local `cargo test --workspace` passed with an isolated `ESBUILD` over
 
 **Implemented:** Bounded app-supplied RGBA pixels, contain/cover, clipping, Rust and TSX APIs, image semantics and decorative state, CPU and Vello paint, and opt-in static PNG decoding. Tests cover CPU pixels, WASM and QuickJS host paths, accessibility and a headless GPU pixel. See [getting started](../getting-started.md) and `crates/tekto/tests/image.rs`.
 
-**Remaining:** Pixel data is a runtime resource and is not restored by scene JSON. Test a wider range of PNG variants and browser/WebGPU drivers; consider caching decoded or GPU-ready data to avoid per-frame copies. JPEG, WebP, network loading, animated images and SVG remain separate later decisions. PNG uses the existing MIT OR Apache-2.0 `png` crate behind `image-png`.
+**Remaining:** Pixel data is a runtime resource and is not restored by scene JSON. Test a wider range of PNG variants and browser/WebGPU drivers. The CPU and GPU paths now cache one premultiplied or converted image keyed by `Image::id`, so a static image is not copied every frame; alternating many images still converts each one again. JPEG, WebP, network loading, animated images and SVG remain separate later decisions. PNG uses the existing MIT OR Apache-2.0 `png` crate behind `image-png`.
 
 ### `tekto-navigation` and `@tektogui/navigation`
 
