@@ -40,10 +40,10 @@ pub use tekto_render::{
 };
 pub use tekto_text::set_fallback_font;
 pub use tekto_tree::{
-    ease_smoothstep, reduced_motion_requested, Action, Color, FieldKey, Image, ImageError,
-    ImageFit, ImeEvent, LayoutStyle, Node, NodeId, NodeKind, NodePatch, Overlay, OverlaySide,
-    RecordedKey, Recording, Rect, StateInfo, Store, StoreError, StyleTransition, Tree, TreeDump,
-    TreeEvent, DEFAULT_TRANSITION_MS, LIST_OVERSCAN_PX, SCROLL_WHEEL_LINE,
+    ease_linear, ease_smoothstep, reduced_motion_requested, Action, Color, Easing, FieldKey, Image,
+    ImageError, ImageFit, ImeEvent, LayoutStyle, Node, NodeId, NodeKind, NodePatch, Overlay,
+    OverlaySide, RecordedKey, Recording, Rect, StateInfo, Store, StoreError, StyleTransition, Tree,
+    TreeDump, TreeEvent, DEFAULT_TRANSITION_MS, LIST_OVERSCAN_PX, SCROLL_WHEEL_LINE,
 };
 
 pub use tekto_widgets::{

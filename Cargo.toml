@@ -18,6 +18,7 @@ members = [
     "crates/tekto-wasm",
     "examples/notes",
     "examples/notebook",
+    "examples/round3-demo",
     "examples/notes-android",
     "examples/time-travel",
 ]

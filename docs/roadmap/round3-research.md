@@ -4,6 +4,25 @@ Status: 2026-11-11. This is a research roadmap, not a release promise or a list 
 
 Tekto keeps its own scene tree and stable ids, first-class Rust and TSX APIs, agent-first tools, lean default builds, and a plain default look. Sizes are rough: **S** is a few days, **M** one to two weeks, and **L** larger or cross-platform.
 
+## Round 3 shipped
+
+All eight extension slices below are merged into `nightly`, each with headless tests and a nightly CI run:
+
+| Item | PR |
+| --- | --- |
+| Animation: colour tweens, named easings, repeat | #191 |
+| Native permission allow-list | #192 |
+| Quiet design tokens | #193 |
+| Responsive axis and collapsing split pane | #195 |
+| Pointer capture in the tree | #196 |
+| Keyed lazy rows | #197 |
+| Generated native typings and drift test | #198 |
+| Versioned QuickJS bytecode | #199 |
+| Browser parity harness (manual) | #200, #201 |
+| MCP overload flake fix | #194 |
+
+Try the desktop demo: `cargo run -p round3-demo`. It sets tinted tokens before the widgets exist, runs a repeating colour tween on a bar, and has a split pane that collapses when the window is narrower than 760 px plus a slider whose drag survives leaving its bounds.
+
 ## Status of the last three items
 
 1. **Text selection and accessibility.** Multiline selection, composition, and text-run geometry are covered by headless tests, a real Windows window was exercised at 125% scale, and the Notes APK ran on an x86_64 emulator. What is still unproven is a real IME candidate window: the desktop route handles `WindowEvent::Ime`, but no test drives an actual IME layout. OS accessibility smoke tests remain opt-in.
@@ -14,7 +33,7 @@ Navigation, tokens, right-to-left support, lazy lists, tables, charts and native
 
 ## Implemented foundations
 
-The current tree has CPU and Vello rounded rectangles, borders and lines; an overlay layer; menus, select, dialogs and context menus; switch, radio, slider, progress and tabs with bound panels; multiline text selection with IME composition; images with a per-image cache; web callbacks and keyed reload; the `tekto-test` helper; and a shared bundler with generated-app checks. Headless tests cover these slices. `tekto-tree` keeps the scene and core actions in `lib.rs` and the overlay, tab, field, animation, store and scroll logic in their own modules; `lib.rs` is 2,543 lines after the split (it was 3,235 before). See the entries below for remaining work and validation limits.
+The current tree has CPU and Vello rounded rectangles, borders and lines; an overlay layer; menus, select, dialogs and context menus; switch, radio, slider, progress and tabs with bound panels; multiline text selection with IME composition; images with a per-image cache; colour and named-easing transitions with repeat; shared design tokens; a responsive split pane; keyed lazy rows; a JS native permission allow-list; generated native typings; versioned QuickJS bytecode; web callbacks and keyed reload; the `tekto-test` helper; and a shared bundler with generated-app checks. Headless tests cover these slices. `tekto-tree` keeps the scene and core actions in `lib.rs` and the overlay, tab, field, animation, store and scroll logic in their own modules; `lib.rs` is 2,543 lines after the split (it was 3,235 before). See the entries below for remaining work and validation limits.
 
 The final tree was checked on Windows with rustc 1.99.1: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo check -p tekto-wasm --target wasm32-unknown-unknown`, and `npm test` with esbuild (76 passed, 0 skipped) all passed. `cargo test -p tekto --features gpu --lib gpu_ -- --include-ignored` and the ignored GPU image test passed with a real adapter. The Notes window ran at 125% scale, the CLI tree, screenshot and live patch worked against it, the TSX showcase accepted typed text and a select interaction, the Windows clipboard and file probe passed, the Notes APK ran on an x86_64 emulator with `tekto tree` over `adb forward`, and the browser host painted Notes in headless Chrome. Nightly CI on the merge commit then passed Linux check, Windows compile, Android compile, WASM and QuickJS checks, and Generated app builds. The manual checks are one-off, not PR CI; Node/WASM tests do not replace every browser, and a headless GPU check does not prove every driver or device.
 
