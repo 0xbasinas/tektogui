@@ -120,6 +120,25 @@ impl GpuRenderer {
         let config = surface
             .get_default_config(&adapter, width, height)
             .ok_or_else(|| RenderError::msg("window surface is not supported"))?;
+        let caps = surface.get_capabilities(&adapter);
+        // Vello writes sRGB-encoded bytes into an `Rgba8Unorm` target. An sRGB
+        // swapchain would encode them a second time and wash every colour out.
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|format| !format.is_srgb())
+            .unwrap_or(config.format);
+        let alpha_mode = if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
+            wgpu::CompositeAlphaMode::Opaque
+        } else {
+            config.alpha_mode
+        };
+        let config = wgpu::SurfaceConfiguration {
+            format,
+            alpha_mode,
+            ..config
+        };
         surface.configure(&device, &config);
         let renderer = Self::from_device(width, height, device, queue, adapter_name)?;
         {
@@ -734,7 +753,7 @@ fn blit_texture(
                 view: &dest,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                     store: wgpu::StoreOp::Store,
                 },
                 depth_slice: None,
