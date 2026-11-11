@@ -1,5 +1,7 @@
 # Getting started
 
+Rust apps can create an `Image` from bounded, straight-alpha RGBA8 pixels and add it with `image`, choosing `ImageFit::Contain` or `ImageFit::Cover`. Pass a non-empty accessible name, or `None` for a decorative image. Enable `tekto`'s optional `image-png` feature to use `Image::from_png` for static PNGs. TSX uses `<image name="Logo" imageSource={{ width: 1, height: 1, rgba: [255, 0, 0, 255] }} imageFit="contain" />`; use `decorative={true}` instead of a name for decoration. Both CPU and Vello backends implement image painting. Pixel buffers are runtime resources and are not included in serialized scene JSON.
+
 ## Install
 
 Install a recent Rust (1.88+). On this repo:
@@ -179,6 +181,14 @@ A script can create nodes with `tekto.create` / `tekto.setText` / `tekto.append`
   node packages/wasm/dev.js
   ```
 
+  To try the image and controls showcase instead, run:
+
+  ```bash
+  node packages/wasm/dev.js examples/showcase/app.tsx
+  ```
+
+  Open the printed URL, then type in the field, select text, change the switch or size, drag the slider, and click the counter. For the desktop QuickJS host, run `cargo run -p tekto-cli --features quickjs -- dev --js examples/showcase/app.tsx`. Both commands need esbuild on `PATH` or its executable path in `ESBUILD`.
+
   Open the printed URL. Saving `examples/notes/src/app.tsx` reloads the page. `POST /patch` on that server is live `ui.patch`. Set `TEKTO_DEV_URL` to a desktop dev server to forward writeback. A Node check of the same sketch is `node --test packages/wasm/tsx-test.js`.
 
   Commands and the optional `packages/wasm/smoke.html` and `gpu.html` pages are in [the web-build skill](../.agents/skills/web-build/SKILL.md). Do not enable `quickjs` or `gpu` for the default wasm check. `gpu` is a separate, large wasm build.
@@ -186,3 +196,35 @@ A script can create nodes with `tekto.create` / `tekto.setText` / `tekto.append`
 Buttons and text fields can be disabled with `tree.patch(id, NodePatch { disabled: Some(true), ..Default::default() })` in Rust or `disabled={true}` in TSX. Disabling a focused control returns focus to the window root and discards any unfinished text composition. Set `disabled` to `false` to enable it again.
 
 Use `checkbox(&mut tree, parent, "Remember", false)` or `<checkbox checked={false}>Remember</checkbox>` for a labeled toggle. Rust apps receive `TreeEvent::Changed(id)` after a user toggles it and can read `node.checked`.
+
+Use `tekto::switch(&mut tree, parent, "Alerts", false)` or `<switch checked={false}>Alerts</switch>` for a labeled on/off control.
+
+Use `tekto::progress(&mut tree, parent, "Upload", 0.5)` or `<progress name="Upload" value={0.5} />` for determinate progress between zero and one.
+
+For an initial plain multiline editor, use `text_area(&mut tree, parent, "Notes", "", 300.0, 120.0)` in Rust or `<text_field name="Notes" multiline={true} width={300} height={120} />` in TSX. Text wraps and follows the caret. Browser composition uses a host-only editable element; native IME behavior needs browser verification, and accessibility text ranges are still in progress.
+
+Use `tekto::slider(&mut tree, parent, "Volume", 0.5)` or `<slider name="Volume" value={0.5} />` for a normalized slider.
+
+Use `radio_group` and `radio` in Rust, or `<radio_group name="Size"><radio checked={true}>Small</radio><radio>Large</radio></radio_group>` in TSX, for mutually exclusive options.
+
+Build a named `dialog` subtree, then call `tree.open_overlay(dialog_id, window_id, OverlaySide::Center)` to show it. TSX hosts can mount `<dialog name="Confirm">...</dialog>` and call `openOverlay(dialogId, windowId, "center")`.
+
+Use `menu` and `menu_item` to build a named popup, then open it with `tree.open_overlay(menu_id, anchor_id, OverlaySide::Below)`. In TSX, mount `<menu name="Actions"><menu_item onClick={handler}>Open</menu_item></menu>` and call `openOverlay(menuId, anchorId, "below")`.
+
+Use `select` and `select_option` in Rust, or `<select name="Size" onInput={handler}><menu_item checked={true}>Small</menu_item><menu_item>Large</menu_item></select>` in TSX. The selected value is the option label; labels must be unique and non-empty.
+# Keyed JSX lists
+
+Use `For` from `@tektogui/jsx-runtime` for a reactive list whose retained items keep their node IDs. Pass `createEffect`, `createSignal`, and `untrack` from `@tektogui/core` to `mount`, as in:
+
+```tsx
+const [items, setItems] = createSignal([{ id: "one", label: "First" }]);
+mount(<window><For each={items} by={item => item.id}>
+  {item => <button onClick={() => console.log(item().label)}>Open</button>}
+</For></window>, tekto, { createEffect, createSignal, untrack });
+```
+
+Each key must be a unique string or finite number. The child function returns one root node and receives an accessor, so callbacks and reactive text can read the latest item. `For` adds a group to the scene, moves retained children when their order changes, and removes children whose keys disappear. Removing that group disposes its subscription.
+
+`Show` takes a `when` accessor, a child element or a function receiving the current value accessor, and an optional `fallback` element. Its current branch keeps its node IDs while the condition remains truthy or remains falsy. When the condition changes truthiness, the old branch is removed and the other branch is mounted with new IDs. Like `For`, it needs a retained host and the reactive helpers passed to `mount`.
+
+A tab list can be built with `tab_list` and `tab` in Rust, or `<tab_list>` and `<tab>` in TSX. Tab selection moves with arrow keys. Associate content with `tab_panel` in Rust or the `panel` prop in TSX; inactive panels retain their state.

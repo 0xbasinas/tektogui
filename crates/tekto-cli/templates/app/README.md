@@ -30,4 +30,15 @@ cargo run -p tekto-cli -- patch 4 --text "Hello from an agent"
 
 ## TypeScript sketch
 
-`src/app.tsx` is a JSX view of the same layout. It does not run on the Rust tree yet.
+`src/app.tsx` is a JSX view of the same layout. Install the local package links and check it with npm, pnpm, or bun:
+
+```bash
+npm install
+npm run typecheck
+npm run build:web
+npm run build:desktop
+```
+
+The build commands write a browser ES module and a desktop QuickJS bundle to `dist/`. Set `ESBUILD` to an esbuild executable if it is not on `PATH`.
+
+To run the sketch, from the Tekto checkout use `cargo run -p tekto-cli --features quickjs -- dev --js <path-to-app>/src/app.tsx`, or `node packages/wasm/dev.js <path-to-app>/src/app.tsx` for the browser. Both need esbuild on `PATH` or in `ESBUILD`.

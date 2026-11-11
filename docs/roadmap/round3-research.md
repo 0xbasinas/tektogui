@@ -1,46 +1,36 @@
 # Round 3 research roadmap
 
-Status: 2026-11-11. This is a research list, not a release promise and not a set of open GitHub issues. It was written from a review of other GUI frameworks, then checked against `nightly` at `89726d8`.
+Status: 2026-11-11. This is a research roadmap, not a release promise or a list of GitHub issues. The original research was checked against `nightly` at `89726d8`; the progress below describes the **current working tree**, including uncommitted changes. It does not imply that changes have been merged or released.
 
-Tekto already has a Rust core, TSX on QuickJS, a first-class Rust API, MCP and CLI control, hot reload, and targets for Linux, Windows, Android, headless, and web (WASM). This list is about what to add next so the toolkit is more complete, while keeping the same rules: our own tree and stable ids, agent-first tools, fast builds, small apps, a plain quiet look, and JS packages that work with pnpm, bun, and npm.
+Tekto keeps its own scene tree and stable ids, first-class Rust and TSX APIs, agent-first tools, lean default builds, and a plain default look. Sizes are rough: **S** is a few days, **M** one to two weeks, and **L** larger or cross-platform.
 
-Four research sessions produced the source notes (Rust kits, cross-platform app frameworks, web/desktop shells and 2025–2026 experiments, and agent tooling). Their findings were merged and de-duplicated before this document was written.
+## Suggested next work
 
-Sizes are rough: **S** is a few days, **M** is about one to two weeks, **L** is larger or crosses many hosts. Priority is **high**, **medium**, or **low**.
+1. Finish remaining text selection and accessibility gaps. The multiline field has a first implementation; desktop IME and Android device checks are deferred.
+2. Verify context-menu and tab behavior across hosts, including dynamic panel lifecycles, and exercise typed agent actions with retained TSX apps and unrealized rows.
+3. Automate generated-app builds and host checks for npm, pnpm and bun. Shared build settings and template typing are in place and have been checked locally.
 
-## Suggested order
+Navigation, tokens, right-to-left support, lazy lists, tables, charts and native extras are later work. OS accessibility smoke tests remain opt-in.
 
-This is a recommended order only. Hardware work (Windows runtime, macOS, iOS) and merging `nightly` into `main` stay separate decisions.
+## Implemented foundations
 
-1. Short foundations: paint primitives (rounded corners, borders, lines), then an overlay layer so menus and dialogs can sit on top.
-2. Everyday agent and app DX: web TSX callbacks, a small `tekto-test` crate, richer tree snapshots and actions, an inspect command, and opt-in keyed TSX reload so state is not wiped.
-3. Widgets people need for real apps: text selection and copy/paste, menus and a dropdown, a modal dialog, then radio / switch / slider / progress, then images.
-4. Start the multi-line text area early, because it is large, but do not block the smaller slices on it.
-5. Later: quiet design tokens, a simple navigation stack, right-to-left foundations, JS native permissions, a shared bundler and template types, lazy lists, a read-only table and small charts, and native extras (Android shared documents, share, deep links).
+The current tree has CPU and Vello rounded rectangles, borders and lines; an overlay layer; menus, select and dialogs; switch, radio, slider and progress controls; web callbacks; keyed reload; and initial image support. Headless tests cover these slices. See the entries below for remaining work and validation limits.
+
+The latest local `cargo test --workspace` passed with an isolated `ESBUILD` override. Workspace Clippy and the JavaScript suite also passed in earlier runs. Later image changes passed targeted CPU, WASM, QuickJS, PNG and GPU checks. These are separate runs, not a claim that every check was rerun on the final tree. Node/WASM tests do not replace browser testing, and a headless GPU check does not prove every driver or device.
 
 ## New crates
 
 ### `tekto-test`
 
-- **What it does:** A small headless test helper. Tests can find a control by stable id, role, or accessible name, click or type on it, wait for a condition, assert focus / value / checked / disabled, and optionally compare a CPU PNG to a saved picture (with a diff image and an update mode).
-- **Why:** Flutter's widget and semantics tests, Masonry's pixel snapshots, and Playwright's visual comparisons all show that screenshots alone miss broken names, focus, and state. Tekto already has headless PNGs and record/replay; they are not yet a reusable test API.
-- **Priority:** high. **Size:** S–M.
-- **Crates it touches:** new `tekto-test` (dev-only). Small use of `tekto-tree`, `tekto-a11y`, the CPU renderer, and maybe `tekto-cli`.
-- **Design notes:** Use the real scene and AccessKit mapping, never a second tree. Fix the viewport, scale, bundled font, and animation clock so pixels stay stable. Semantic assertions should ship first; PNG compare can be a second slice. An optional developer test key may resolve to a live id, and must fail if it is duplicated.
-- **DX fit:** Agent-first: the same ids and actions as MCP/CLI. Fast builds: dev-dependency only, no GPU or QuickJS in the default graph. Tests should cover Rust and, when the `quickjs` feature is on, a TSX callback flow. Quiet look is unchanged.
-- **Acceptance:** A small Rust form can be found, activated, and asserted by role and name. A stale or disabled id fails clearly. Optional QuickJS path updates a label after a click. PNG compare (second slice) writes expected / actual / diff and supports an explicit update command. `cargo test` on Linux stays CPU-only.
-- **Licence:** Own MIT code. Reuse existing `png` support (MIT OR Apache-2.0, already in the workspace). Check any extra diff crate before adding it. Do not copy Playwright or Flutter test code.
+**Implemented:** Semantic lookup and actions against the real AccessKit/scene tree, deterministic waiting, optional unique test keys, CPU PNG comparison and diff artifacts. An optional QuickJS host retains callbacks. See [headless tests](../headless-tests.md) and `crates/tekto-test`.
+
+**Remaining:** Keep Rust and TSX coverage current as widgets and actions grow; verify the optional QuickJS path when it changes. The helper does not replace real OS accessibility tests.
 
 ### `tekto-image`
 
-- **What it does:** Let an app show a picture: a new image node, decode (or accept ready pixels), scale with contain/cover, clip, and an accessible name or an explicit "decorative" mark.
-- **Why:** Flutter, Iced, egui, GPUI, MAUI, and almost every other toolkit can show an image. Tekto currently cannot show a logo, avatar, or icon.
-- **Priority:** high. **Size:** M.
-- **Crates it touches:** new `tekto-image` (decode and cache), plus `tekto-render` (`draw_image`), `tekto-tree` (`NodeKind::Image`), `tekto-widgets`, `tekto-a11y`, `tekto-js`, and the JSX runtime.
-- **Design notes:** First slice can draw app-supplied RGBA pixels with size limits, so no new decoder is required. Then add an opt-in PNG feature. JPEG or WebP stay behind later features. No network loading, no animated GIF, no SVG in this crate.
-- **DX fit:** Same ids for Rust, TSX, AccessKit, and agents. Default build stays small: PNG only when opted in. Agents can read the alt text. Quiet look: no decorative chrome around the image.
-- **Acceptance:** Headless tests cover a valid image, invalid or missing data, clipping, contain/cover, alt text, and decorative state. Rust and TSX HostOps both work. CPU paint is checked; GPU may fall back in this slice.
-- **Licence:** Own MIT code. If a decoder is added, prefer the existing `png` crate (MIT OR Apache-2.0). Confirm any JPEG crate (for example `zune-jpeg`) before adding it. Do not pull the heavy `image` crate by default.
+**Implemented:** Bounded app-supplied RGBA pixels, contain/cover, clipping, Rust and TSX APIs, image semantics and decorative state, CPU and Vello paint, and opt-in static PNG decoding. Tests cover CPU pixels, WASM and QuickJS host paths, accessibility and a headless GPU pixel. See [getting started](../getting-started.md) and `crates/tekto/tests/image.rs`.
+
+**Remaining:** Pixel data is a runtime resource and is not restored by scene JSON. Test a wider range of PNG variants and browser/WebGPU drivers; consider caching decoded or GPU-ready data to avoid per-frame copies. JPEG, WebP, network loading, animated images and SVG remain separate later decisions. PNG uses the existing MIT OR Apache-2.0 `png` crate behind `image-png`.
 
 ### `tekto-navigation` and `@tektogui/navigation`
 
@@ -99,143 +89,65 @@ These are real ideas, but they should wait.
 
 ### `@tektogui/build`
 
-- **What it does:** One small helper or CLI that turns `app.tsx` into a single JS file for both QuickJS (desktop) and the WASM host. Today the web package has its own bundler path; this would share it.
-- **Why:** Lynx and Electrobun give one command for dev and release. A single path is easier for agents and for pnpm, bun, and npm.
-- **Priority:** medium. **Size:** S.
-- **Packages it touches:** new `@tektogui/build`; can reuse logic in `packages/wasm` (`bundle-app.js`). No Rust-side watcher rewrite.
-- **Design notes:** Wrapping esbuild is enough. No CSS pipeline and no plugin API in the first slice.
-- **DX fit:** Published `package.json` stays manager-neutral (no pnpm-only fields). Fast and small: this is a dev tool, not shipped inside apps.
-- **Acceptance:** The same app entry bundles for the desktop QuickJS host and for `packages/wasm`, from npm, pnpm, and bun. Existing wasm dev server still works.
-- **Licence:** Own MIT code. esbuild is MIT (confirm in its repo before adding or documenting it as a dependency).
+**Implemented:** The helper and `tekto-build` CLI generate a web ES module or desktop QuickJS IIFE from a TSX entry. Generated apps have `build:web` and `build:desktop` scripts. Fresh npm, pnpm and bun installs each typechecked a generated app and produced both formats; each generated output was exercised in WASM and QuickJS. The web dev server uses the helper; Node tests cover build, reload and watcher isolation.
 
-### Keyed JSX helpers (`<For>`, `<Show>`, optional `<Switch>`)
+**Remaining:** Desktop dev and the JavaScript helper share wrapper templates and compiler flags; desktop still invokes esbuild directly (the shared flag list is already used by both). The desktop esbuild lookup now skips a broken package-manager shim and uses the next one on `PATH`. Automate generated-project builds and host checks under all three managers. The local check used an isolated esbuild binary and did not test a published package.
 
-- **What it does:** Control-flow helpers so a list can keep stable node ids when items move, and so conditionals do not remount everything. This can live in `@tektogui/jsx-runtime` or a tiny `@tektogui/flow` package.
-- **Why:** Solid's keyed lists and `createRenderer` (MIT, ideas only) are the model. Tekto's never-reused ids are a selling point for agents; a naive remount throws that away. This is different from a lazy data list in layout (see extensions below).
-- **Priority:** high. **Size:** M.
-- **Packages it touches:** `@tektogui/jsx-runtime` and maybe `@tektogui/core`. HostOp and tree ids must stay monotonic.
-- **Design notes:** Write our own helpers. No Solid compiler transform in the first slice. Keys are application keys, not NodeIds.
-- **DX fit:** Pure JS, no new runtime deps, works with pnpm, bun, and npm. Agents keep talking to the same ids for items that still exist.
-- **Acceptance:** Moving, inserting, and removing items keeps ids for the items that remain. A headless or QuickJS test shows a click still hits the same item after a reorder. Type declarations are updated.
-- **Licence:** Own MIT code. Solid is MIT and is ideas only; do not copy its compiler.
+### Keyed JSX helpers (`<For>`, `<Show>`)
+
+**Implemented:** `<For>` retains node ids and callbacks across keyed reorder, inserts and removals; `<Show>` retains its active branch until truthiness changes. Types and WASM host tests are present. Keys are application keys, not node ids.
+
+**Remaining:** Exercise realistic TSX bundles and the retained QuickJS path, including update and cleanup failures. A `<Switch>` helper remains optional. Lazy data lists are a separate task.
 
 ### Later packages
 
-- **`create-tektogui` typecheck template:** Add `tsconfig.json`, a `typecheck` script, and typings generated from `components.json`. Medium, S. TypeScript is Apache-2.0 and already a workspace dev dependency. Cheap and helpful for agents.
+- **`create-tektogui` typecheck template:** Generated apps now include `tsconfig.json`, local package links and a `typecheck` script. The generated template typechecked locally using npm, pnpm and bun. JSX intrinsic declarations are generated from `components.json` and checked for drift. The scaffold test typechecks a generated project when workspace TypeScript is installed. TypeScript is Apache-2.0.
 - **`@tektogui/solid`:** An experimental Solid renderer on HostOp, as a peer dependency, not a replacement for `@tektogui/core`. Low, M–L. Solid is MIT. Do not copy code from Wabou or similar projects until their licences are checked. Optional only.
 - **`@tektogui/mcp-apps` or `@tektogui/a2ui`:** Adapters for [MCP Apps](https://apps.extensions.modelcontextprotocol.io/api/) or [A2UI](https://github.com/a2ui-project/a2ui) (Apache-2.0), only if a real consumer exists. Low, M. Do not embed a browser in the native renderer. Check the MCP Apps SDK licence before adding it.
 
 ## Extensions to existing crates and packages
 
-### Paint primitives
+### Paint primitives and overlay layer
 
-- **Name:** Rounded rectangles, borders, and lines in the renderer.
-- **What it does:** Add `fill_rrect`, `stroke_rrect`, and `draw_line` to the `Renderer` trait, with a fallback to `fill_rect` so older backends still compile. Nodes get `radius`, `border`, and `border_color`.
-- **Why:** The current trait only has `fill_rect`, `draw_text`, and clip push/pop. Iced, egui, Masonry, GPUI, Flutter, and Slint all have rounded shapes and strokes. Almost every later widget (switch, slider, tabs, tooltip, dialog) needs this. A quiet look needs a thin 1px border more than it needs new colours.
-- **Priority:** high. **Size:** S–M.
-- **Crates it touches:** `tekto-render`, `tekto-tree`, and paint paths in the CPU (tiny-skia) and optional GPU (Vello) backends.
-- **Design notes:** Trait defaults keep other renderers compiling. No blur shadows, gradients, or per-corner radii in the first slice. Fields should show up in `ui.tree`.
-- **DX fit:** No new dependencies. Default build stays CPU-only. Agents can read the new style fields. The default palette stays quiet.
-- **Acceptance:** Headless snapshots of a rounded rect, a 1px border, and a line. GPU path implements the same calls or falls back cleanly. Existing button and field snapshots stay valid or are updated on purpose.
-- **Licence:** Own MIT code. tiny-skia is BSD-3-Clause. Vello is Apache-2.0 OR MIT. Both are already used.
+**Implemented:** Rounded fills, borders and lines in the renderer trait and CPU/Vello backends; style fields in scene dumps; and an anchored overlay that paints and hit-tests above the base tree. Headless tests cover pixels, stacking, dismissal, blocked background clicks and accessibility. Existing renderer trait defaults preserve custom backends.
 
-### Overlay layer
+**GPU/CPU parity:** With the `gpu` feature, tests paint the same tree on both renderers and fail if more than 3% of pixels differ noticeably. They cover each primitive (fills, rounded fills, borders, lines, nested clips, text width, images) at scales 1.0 and 1.25, plus tabs, fields, selection, IME composition, controls, a list, an open menu, a modal dialog and an open select. They found two GPU bugs, both fixed: scaled images were smoothed instead of sampled nearest, and borders ignored the display scale. They ran on one NVIDIA adapter and skip when none exists.
 
-- **Name:** Window-level overlay for menus, tooltips, and dialogs.
-- **What it does:** Nodes can be attached to a window overlay, paint last, hit-test first, and sit at an anchor (a node id and a side). Clicking outside closes the overlay; Escape is routed to it.
-- **Why:** Masonry, Iced (`stack`), and egui (`Area`) all have a layer above the normal tree. Without this, menus, dropdowns, tooltips, and dialogs cannot work correctly.
-- **Priority:** high. **Size:** M.
-- **Crates it touches:** `tekto-tree`, `tekto-layout`, `tekto-render`, `tekto-a11y`, and later `tekto-widgets`.
-- **Design notes:** In the AccessKit tree the overlay stays a child of the window, with a proper role and stable ids. Agents click it like any other node. First slice: no collision flipping, arrow pointers, or extra motion.
-- **DX fit:** Same ids for Rust, TSX, AccessKit, and MCP. No new deps. Fast compile unchanged.
-- **Acceptance:** Headless tests: overlay paints above siblings, hits the top node, click-outside closes, Escape closes, and a blocked background click fails. AccessKit contains the overlay nodes.
-- **Licence:** Own MIT code.
+**Remaining:** Continue checking GPU output across other drivers, Android and browser WebGPU. Collision flipping, overlay arrows and motion were outside the first slice.
 
-### Menus, dropdown, and modal dialog
+### Menus, select and modal dialog
 
-- **Name:** Popup menu, single-select, and modal dialog.
-- **What it does:** After the overlay layer exists, add a quiet menu (and a context menu built from it), a single-select control with labelled options, and a modal dialog with a focus trap, accessible name, Escape/cancel, and background hit blocking. Focus returns when the popup or dialog closes.
-- **Why:** Flutter, MAUI, SwiftUI, Qt, egui, Iced, and gpui-component all have pickers, menus, and dialogs. Forms and settings are hard without them.
-- **Priority:** high. **Size:** M (select and dialog can be separate slices).
-- **Crates it touches:** `tekto-widgets`, `tekto-tree`, `tekto-layout`, `tekto-a11y`, `tekto-js`, JSX runtime / `components.json`, and input routing.
-- **Design notes:** Every item has a stable id. Agents can open, move, and choose with the same actions as a person. First slice: no nested submenus, no native OS menu bar, no searchable combo box, no multi-select, no fancy placement across monitors.
-- **DX fit:** Agent-first by design. No extra toolkit dependency. Quiet scrim and typography. Rust and TSX share the same kinds and events.
-- **Acceptance:** Keyboard (arrows, Enter, Escape), pointer, disabled items, focus restore, Rust/TSX parity, and AccessKit expanded/selected/dialog roles. Clicking a control behind the modal must fail.
-- **Licence:** Own MIT code.
+**Implemented:** Popup menu, single-select and named modal dialog with overlay placement, keyboard actions, focus restoration and background blocking. Reusable context menus bind in Rust and TSX and open on desktop and browser right-click. Headless QuickJS and WASM tests cover reopening and callbacks.
 
-### Radio, switch, slider, progress, and tabs
+**Remaining:** A headless test covers arrow keys skipping disabled items, a newly disabled focused item and Escape restoring focus; the same checks on the web and Android hosts are still open. Nested submenus, native menu bars and multi-select are later work.
 
-- **Name:** First extra form controls, then tabs.
-- **What it does:** Add radio group, switch, slider, and progress, each with disabled state, keyboard (arrows / Home / End where it applies), AccessKit roles, and agent actions (including a value-set action for the slider). Tabs come after: a tab list and panel with roving focus and arrow keys.
-- **Why:** This is the obvious hole versus Flutter's widget catalog, Compose, Iced, egui, and Masonry. Tekto today has button, checkbox, a single-line field, list, and scroll. A slider also needs pointer capture (see below).
-- **Priority:** high for the first batch, medium for tabs. **Size:** M for the batch, S for tabs.
-- **Crates it touches:** `tekto-widgets`, `tekto-tree` (new `NodeKind` values), `tekto-a11y`, `tekto-render` (after paint primitives), JSX schema, MCP/CLI as needed.
-- **Design notes:** Follow the existing add-widget skill and the checkbox pattern. First slice: no range slider, no vertical slider, no tick marks, no closable or draggable tabs.
-- **DX fit:** No new deps. Same ids and MCP actions. Quiet muted defaults, including disabled.
-- **Acceptance:** Headless tests for keyboard, pointer, agent set-value, disabled, AccessKit roles, and CPU paint. JSX and Rust helpers match.
-- **Licence:** Own MIT code. Masonry (Apache-2.0) may be read for behaviour, with attribution if any code is copied.
+### Radio, switch, slider, progress and tabs
 
-### Text selection, copy/paste, then a multi-line field
+**Implemented:** Radio groups, switch, slider, determinate progress and tab lists have Rust and TSX forms, accessibility roles and headless tests. Tabs use roving focus, arrow keys and a selected indicator. Slider supports pointer dragging and the agent set-value action. Tabs associate panels in Rust and TSX; inactive panel state is retained while it is excluded from layout, focus, hit testing and accessibility. Arrow selection delivers retained callbacks in QuickJS and WASM host tests.
 
-- **Name:** Selection first, then `TextArea`.
-- **What it does:** Give the existing single-line field a selection (keyboard and pointer), replace-selection, copy/cut/paste through the existing clipboard, and a visible IME composition range. Then add a plain multi-line area with wrapping, Up/Down/Home/End, scrolling to the caret, and AccessKit text selection.
-- **Why:** Flutter, MAUI, SwiftUI, and Masonry treat selection and multi-line editing as core. This is the biggest practical limit for notes and forms. Parley already does rich layout; Tekto just does not expose it yet.
-- **Priority:** high. **Size:** L. Ship selection before the text area if possible, and start the text area early because it is large.
-- **Crates it touches:** `tekto-text`, `tekto-tree`, `tekto-widgets`, `tekto-a11y`, `tekto-platform`, `tekto-native` (clipboard), and input hosts (desktop, Android overlay, later web).
-- **Design notes:** Check whether Parley's `PlainEditor` can be used directly instead of writing a new editor. Keep Unicode indexing conversions explicit at host boundaries. First slice is plain text only: no rich editing, no spellcheck, no syntax highlighting, no huge-document editor, no undo history beyond a simple start.
-- **DX fit:** Agents already have `ui.type` and `ui.key`; extend them carefully for selection and multi-line movement. No new text engine. QuickJS and WASM stay optional. Quiet field chrome, same as today.
-- **Acceptance:** Headless tests for start/middle/end selection, grapheme clusters and emoji, copy/cut/paste, IME commit and cancel, disabled fields, and (for the text area) wrapping and vertical movement. Desktop IME and Android overlay still need live checks on real devices; do not claim those from Linux CI alone.
-- **Licence:** Parley is already a dependency (Apache-2.0 OR MIT; confirm the crate licence at the version we use if `PlainEditor` is adopted). Own MIT glue. No new text stack.
+**Remaining:** Conditional panel removal and recreation have a WASM regression test, and headless tests now cover removing the selected tab, adding tabs and panels later, double binding and removing a panel directly. Retained TSX apps with many dynamic panels are still untested. Check remaining disabled-state and callback parity on each host; general pointer capture and agent drag are separate items below.
 
-### Web TSX callbacks
+### Text selection and multi-line field
 
-- **Name:** Browser `onClick` and `onInput` parity.
-- **What it does:** When the web canvas hits a node, the browser JS host should run the same JSX handlers that desktop QuickJS already runs: button `onClick` and field `onInput`, with cleanup on remove and remount.
-- **Why:** Lynx, Valdi, and Wails all run JS handlers on every target. Tekto's web host already maps pointer and wheel to the tree, but a hit does not call TSX. Shared apps cannot behave the same on web and desktop.
-- **Priority:** high. **Size:** M.
-- **Crates / packages it touches:** `crates/tekto-wasm`, `packages/wasm`, `@tektogui/jsx-runtime`.
-- **Design notes:** The browser already runs JS; do not enable QuickJS on WASM. No public DOM API for app code. First slice: no web IME, no web text selection, no extra gesture framework.
-- **DX fit:** Same ids and events as desktop. No new deps. npm, pnpm, and bun tests keep working. Fast default builds unchanged.
-- **Acceptance:** Node or wasm tests click a button and type in a field, see the handler run, ignore disabled controls, and drop stale handlers after remount. Existing pointer/scroll tests still pass.
-- **Licence:** Own MIT code.
+**Implemented:** Single-line selection, replacement and grapheme-aware movement/deletion; desktop mouse and keyboard selection and native clipboard; browser mouse and keyboard selection and clipboard events. IME composition text has an underline and selected-subrange highlight. Single-line fields expose AccessKit text runs and grapheme-aware selection metadata when their text and IDs can be represented; multiline fields expose one run per line, cross-line selection, and per-line bounds with per-character positions and widths (right-to-left lines report their direction and offset from the right edge). Layout stores one box per grapheme for text up to 4000 graphemes; longer text falls back to the field bounds. This uses the existing MIT OR Apache-2.0 `unicode-segmentation` dependency. A plain multiline field supports wrapping, vertical movement and caret scrolling. Headless tests cover selection, graphemes, emoji, IME commit and cancellation, disabled fields and paint.
 
-### State-preserving TSX reload
+**Remaining — high priority:** Browser touch selection. Browser IME has host wiring and needs verification in a real browser. Desktop IME, real clipboard and Android overlay behavior still need live device checks. Bidirectional lines are covered by a headless Hebrew test only; mixed-direction lines are reported as one run, so per-run direction for mixed text and visual (not logical) caret movement still need work. IME composition is now tested to cancel on focus change, field disable and tab-panel hide.
 
-- **Name:** Opt-in keyed signal state across hot reload.
-- **What it does:** Today a TSX reload remounts the app and resets signals. Allow named signals (for example `createSignal(init, { key })`) to be saved and restored across a reload. Incompatible or missing keys reset only that piece of state and report it.
-- **Why:** Compose Hot Reload and typical Vite / Solid HMR keep some state, which makes iteration less painful. Agents lose their place after every edit today.
-- **Priority:** high. **Size:** M.
-- **Crates / packages it touches:** `@tektogui/core`, `@tektogui/jsx-runtime`, and `tekto-js` (and the web host where it can support the same hook).
-- **Design notes:** Do not promise to serialize closures or the whole heap. Do not mix this up with live `ui.patch` writeback. Rust binary hot reload stays a separate, experimental topic.
-- **DX fit:** QuickJS stays behind its feature. The JS API must work with pnpm, bun, and npm. Agent live-edit loops get much better without changing the tree model.
-- **Acceptance:** A counter or form keeps its keyed state across reload. A renamed or incompatible key resets only that value and is reported. Unkeyed signals still reset, as today.
-- **Licence:** Own MIT code. Compose and Solid HMR are ideas only (and Solid HMR is known to be only a partial solution).
+### Web TSX callbacks and keyed reload
+
+**Implemented:** WASM host delivers button clicks and field input, removes stale callbacks, and supports keyed signal reload state with reset reporting. Node/WASM tests exercise the retained paths; QuickJS remains optional.
+
+**Remaining:** Verify these flows in a real browser and expand parity coverage for controls and reload edge cases. Unkeyed state still resets; this is not whole-heap preservation.
 
 ### Test helpers, snapshots, and inspect (related slices)
 
 These three work well together, and can share the `tekto-test` crate above.
 
-**Richer semantic snapshots and actions**
+**Semantic snapshots, actions and inspect**
 
-- **What it does:** A compact, versioned tree snapshot with id, role, name, value/state, focus, bounds, and supported actions, plus search by role or name, and typed actions such as focus, activate, set value, and toggle. All of this goes through the same path as real user input.
-- **Why:** Playwright MCP snapshots and Compose's experimental MCP access show that agents work best with a searchable semantic tree, not only a raw dump and a screenshot.
-- **Priority:** high. **Size:** M.
-- **Crates it touches:** `tekto-a11y`, `tekto-tree`, `tekto-mcp`, `tekto-cli`, and HostOp bindings.
-- **Design notes:** Never bypass disabled state or fire a callback twice. Ids are for a node's lifetime; they are not a promise across a remount. For virtualized lists, do not invent ids for unrealized rows.
-- **DX fit:** This is a direct upgrade to the MCP/CLI surface. No second accessibility tree. No new default deps.
-- **Acceptance:** Rust and TSX parity tests, stale ids, duplicate test keys, disabled no-ops, and a documented CLI/MCP shape.
-- **Licence:** Own MIT code. Playwright MCP is Apache-2.0 and is a reference only.
+**Implemented:** Scene and AccessKit dumps expose ids and state; `tekto-test` finds by role/name or unique test key. CLI `inspect` and MCP `ui.inspect` report ancestry, bounds, clipping and semantics. An inspector page and headless diagnostics tests are present. A versioned semantic snapshot and exact role/name search use the realized AccessKit tree and return duplicate matches. Typed focus, activation, toggle-state and text/slider value actions use the shared tree and retained callback hooks; existing click, key, type and scroll actions remain available.
 
-**Inspect and layout diagnostics**
-
-- **What it does:** An `inspect <id>` output (CLI and MCP) with ancestry, computed bounds, clip, scroll, focus, role/name/state, and layout input versus computed size. Optional debug-only box overlay under the pointer. A thin browser page over the existing dev-server endpoints may come later.
-- **Why:** Flutter Inspector, Lynx DevTool, Makepad, and egui all let you see layout boxes. Tekto's HTTP tree is strong, but a human or an agent still has to guess why something is clipped.
-- **Priority:** high / medium. **Size:** M.
-- **Crates / packages it touches:** `tekto-mcp`, `tekto-cli`, optional overlay in `tekto-platform`. A later `@tektogui/inspector` page is optional and dev-only.
-- **Design notes:** Start with JSON/CLI, then a thin page or overlay. No network profiler, no full timeline, no heavy separate GUI app, no edit-in-place in the first slice.
-- **DX fit:** Dev-only, not in release binaries. Same ids as `ui.tree`. No new Rust deps for a static HTML page.
-- **Acceptance:** Headless tests assert the diagnostic JSON and overlay geometry. A missing id fails clearly.
-- **Licence:** Own MIT code.
+**Remaining:** Verify typed actions against retained TSX apps and unrealized rows, including callback failures and overlay restrictions. A debug overlay is optional; the current inspector page is not evidence of an in-window overlay.
 
 **Linux AT-SPI smoke test**
 
@@ -369,15 +281,4 @@ These were looked at and rejected, or deferred on purpose.
 - Do not copy code from experimental projects (Wabou, Kiln, and similar) until their licences are checked. Chili3D and other "ideas only" projects stay ideas only.
 - New direct dependencies must be MIT, Apache-2.0, BSD, or zlib, with attribution if code is reused. Several research notes marked licences "from memory"; confirm each licence in the upstream repo before adding a crate.
 
-## Notes where the research sessions disagreed
-
-- **First step:** one session wanted paint and overlays first; others wanted tests, web callbacks, and selection first. Both fit if paint and overlay are short foundations, not the whole milestone.
-- **`tekto-test`:** one session wanted golden PNGs first; another wanted semantic queries first and left image-diff out of the first slice; a third wanted both. This document follows semantic assertions first, PNG compare second, in one crate.
-- **Inspector:** on-screen overlay vs a browser page vs a CLI/MCP dump. Start with inspect JSON/CLI, then a thin page and/or overlay.
-- **Images now or later:** two sessions ranked images high; one wanted a decoder and size review first. The compromise is: draw already-decoded pixels first, then an opt-in PNG feature after the licence check (`png` is already in the workspace).
-- **Animation:** one session wanted springs and more easings; another said do not rebuild motion. This document keeps the current tween system and adds colour or repeat only when a widget needs them.
-- **i18n home:** a new crate vs a first slice in existing crates. Start in the existing crates; split later if needed.
-- **Keyed JSX lists vs lazy data lists:** these are different jobs and should stay separate issues if they are ever filed.
-- **OS accessibility:** one session ranked a Linux AT-SPI smoke test as high. It is worth doing, but it needs a real desktop session and must stay behind `a11y-os`.
-
-Windows runtime checks, macOS and iOS work, PR #101, and merging `nightly` into `main` are not part of this list.
+Windows runtime checks, macOS and iOS work, PR #101, and merging `nightly` into `main` remain separate decisions.

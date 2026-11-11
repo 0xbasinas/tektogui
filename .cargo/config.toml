@@ -1,0 +1,3 @@
+[alias]
+# GPU (wgpu / Vello) Notes window. Falls back to CPU if no adapter.
+notes-gpu = "run -p notes --features gpu"
