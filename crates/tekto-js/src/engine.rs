@@ -23,7 +23,7 @@ impl Drop for HostGuard {
 /// Extend the host pointer to `'static` for the QuickJS callbacks.
 ///
 /// Safety: the pointer is only used on this thread until [`HostGuard`]
-/// clears it, and those callbacks run synchronously inside `eval_script`.
+/// clears it, and those callbacks run synchronously inside a session call.
 unsafe fn attach_host(host: &mut dyn Host) -> HostGuard {
     let ptr: *mut (dyn Host + 'static) = unsafe {
         std::mem::transmute::<*mut dyn Host, *mut (dyn Host + 'static)>(host as *mut dyn Host)
@@ -45,25 +45,96 @@ fn throw<'js, T>(ctx: &Ctx<'js>, err: JsError) -> rquickjs::Result<T> {
     Err(rquickjs::Exception::throw_message(ctx, &err.to_string()))
 }
 
-pub fn eval_script(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
-    let _guard = unsafe { attach_host(host) };
-    let runtime = Runtime::new().map_err(|e| JsError::Message(e.to_string()))?;
-    let context = Context::full(&runtime).map_err(|e| JsError::Message(e.to_string()))?;
-    context
-        .with(|ctx| -> rquickjs::Result<()> {
-            let tekto = Object::new(ctx.clone())?;
-            tekto.set("create", Func::from(js_create))?;
-            tekto.set("setText", Func::from(js_set_text))?;
-            tekto.set("setProp", Func::from(js_set_prop))?;
-            tekto.set("append", Func::from(js_append))?;
-            tekto.set("remove", Func::from(js_remove))?;
-            tekto.set("transition", Func::from(js_transition))?;
-            tekto.set("applyNativeOp", Func::from(js_apply_native_op))?;
-            ctx.globals().set("tekto", tekto)?;
-            ctx.eval::<(), _>(source)?;
-            Ok(())
+/// A QuickJS session bound to its creating thread. Host access is attached only
+/// while a call is running; callers must not hold a tree lock during these calls.
+pub struct JsSession {
+    context: Context,
+    _runtime: Runtime,
+}
+
+impl JsSession {
+    pub fn new() -> Result<Self, JsError> {
+        let runtime = Runtime::new().map_err(|e| JsError::Message(e.to_string()))?;
+        let context = Context::full(&runtime).map_err(|e| JsError::Message(e.to_string()))?;
+        context
+            .with(|ctx| -> rquickjs::Result<()> {
+                let tekto = Object::new(ctx.clone())?;
+                tekto.set("create", Func::from(js_create))?;
+                tekto.set("setText", Func::from(js_set_text))?;
+                tekto.set("setProp", Func::from(js_set_prop))?;
+                tekto.set("append", Func::from(js_append))?;
+                tekto.set("remove", Func::from(js_remove))?;
+                tekto.set("transition", Func::from(js_transition))?;
+                tekto.set("applyNativeOp", Func::from(js_apply_native_op))?;
+                ctx.globals().set("tekto", tekto)?;
+                ctx.eval::<(), _>(include_str!("session.js"))
+            })
+            .map_err(|e| JsError::Message(format_quickjs_error(&e)))?;
+        Ok(Self {
+            context,
+            _runtime: runtime,
         })
-        .map_err(|e| JsError::Message(format_quickjs_error(&e)))
+    }
+
+    /// Evaluate one bundle. Replace the entire session for a reload.
+    pub fn eval(&self, source: &str, host: &mut dyn Host) -> Result<(), JsError> {
+        self.run(host, |ctx| ctx.eval::<(), _>(source))
+    }
+
+    /// Deliver one already-validated click. Returns false when no handler exists.
+    /// The caller must validate that the id still belongs to the current tree.
+    pub fn dispatch_click(&self, id: u64, host: &mut dyn Host) -> Result<bool, JsError> {
+        self.run(host, |ctx| {
+            let f: rquickjs::Function = ctx.globals().get("__tektoDispatchClick")?;
+            f.call((id,))
+        })
+    }
+
+    /// Forget a removed subtree before an id can be reused. The host must pass
+    /// every removed id when removal happened outside JavaScript.
+    pub fn forget_node(&self, id: u64, host: &mut dyn Host) -> Result<(), JsError> {
+        self.run(host, |ctx| {
+            let f: rquickjs::Function = ctx.globals().get("__tektoForgetNode")?;
+            f.call((id,))
+        })
+    }
+
+    /// Dispose all registrations while the host is available. Call before
+    /// retiring a session; dropping it alone cannot run host-backed cleanup.
+    pub fn dispose(&self, host: &mut dyn Host) -> Result<(), JsError> {
+        self.run(host, |ctx| {
+            let f: rquickjs::Function = ctx.globals().get("__tektoDisposeSession")?;
+            f.call(())
+        })
+    }
+
+    fn run<T>(
+        &self,
+        host: &mut dyn Host,
+        f: impl for<'js> FnOnce(Ctx<'js>) -> rquickjs::Result<T>,
+    ) -> Result<T, JsError> {
+        let occupied = HOST.with(|slot| slot.borrow().is_some());
+        if occupied {
+            return Err(JsError::Message("reentrant JS host call".into()));
+        }
+        let _guard = unsafe { attach_host(host) };
+        self.context.with(|ctx| match f(ctx.clone()) {
+            Ok(value) => Ok(value),
+            Err(rquickjs::Error::Exception) => {
+                let exception = ctx.catch();
+                let detail = exception
+                    .as_exception()
+                    .map(|e| format!("{}", e))
+                    .unwrap_or_else(|| format!("{exception:?}"));
+                Err(JsError::Message(format!("QuickJS exception: {detail}")))
+            }
+            Err(err) => Err(JsError::Message(format_quickjs_error(&err))),
+        })
+    }
+}
+
+pub fn eval_script(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
+    JsSession::new()?.eval(source, host)
 }
 
 fn format_quickjs_error(err: &rquickjs::Error) -> String {

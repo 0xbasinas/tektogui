@@ -127,6 +127,8 @@ test("component schema lists every prop JSX forwards on each kind", () => {
   assert.ok(button.some((o) => o.op === "setProp" && o.key === "width" && o.value === "200"));
   assert.ok(button.some((o) => o.op === "setProp" && o.key === "height" && o.value === "40"));
   const buttonSpec = componentSchema.components.find((c) => c.name === "button");
+  assert.deepEqual(buttonSpec.events.map((event) => event.name), ["click"]);
+  assert.ok(buttonSpec.jsxProps.some((prop) => prop.name === "onClick"));
   for (const key of ["width", "height"]) {
     assert.ok(
       buttonSpec.props.some((p) => p.name === key),
@@ -149,4 +151,38 @@ test("empty text_field keeps its label out of the value", () => {
     { op: "create", kind: "text_field" },
     { op: "setProp", id: 1, key: "name", value: "Title" },
   ]);
+});
+
+test("reactive text and button callbacks require a retained host", async () => {
+  const { createSignal, createEffect } = await import("../core/src/index.js");
+  const [count, setCount] = createSignal(0);
+  const callbacks = new Map(), disposers = new Map(), text = new Map();
+  let next = 1;
+  const host = { create: () => next++, setProp() {}, append() {},
+    setText: (id, value) => text.set(id, value),
+    onClick: (id, fn) => callbacks.set(id, fn),
+    onDispose: (id, fn) => disposers.set(id, fn), remove() {} };
+  mount(jsxs("group", { children: [jsx("text", { text: () => count() }),
+    jsx("button", { onClick: () => setCount((n) => n + 1), children: "+" })] }), host, { createEffect });
+  assert.equal(text.get(2), "0");
+  callbacks.get(3)(); callbacks.get(3)();
+  assert.equal(text.get(2), "2");
+  disposers.get(2)(); callbacks.get(3)();
+  assert.equal(text.get(2), "2");
+  assert.throws(() => renderToOps(jsx("button", { onClick() {} })), /retained QuickJS/);
+  assert.throws(() => renderToOps(jsx("text", { text: count })), /retained QuickJS/);
+});
+
+test("failed mount rolls back created nodes and reactive bindings", async () => {
+  const { createSignal, createEffect } = await import("../core/src/index.js");
+  const [value, setValue] = createSignal(0);
+  const cleanups = new Map(), removed = [], writes = [];
+  let id = 0;
+  const host = { create: () => ++id, setText: (id, text) => writes.push([id, text]),
+    setProp() {}, append() {}, onDispose: (id, fn) => cleanups.set(id, fn),
+    remove(id) { removed.push(id); cleanups.get(id)?.(); } };
+  assert.throws(() => mount(jsxs("group", { children: [jsx("text", { text: value }), jsx("bad", {})] }), host, { createEffect }), /unknown element/);
+  assert.deepEqual(removed, [2, 1]);
+  setValue(1);
+  assert.deepEqual(writes, [[2, "0"]]);
 });

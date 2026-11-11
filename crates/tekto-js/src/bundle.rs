@@ -72,12 +72,13 @@ pub fn make_wrapper(entry: &Path) -> String {
     let path = entry.display().to_string().replace('\\', "/");
     format!(
         r#"import {{ mount }} from "@tektogui/jsx-runtime";
+import {{ createEffect }} from "@tektogui/core";
 import * as entry from "{path}";
 const App = entry.App || entry.default;
 if (typeof App !== "function") {{
   throw new Error("TSX entry must export a function App (named or default)");
 }}
-mount(App(), globalThis.tekto);
+mount(App(), globalThis.tekto, {{ createEffect }});
 "#
     )
 }
