@@ -57,6 +57,12 @@ enum Command {
     Inspect,
     /// Click a node by id (talks to the dev server).
     Click { id: u64 },
+    /// Scroll a container by logical pixels.
+    Scroll {
+        id: u64,
+        #[arg(long, allow_hyphen_values = true, value_parser = parse_delta)]
+        by: f32,
+    },
     /// Press Tab, Shift+Tab, Enter, Space, or Backspace.
     Key {
         #[arg(value_parser = parse_key_name)]
@@ -89,6 +95,15 @@ enum Command {
     Restore { index: u64 },
     /// Speak the Model Context Protocol on stdio (proxies to the dev server).
     Mcp,
+}
+
+fn parse_delta(value: &str) -> Result<f32, String> {
+    let delta: f32 = value.parse().map_err(|_| "invalid delta".to_string())?;
+    if delta.is_finite() {
+        Ok(delta)
+    } else {
+        Err("delta must be finite".into())
+    }
 }
 
 fn parse_key_name(name: &str) -> Result<String, String> {
@@ -223,6 +238,14 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             println!("{}", String::from_utf8_lossy(&body));
         }
+        Command::Scroll { id, by } => {
+            let ep = read_endpoint()?;
+            let (_, body) = http_post(
+                &format!("{}/scroll", ep.base_url()),
+                &serde_json::json!({"id": id, "delta": by}),
+            )?;
+            println!("{}", String::from_utf8_lossy(&body));
+        }
         Command::Key { name } => {
             let ep = read_endpoint()?;
             let (_, body) = http_post(
@@ -282,6 +305,20 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_scroll_command() {
+        assert!(
+            matches!(Cli::try_parse_from(["tekto", "scroll", "2", "--by", "-12.5"]).unwrap().command, Command::Scroll { id: 2, by } if by == -12.5)
+        );
+        for args in [
+            vec!["tekto", "scroll", "2"],
+            vec!["tekto", "scroll", "2", "--by", "NaN"],
+            vec!["tekto", "scroll", "2", "--by", "inf"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
 
     #[test]
     fn parses_key_command() {

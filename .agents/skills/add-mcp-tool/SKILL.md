@@ -1,6 +1,6 @@
 ---
 name: add-mcp-tool
-description: Add or change a Tekto dev-server HTTP endpoint and the matching MCP tool (and CLI if useful). Use when agents need a new inspect or live-edit action, or when fixing ui.tree, ui.patch, ui.click, ui.key, ui.type, ui.screenshot, app.state, app.logs, or app.components.
+description: Add or change a Tekto dev-server HTTP endpoint and the matching MCP tool (and CLI if useful). Use when agents need a new inspect or live-edit action, or when fixing ui.tree, ui.patch, ui.click, ui.key, ui.scroll, ui.type, ui.screenshot, app.state, app.logs, or app.components.
 ---
 
 # Add an MCP tool
@@ -26,6 +26,7 @@ The stdio MCP server (`tekto mcp`) is a proxy for the `ui.*` and other `app.*` t
 | `ui.screenshot` | `GET /screenshot` | `tekto screenshot [out]` |
 | `ui.click` | `POST /click` `{"id":N}` | `tekto click N` (sets focus and `last_click`; also logged). Retained desktop JS button callbacks run; callback errors are returned and logged. Each callback has a fixed one-second QuickJS budget (no setting); a runaway loop is interrupted and returns a budget error. Native Rust and lock waits are not preemptible, and changes made before an interrupt are kept |
 | `ui.key` | `POST /key` `{"name":"Tab"}` | `tekto key <name>`; names: `Tab`, `Shift+Tab`, `Enter`, `Space`, `Backspace` |
+| `ui.scroll` | `POST /scroll` `{"id":N,"delta":N}` | `tekto scroll ID --by N`; returns the clamped `offset` |
 | `ui.type` | `POST /type` `{"id":N,"text":"…"}` inserts plain characters into a text field at the caret and focuses it. Not an IME; use `ui.key` for Backspace | none |
 | `ui.patch` | `POST /patch` | `tekto patch ID [--text] [--fill] [--color] [--font-size] [--padding] [--gap]` (positional id; HTTP/MCP also accept `name` and `fontSize`). Response is `{ ok, node, writeback }`. |
 | `app.state` | `GET /state` | none |
