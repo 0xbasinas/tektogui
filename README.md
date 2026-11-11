@@ -55,7 +55,7 @@ JavaScript packages (signals and the JSX runtime) work with pnpm, npm, or bun:
 ```bash
 npm test
 # or: pnpm test
-# or: bun test
+# or: bun run test   (plain `bun test` finds no *.test.js files and fails; the tests are Node `node --test` files)
 ```
 
 ## Workspace

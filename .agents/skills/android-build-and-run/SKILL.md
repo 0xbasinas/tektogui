@@ -66,12 +66,11 @@ cargo apk2 build -p notes-android
 # or only the AVD ABI:
 cargo apk2 build -p notes-android --target x86_64-linux-android
 
-# Same thing through the CLI (finds the notes.apk under target/):
+# Same thing through the CLI (looks for notes.apk under the Cargo target dir, `CARGO_TARGET_DIR` if set):
 cargo run -p tekto-cli -- build --target android
 ```
 
-The APK is typically at
-`target/<triple>/debug/apk/notes.apk` (or `.../release/apk/` with `--release`).
+Observed: the recorded cargo-apk2 audit log (`/workspace/audit-logs/apk.log`) shows a debug APK at `<target dir>/debug/apk/notes.apk`, with no `<triple>` folder, and only an x86_64 library inside. The log does not record the command line, so it does not show whether `--target` was passed. Not verified: the path for a `--target` build, any `--release` path (`.../release/apk/` is a guess), and the `adb install` examples below for those builds. Check the path cargo-apk2 prints before you install; if `CARGO_TARGET_DIR` is set, `target` in examples means that directory. The emulator was not started for this doc fix.
 Package id: `com.tektogui.notes`. Activity: `android.app.NativeActivity`.
 The activity *must* declare `android.app.lib_name` = `notes_android` (cargo-apk2 does not insert this unless the key is already in the manifest; without it NativeActivity looks for `libmain.so` and crashes).
 
@@ -86,7 +85,7 @@ cargo check -p notes-android --target aarch64-linux-android
 
 Do not put this in PR CI. Do not start the emulator if another heavy build is running, and do not run heavy `cargo test` / compiles in parallel with it. This machine often has `/dev/kvm` but no permission, so you **must** pass `-accel off` (TCG, software). Be patient: a cold boot can take several minutes. `-gpu swiftshader_indirect` is optional.
 
-Build the APK first (see Package), with the emulator stopped. Reuse `target/x86_64-linux-android/debug/apk/notes.apk` when it is already current. `tekto dev --android` rebuilds the APK; do not run it while the emulator is up.
+Build the APK first (see Package), with the emulator stopped. Reuse the debug `notes.apk` (path printed by cargo-apk2; under `$CARGO_TARGET_DIR` if set) when it is already current. `tekto dev --android` rebuilds the APK; do not run it while the emulator is up.
 
 ```bash
 source ~/.android-env.sh
@@ -99,7 +98,10 @@ adb shell getprop sys.boot_completed
 Then install and launch the APK you already built:
 
 ```bash
-adb install -r target/x86_64-linux-android/debug/apk/notes.apk
+# Path below is the debug path seen in one log (see "APK path" note). Use the path cargo-apk2 printed
+# for your build; with CARGO_TARGET_DIR set, it is under that directory, not ./target.
+APK="${CARGO_TARGET_DIR:-target}/debug/apk/notes.apk"
+adb install -r "$APK"
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 adb forward tcp:8474 tcp:8474
 ```
@@ -193,7 +195,10 @@ emulator -avd beddcode30 -no-window -memory 2048 -accel off &
 adb wait-for-device
 until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done
 
-adb install -r target/x86_64-linux-android/debug/apk/notes.apk
+# Path below is the debug path seen in one log (see "APK path" note). Use the path cargo-apk2 printed
+# for your build; with CARGO_TARGET_DIR set, it is under that directory, not ./target.
+APK="${CARGO_TARGET_DIR:-target}/debug/apk/notes.apk"
+adb install -r "$APK"
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 sleep 3
 mkdir -p /workspace/tektogui-shots

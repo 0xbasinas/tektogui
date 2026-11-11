@@ -41,7 +41,9 @@ npm run test:wasm:required        # or: pnpm run test:wasm:required / bun run te
 TEKTO_REQUIRE_WASM=1 node --test packages/wasm/test.js   # direct Node run, module test only
 ```
 
-The wasm file is found in this order: `TEKTO_WASM`, then `$CARGO_TARGET_DIR/wasm32-unknown-unknown/debug/tekto_wasm.wasm`, then `target/...`. A relative `CARGO_TARGET_DIR` resolves from the repo root.
+The wasm path is chosen from the environment only (`packages/wasm/src/wasm-path.js`): `TEKTO_WASM` if set, otherwise `<CARGO_TARGET_DIR or target>/wasm32-unknown-unknown/debug/tekto_wasm.wasm`. A relative `CARGO_TARGET_DIR` resolves from the repo root. The chosen file is not checked for existence, and there is no fallback to the default: a stale `TEKTO_WASM` or `CARGO_TARGET_DIR` means a missing file (a skip in ordinary mode, a failure in required mode). Unset them to use the default.
+
+`TEKTO_WASM=/abs/path/tekto_wasm.wasm` (not run here) points the tests (and `node packages/wasm/dev.js`) at a specific wasm file, for example one built into a private `CARGO_TARGET_DIR`. Required mode also needs `esbuild` on `PATH` (or `ESBUILD`).
 
 These are Node tests. They do not show that the wasm core or the host glue works in a browser. Browser runtime compatibility is not checked by CI.
 
@@ -67,7 +69,7 @@ Without that module, `packages/wasm/gpu.html` (open with `?gpu=1`) still loads t
 node packages/wasm/dev.js
 ```
 
-That command builds `tekto-wasm` if the wasm file is missing (lookup: `TEKTO_WASM`, then `$CARGO_TARGET_DIR/wasm32-unknown-unknown/debug/tekto_wasm.wasm`, then `target/...`), bundles `examples/notes/src/app.tsx`, and serves `http://127.0.0.1:8080/`. Saving the TSX rebuilds with esbuild and reloads the page. The browser JS engine runs the app. QuickJS stays off.
+That command builds `tekto-wasm` if the wasm file is missing (the path is `TEKTO_WASM`, else the `CARGO_TARGET_DIR` or `target` path above; the build writes to the Cargo target dir, so a `TEKTO_WASM` that points elsewhere stays missing and the server will not find it), bundles `examples/notes/src/app.tsx`, and serves `http://127.0.0.1:8080/`. Saving the TSX rebuilds with esbuild and reloads the page. The browser JS engine runs the app. QuickJS stays off.
 
 Another entry: `node packages/wasm/dev.js path/to/app.tsx`. `PORT` picks the listen port. `TEKTO_WASM` picks the wasm file.
 
@@ -77,7 +79,8 @@ Live `ui.patch` uses the same JSON as desktop `POST /patch` (`id` plus `text`, `
 
 ```bash
 cargo build -p tekto-wasm --target wasm32-unknown-unknown
-cp "$CARGO_TARGET_DIR/wasm32-unknown-unknown/debug/tekto_wasm.wasm" packages/wasm/tekto_wasm.wasm
+# run from the repo root; with CARGO_TARGET_DIR unset the target dir is ./target
+cp "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/debug/tekto_wasm.wasm" packages/wasm/tekto_wasm.wasm
 # from packages/wasm: python3 -m http.server 8080
 # open http://127.0.0.1:8080/notes.html   (Notes at 640×400, resize buttons)
 # open http://127.0.0.1:8080/gpu.html     (CPU blit; ?gpu=1 tries WebGPU, then the blit)

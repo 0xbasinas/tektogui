@@ -50,7 +50,7 @@ cargo run -p tekto-cli -- patch 4 --text "Hello from an agent"
 
 ## Start a new app
 
-From the tektogui repo (or any folder, if `TEKTO_ROOT` points at it):
+From the tektogui checkout (run it with the checkout as your current folder; `cargo run -p` needs the workspace manifest, and `TEKTO_ROOT` does not change that). To scaffold from another folder, see the built-binary example below:
 
 ```bash
 cargo run -p tekto-cli -- new hello
@@ -60,7 +60,29 @@ cargo run -- --headless --out hello.png
 
 That writes a compiling Rust app, a `src/app.tsx` sketch, and a README. The app depends on this checkout by path, so you only need a Rust toolchain.
 
-`npm create tektogui hello` (or `npx create-tektogui hello`) does the same thing by calling `tekto new`.
+`create-tektogui` is not a standalone installer. It is a thin wrapper that finds the checkout from where the package itself is installed, not from your current folder. It exits with an error if `crates/tekto-cli` is not next to the package. It then runs `cargo run -p tekto-cli -- new <name>` with `TEKTO_ROOT` set to that checkout, in your current folder, so that folder must be inside the checkout. The name must be one directory name, not a path.
+
+Supported: run the script from the checkout, with cwd inside it:
+
+```bash
+node packages/create-tektogui/src/index.js hello
+```
+
+Not supported: `npm create tektogui` or `npx create-tektogui` from the registry. The package ships only `src`, so a registry copy (for example in the npm cache) has no checkout next to it, even if your cwd is inside one. This was not tried against a registry, and the package is not shown to be published.
+
+To scaffold somewhere else, build the CLI once and call it with `TEKTO_ROOT`:
+
+```bash
+cd /path/to/tektogui
+cargo build -p tekto-cli
+# Resolve the binary path here, before the next cd. A relative CARGO_TARGET_DIR is relative to this folder.
+TEKTO_BIN="$(realpath -m "${CARGO_TARGET_DIR:-target}")/debug/tekto"
+TEKTO_ROOT="$PWD"
+cd /some/other/folder
+TEKTO_ROOT="$TEKTO_ROOT" "$TEKTO_BIN" new hello
+```
+
+This assumes the default Cargo target layout. If you set `build.target-dir` in a Cargo config file instead of `CARGO_TARGET_DIR`, use the path Cargo uses for that setting. This was not run here.
 
 ## Write a tiny Rust app
 

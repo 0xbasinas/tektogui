@@ -60,13 +60,14 @@ curl -s -X POST http://127.0.0.1:PORT/patch \
 ## HTTP and MCP
 
 - `GET /inspector` — HTML page (see Browser inspector). `GET /health` returns `{"ok":true}`.
-- `GET /tree`, `GET /tree.txt`, `GET /accesskit`, `GET /screenshot`, `GET /state`, `GET /logs`
+- `GET /tree`, `GET /tree.txt`, `GET /accesskit`, `GET /screenshot`, `GET /state`, `GET /states`, `GET /logs`, `GET /components`
+- `POST /states/restore` `{"index":N}` jumps an opted-in store to a recorded frame from `GET /states`
 - `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb","fontSize":20,"padding":24,"gap":20}` — response is `{ "ok": true, "node": { ... }, "writeback": { ... } }` or an error
 - `POST /click` `{"id":1}`
 - `POST /type` `{"id":N,"text":"typed"}` inserts plain characters into a `text_field` (errors if the node is not one). Backspace is a focused desktop key, not this route. No IME.
 - `POST /reload` raw JS bundle, or `{"js":"…"}`
 
-Stdio MCP (`cargo run -p tekto-cli -- mcp`) proxies those to the dev server. Tools: `ui.tree`, `ui.accesskit`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.logs`.
+Stdio MCP (`cargo run -p tekto-cli -- mcp`) proxies these tools to the running dev server: `ui.tree`, `ui.accesskit`, `ui.screenshot`, `ui.click`, `ui.type`, `ui.patch`, `app.state`, `app.states`, `app.restore`, `app.logs`. `app.components` is the exception: the MCP server answers it locally from the bundled `components.json` and needs no running app. `GET /components` is the dev-server route for the same file, so it needs a running dev server.
 
 Live patches change the running tree immediately (no reload). If the old text or a simple style literal is unique in the app project, the same edit is written back to source; the response includes a `writeback` field (`status`, `files`, `skipped`). If the match is ambiguous, or the source uses a named constant, the runtime change stays and `writeback` explains why. Never writes outside the app project (`TEKTO_APP_ROOT`, or the folder of `tekto dev --js`). Hot reload of TS is not a substitute for `ui.patch`.
 
