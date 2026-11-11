@@ -69,3 +69,5 @@ cargo clippy -p tekto-mcp -p tekto-cli --all-targets -- -D warnings
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"ping"}' | cargo run -q -p tekto-cli -- mcp
 # Manual: start `tekto dev --headless`, then call the CLI or curl the new route.
 ```
+
+Desktop pointer clicks place the caret at the nearest painted character. Agent `ui.click` and `Tree::click(id)` place it at the end. The WASM/browser `click_at` path is not covered by this change.
