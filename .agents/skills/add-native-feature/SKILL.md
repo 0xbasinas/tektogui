@@ -125,7 +125,7 @@ A Windows live check showed the icon, received a popup-menu selection, and hid t
 
 ## Windows notifications
 
-`Notifications::show` on Windows uses the Vista-and-later balloon API `Shell_NotifyIconW` (`shell32`), plus `CreateWindowExW`, `DestroyWindow`, and `LoadIconW` (`user32`). No extra crate. The call adds a temporary notification-area icon (`NIM_ADD`, `NIF_ICON | NIF_INFO`, `NIIF_INFO`, `IDI_APPLICATION`) on a hidden `STATIC` window, waits 30 seconds on that thread, then deletes the icon (`NIM_DELETE`) and destroys the window. Success means the shell accepted `NIM_ADD`. The shell can still hide or delay the balloon. A Windows live call returned success, but the user did not see a notification; see the Windows handoff report.
+`Notifications::show` on Windows uses the Vista-and-later balloon API `Shell_NotifyIconW` (`shell32`), plus `CreateWindowExW`, `DestroyWindow`, and `LoadIconW` (`user32`). No extra crate. The call adds a temporary notification-area icon (`NIM_ADD`, `NIF_ICON | NIF_INFO`, `NIIF_INFO`, `IDI_APPLICATION`) on a hidden `STATIC` window, waits 30 seconds on that thread, then deletes the icon (`NIM_DELETE`) and destroys the window. Success means the shell accepted `NIM_ADD`. The shell can still hide or delay the balloon. A Windows live check displayed the title and body with Do not disturb off. With it on, the shell accepted the call but no banner appeared; see the Windows handoff report.
 
 Title must fit in 63 UTF-16 units and body in 255 (the API buffers are 64 and 256, including the NUL). A NUL or a longer string is `NativeError::Message`. If the window, icon, or `Shell_NotifyIconW` call fails, the error is `NativeError::Unavailable` with reason `Windows shell notification area is unavailable`. Compile-check only:
 
@@ -133,7 +133,7 @@ Title must fit in 63 UTF-16 units and body in 255 (the API buffers are 64 and 25
 cargo check --target x86_64-pc-windows-gnu -p tekto-native
 ```
 
-That command does not link or run on Windows. Icon lifetime, session failures, and whether a balloon is visible still need a Windows machine. Issue #37 stays open until that runtime check exists.
+That command does not link or run on Windows. A live banner was confirmed with Do not disturb off; delivery while it is on depends on Windows settings and has not been validated.
 
 ## Android notifications
 
