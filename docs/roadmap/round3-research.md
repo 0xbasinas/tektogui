@@ -162,15 +162,9 @@ These three work well together, and can share the `tekto-test` crate above.
 
 ### Quiet design tokens
 
-- **Name:** One small token set, not a theme engine.
-- **What it does:** Put today's quiet defaults (surface, ink, border, focus, spacing, font sizes) in one typed structure, with the same values for Rust and JSX, and optional app-level override. A later slice can honour a host text scale (for example 150%).
-- **Why:** MAUI, Uno, and Flutter expose semantic colours and text scale. Shared tokens keep new widgets consistent without a visual redesign.
-- **Priority:** medium. **Size:** S (text scale may make it M).
-- **Crates it touches:** `tekto-widgets`, `tekto-text`, `tekto-js`, and maybe `tekto-platform` for host scale.
-- **Design notes:** Default appearance must not change. No dark-mode engine, no CSS cascade, no theme editor, no automatic OS high-contrast on every platform in the first slice.
-- **DX fit:** Keeps the plain look. Rust and TSX stay in sync. No new deps.
-- **Acceptance:** Existing snapshots stay the same at default tokens. An override is applied consistently. If text scale is included, 100% and 150% are tested, including focus and disabled contrast.
-- **Licence:** Own MIT code. The Design Tokens Community Group spec is a reference, not a runtime dependency.
+**Implemented:** `tekto-tree` has a `Tokens` set for `page`, `ink`, `banner`, `onBanner`, `field`, `border`, `focus`, `gap`, `padding`, `bodySize`, and `titleSize`. `Tokens::default()` reproduces the palette and spacing the widgets already used, so the blessed Notes PNG and every widget snapshot are unchanged. New nodes read the tree's tokens in `Tree::add`, so widgets no longer re-apply hard-coded defaults; `window`, `banner`, `title_on_banner`, and `list_item` read the same set, and the renderer falls back to `tree.tokens().ink` / `page` / `focus` instead of constants. An app overrides with `Tree::set_tokens` (Rust) or the `setTokens` HostOp: `tokensOp({ page, gap, ... })` in `@tektogui/core` and `tekto.setTokens(json)` in QuickJS. `TokenPatch` takes hex colours and finite sizes, accepts snake-case aliases, and rejects unknown fields or bad values without changing the set. Tests cover the default values, patch parsing and rejection, the op applying to later nodes, and a painted window using an overridden `page`.
+
+**Remaining:** Tokens affect nodes created afterwards; there is no live re-theme of an existing tree, and generated apps do not ship a token file. Text scale from the host (150%) and high-contrast are not wired. `Color` stays sRGB; no colour-space conversion.
 
 ### Keyed lazy lists
 

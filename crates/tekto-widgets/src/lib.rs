@@ -76,7 +76,6 @@ pub fn window(
     let id = tree.add(NodeKind::Window, None)?;
     if let Some(n) = tree.get_mut(id) {
         n.name = Some(title.into());
-        n.apply_widget_defaults();
         n.layout.width = width;
         n.layout.height = height;
     }
@@ -95,9 +94,10 @@ pub fn banner(
     height: f32,
 ) -> Result<NodeId, WidgetError> {
     let id = tree.add(NodeKind::Rect, Some(parent))?;
+    let tokens = tree.tokens();
     if let Some(n) = tree.get_mut(id) {
         n.name = Some("banner".into());
-        n.fill = Some(Color::BANNER);
+        n.fill = Some(tokens.banner);
         n.layout = LayoutStyle {
             width,
             height,
@@ -138,7 +138,6 @@ pub fn button(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId, Wi
     if let Some(n) = tree.get_mut(id) {
         n.name = Some(label.into());
         n.text = Some(label.into());
-        n.apply_widget_defaults();
     }
     Ok(id)
 }
@@ -155,7 +154,6 @@ pub fn checkbox(
         n.name = Some(label.into());
         n.text = Some(label.into());
         n.checked = checked;
-        n.apply_widget_defaults();
     }
     Ok(id)
 }
@@ -172,7 +170,6 @@ pub fn switch(
     node.name = Some(label.into());
     node.text = Some(label.into());
     node.checked = checked;
-    node.apply_widget_defaults();
     Ok(id)
 }
 
@@ -192,7 +189,6 @@ pub fn progress(
     let node = tree.get_mut(id).expect("new progress");
     node.name = Some(label.into());
     node.progress = value.clamp(0.0, 1.0);
-    node.apply_widget_defaults();
     Ok(id)
 }
 
@@ -212,7 +208,6 @@ pub fn slider(
     let node = tree.get_mut(id).expect("new slider");
     node.name = Some(label.into());
     node.progress = value.clamp(0.0, 1.0);
-    node.apply_widget_defaults();
     Ok(id)
 }
 
@@ -242,7 +237,6 @@ pub fn radio(
     let node = tree.get_mut(id).expect("new radio");
     node.name = Some(label.into());
     node.text = Some(label.into());
-    node.apply_widget_defaults();
     if checked {
         tree.patch(
             id,
@@ -283,7 +277,6 @@ pub fn tab(
     let node = tree.get_mut(id).expect("new tab");
     node.name = Some(label.into());
     node.text = Some(label.into());
-    node.apply_widget_defaults();
     if selected {
         tree.patch(
             id,
@@ -331,7 +324,6 @@ pub fn dialog(tree: &mut Tree, label: &str) -> Result<NodeId, WidgetError> {
     let id = tree.add(NodeKind::Dialog, None)?;
     let node = tree.get_mut(id).expect("new dialog");
     node.name = Some(label.into());
-    node.apply_widget_defaults();
     Ok(id)
 }
 
@@ -350,7 +342,6 @@ pub fn menu(tree: &mut Tree, label: &str) -> Result<NodeId, WidgetError> {
     let id = tree.add(NodeKind::Menu, None)?;
     let node = tree.get_mut(id).expect("new menu");
     node.name = Some(label.into());
-    node.apply_widget_defaults();
     Ok(id)
 }
 
@@ -365,7 +356,6 @@ pub fn menu_item(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId,
     let node = tree.get_mut(id).expect("new menu item");
     node.name = Some(label.into());
     node.text = Some(label.into());
-    node.apply_widget_defaults();
     Ok(id)
 }
 
@@ -379,7 +369,6 @@ pub fn select(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId, Wi
     let id = tree.add(NodeKind::Select, Some(parent))?;
     let node = tree.get_mut(id).expect("new select");
     node.name = Some(label.into());
-    node.apply_widget_defaults();
     Ok(id)
 }
 
@@ -399,7 +388,6 @@ pub fn select_option(
     let node = tree.get_mut(id).expect("new option");
     node.name = Some(label.into());
     node.text = Some(label.into());
-    node.apply_widget_defaults();
     if checked {
         tree.select_option(select, id)?;
     }
@@ -421,7 +409,6 @@ pub fn text_field(
     if let Some(n) = tree.get_mut(id) {
         n.name = Some(label.into());
         n.text = Some(value.into());
-        n.apply_widget_defaults();
         n.caret = value.chars().count();
     }
     Ok(id)
@@ -565,11 +552,12 @@ pub fn list_item(
     height: f32,
 ) -> Result<NodeId, WidgetError> {
     let id = tree.add(NodeKind::ListItem, Some(list))?;
+    let tokens = tree.tokens();
     if let Some(n) = tree.get_mut(id) {
         n.name = Some(label.into());
         n.text = Some(label.into());
-        n.color = Some(Color::INK);
-        n.font_size = BODY_SIZE;
+        n.color = Some(tokens.ink);
+        n.font_size = tokens.body_size;
         n.layout = LayoutStyle {
             width: f32::NAN,
             height,
@@ -684,11 +672,12 @@ pub fn title_on_banner(
     _width: f32,
 ) -> Result<NodeId, WidgetError> {
     let id = tree.add(NodeKind::Text, Some(banner))?;
+    let tokens = tree.tokens();
     if let Some(n) = tree.get_mut(id) {
         n.text = Some(content.into());
         n.name = Some(content.into());
-        n.color = Some(Color::ON_BANNER);
-        n.font_size = TITLE_SIZE;
+        n.color = Some(tokens.on_banner);
+        n.font_size = tokens.title_size;
         // Let Taffy measure the line box; the banner pads and centers it.
         n.layout = LayoutStyle::default();
     }
@@ -704,7 +693,14 @@ pub fn notes_tree(width: f32, height: f32) -> Result<Tree, WidgetError> {
     // to shrink it to the new content box.
     let b = banner(&mut tree, root, f32::NAN, BANNER_HEIGHT)?;
     title_on_banner(&mut tree, b, "Notes", f32::NAN)?;
-    text(&mut tree, root, "Hello from Tekto", BODY_SIZE, Color::INK)?;
+    let tokens = tree.tokens();
+    text(
+        &mut tree,
+        root,
+        "Hello from Tekto",
+        tokens.body_size,
+        tokens.ink,
+    )?;
     Ok(tree)
 }
 

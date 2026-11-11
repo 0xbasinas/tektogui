@@ -230,15 +230,7 @@ fn paint_node_opacity<R: Renderer>(
         )
     {
         let b = node.bounds;
-        let color = with_opacity(
-            Color {
-                r: 42,
-                g: 100,
-                b: 190,
-                a: 255,
-            },
-            opacity,
-        );
+        let color = with_opacity(tree.tokens().focus, opacity);
         let thickness = 2.0_f32.min(b.width / 2.0).min(b.height / 2.0).max(0.0);
         for rect in [
             Rect::new(b.x, b.y, b.width, thickness),
@@ -252,11 +244,11 @@ fn paint_node_opacity<R: Renderer>(
     if node.kind == NodeKind::Checkbox {
         let x = node.bounds.x + node.layout.padding;
         let y = node.bounds.y + (node.bounds.height - 18.0) / 2.0;
-        let ink = with_opacity(node.color.unwrap_or(Color::INK), opacity);
+        let ink = with_opacity(node.color.unwrap_or(tree.tokens().ink), opacity);
         renderer.fill_rect(Rect::new(x, y, 18.0, 18.0), ink);
         renderer.fill_rect(
             Rect::new(x + 2.0, y + 2.0, 14.0, 14.0),
-            with_opacity(Color::PAGE, opacity),
+            with_opacity(tree.tokens().page, opacity),
         );
         if node.checked {
             renderer.fill_rect(Rect::new(x + 5.0, y + 5.0, 8.0, 8.0), ink);
@@ -271,18 +263,18 @@ fn paint_node_opacity<R: Renderer>(
                 b.width,
                 2.0_f32.min(b.height),
             ),
-            with_opacity(node.color.unwrap_or(Color::INK), opacity),
+            with_opacity(node.color.unwrap_or(tree.tokens().ink), opacity),
         );
     }
     if node.kind == NodeKind::Radio {
         let x = node.bounds.x + node.layout.padding;
         let y = node.bounds.y + (node.bounds.height - 18.0) / 2.0;
-        let ink = with_opacity(node.color.unwrap_or(Color::INK), opacity);
+        let ink = with_opacity(node.color.unwrap_or(tree.tokens().ink), opacity);
         renderer.fill_rrect(Rect::new(x, y, 18.0, 18.0), 9.0, ink);
         renderer.fill_rrect(
             Rect::new(x + 2.0, y + 2.0, 14.0, 14.0),
             7.0,
-            with_opacity(Color::PAGE, opacity),
+            with_opacity(tree.tokens().page, opacity),
         );
         if node.checked {
             renderer.fill_rrect(Rect::new(x + 5.0, y + 5.0, 8.0, 8.0), 4.0, ink);
@@ -294,7 +286,7 @@ fn paint_node_opacity<R: Renderer>(
         renderer.fill_rrect(
             Rect::new(x - 8.0, b.y + (b.height - 16.0) / 2.0, 16.0, 16.0),
             8.0,
-            with_opacity(node.color.unwrap_or(Color::INK), opacity),
+            with_opacity(node.color.unwrap_or(tree.tokens().ink), opacity),
         );
     }
     if node.kind == NodeKind::Progress && node.progress > 0.0 {
@@ -303,13 +295,13 @@ fn paint_node_opacity<R: Renderer>(
         renderer.fill_rrect(
             Rect::new(b.x, b.y, width, b.height),
             node.radius.min(width / 2.0),
-            with_opacity(node.color.unwrap_or(Color::INK), opacity),
+            with_opacity(node.color.unwrap_or(tree.tokens().ink), opacity),
         );
     }
     if node.kind == NodeKind::Switch {
         let x = node.bounds.x + node.layout.padding;
         let y = node.bounds.y + (node.bounds.height - 18.0) / 2.0;
-        let ink = with_opacity(node.color.unwrap_or(Color::INK), opacity);
+        let ink = with_opacity(node.color.unwrap_or(tree.tokens().ink), opacity);
         renderer.fill_rrect(Rect::new(x, y, 32.0, 18.0), 9.0, ink);
         renderer.fill_rrect(
             Rect::new(
@@ -319,7 +311,7 @@ fn paint_node_opacity<R: Renderer>(
                 14.0,
             ),
             7.0,
-            with_opacity(Color::PAGE, opacity),
+            with_opacity(tree.tokens().page, opacity),
         );
     }
     if node.kind == NodeKind::TextField && tree.focus == Some(id) {
@@ -391,7 +383,7 @@ fn paint_node_opacity<R: Renderer>(
     };
     if let Some(text) = text_to_draw {
         let color = with_opacity(
-            node.color.unwrap_or(Color::INK),
+            node.color.unwrap_or(tree.tokens().ink),
             opacity * if placeholder { 0.55 } else { 1.0 },
         );
         let inset = if matches!(
@@ -467,7 +459,7 @@ fn paint_node_opacity<R: Renderer>(
                         range.width,
                         1.0,
                     ),
-                    with_opacity(node.color.unwrap_or(Color::INK), opacity),
+                    with_opacity(node.color.unwrap_or(tree.tokens().ink), opacity),
                 );
             }
             renderer.pop_clip();
@@ -483,7 +475,7 @@ fn paint_node_opacity<R: Renderer>(
                     (end - start).max(0.0),
                     1.0,
                 ),
-                with_opacity(node.color.unwrap_or(Color::INK), opacity),
+                with_opacity(node.color.unwrap_or(tree.tokens().ink), opacity),
             );
             renderer.pop_clip();
         }
@@ -514,7 +506,7 @@ fn paint_node_opacity<R: Renderer>(
                 1.0,
                 h,
             ),
-            with_opacity(node.color.unwrap_or(Color::INK), opacity),
+            with_opacity(node.color.unwrap_or(tree.tokens().ink), opacity),
         );
         if node.multiline {
             renderer.pop_clip();
@@ -627,6 +619,25 @@ pub fn render_tree_png_scaled(
 mod tests {
     use super::*;
     use tekto_tree::{Color, Rect};
+
+    #[test]
+    fn tokens_drive_new_nodes_and_the_ink_fallback() {
+        use tekto_tree::{NodeKind, Tokens, Tree};
+        let mut tree = Tree::new();
+        let tokens = Tokens {
+            page: Color::rgb(10, 20, 30),
+            ink: Color::rgb(200, 10, 10),
+            ..Tokens::default()
+        };
+        tree.set_tokens(tokens);
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        tree.get_mut(root).unwrap().bounds = Rect::new(0.0, 0.0, 20.0, 20.0);
+        assert_eq!(tree.get(root).unwrap().fill, Some(Color::rgb(10, 20, 30)));
+        let mut renderer = CpuRenderer::new(20, 20).unwrap();
+        paint_tree(&mut renderer, &tree, Color::PAGE);
+        let pixels = renderer.rgba8().unwrap();
+        assert_eq!(&pixels[0..4], &[10, 20, 30, 255]);
+    }
 
     #[test]
     fn repeated_image_frames_reuse_premultiplied_pixels() {

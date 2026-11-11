@@ -88,6 +88,7 @@ impl JsSession {
                 tekto.set("bindContextMenu", Func::from(js_bind_context_menu))?;
                 tekto.set("bindTabPanel", Func::from(js_bind_tab_panel))?;
                 tekto.set("transition", Func::from(js_transition))?;
+                tekto.set("setTokens", Func::from(js_set_tokens))?;
                 tekto.set("applyNativeOp", Func::from(js_apply_native_op))?;
                 ctx.globals().set("tekto", tekto)?;
                 ctx.eval::<(), _>(include_str!("session.js"))
@@ -290,6 +291,21 @@ fn js_bind_context_menu(ctx: Ctx<'_>, target: u64, menu: u64) -> rquickjs::Resul
 fn js_close_overlay(ctx: Ctx<'_>) -> rquickjs::Result<()> {
     match with_host(|host| {
         host.apply(&[HostOp::CloseOverlay])?;
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(err) => throw(&ctx, err),
+    }
+}
+
+/// `tekto.setTokens(json)` replaces part of the quiet design tokens.
+///
+/// `json` is a `TokenPatch` object, for example
+/// `{"page":"#101010","ink":"#f0f0f0","gap":8}`. Existing nodes keep their
+/// resolved colours; nodes created later and the renderer use the new set.
+fn js_set_tokens(ctx: Ctx<'_>, json: String) -> rquickjs::Result<()> {
+    match with_host(|host| {
+        host.apply(&[HostOp::SetTokens { json }])?;
         Ok(())
     }) {
         Ok(()) => Ok(()),

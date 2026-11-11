@@ -11,6 +11,7 @@ mod recording;
 mod scroll_feel;
 mod store;
 mod tabs;
+mod tokens;
 pub use animate::{
     ease_linear, ease_smoothstep, reduced_motion_requested, Easing, StyleTransition,
     DEFAULT_TRANSITION_MS,
@@ -18,6 +19,7 @@ pub use animate::{
 pub use recording::{Action, RecordedKey, Recording};
 pub use store::{StateInfo, Store, StoreError};
 pub use tekto_image::{Fit as ImageFit, Image, ImageError};
+pub use tokens::{TokenPatch, Tokens};
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -736,64 +738,69 @@ impl Node {
 
     /// Apply the built-in defaults for a window or control before setting props.
     pub fn apply_widget_defaults(&mut self) {
+        self.apply_widget_defaults_with(&Tokens::default());
+    }
+
+    /// Like [`Self::apply_widget_defaults`], but with an app token set.
+    pub fn apply_widget_defaults_with(&mut self, tokens: &Tokens) {
         match self.kind {
             NodeKind::Window => {
-                self.fill = Some(Color::PAGE);
-                self.layout.padding = PAGE_PADDING;
-                self.layout.gap = STACK_GAP;
+                self.fill = Some(tokens.page);
+                self.layout.padding = tokens.padding;
+                self.layout.gap = tokens.gap;
                 self.layout.column = true;
             }
             NodeKind::Button => {
-                self.fill = Some(Color::BANNER);
-                self.color = Some(Color::ON_BANNER);
-                self.font_size = BODY_SIZE;
+                self.fill = Some(tokens.banner);
+                self.color = Some(tokens.on_banner);
+                self.font_size = tokens.body_size;
                 self.layout.padding = 12.0;
             }
             NodeKind::Checkbox | NodeKind::Switch | NodeKind::Radio => {
-                self.color = Some(Color::INK);
-                self.font_size = BODY_SIZE;
+                self.color = Some(tokens.ink);
+                self.font_size = tokens.body_size;
                 self.layout.padding = 4.0;
             }
             NodeKind::TabList => {
                 self.layout.column = false;
             }
             NodeKind::Tab => {
-                self.color = Some(Color::INK);
-                self.font_size = BODY_SIZE;
+                self.color = Some(tokens.ink);
+                self.font_size = tokens.body_size;
                 self.layout.padding = 8.0;
             }
             NodeKind::Menu => {
-                self.fill = Some(Color::PAGE);
-                self.color = Some(Color::INK);
+                self.fill = Some(tokens.page);
+                self.color = Some(tokens.ink);
                 self.layout.width = 180.0;
                 self.layout.padding = 4.0;
                 self.radius = 6.0;
-                self.border_color = Some(Color::INK);
+                self.border_color = Some(tokens.border);
             }
             NodeKind::MenuItem => {
-                self.color = Some(Color::INK);
-                self.font_size = BODY_SIZE;
+                self.color = Some(tokens.ink);
+                self.font_size = tokens.body_size;
                 self.layout.padding = 8.0;
             }
             NodeKind::Select => {
-                self.fill = Some(Color::FIELD);
-                self.color = Some(Color::INK);
-                self.font_size = BODY_SIZE;
+                self.fill = Some(tokens.field);
+                self.color = Some(tokens.ink);
+                self.font_size = tokens.body_size;
                 self.layout.padding = 10.0;
                 self.layout.width = 160.0;
             }
             NodeKind::Dialog => {
-                self.fill = Some(Color::PAGE);
-                self.color = Some(Color::INK);
+                self.fill = Some(tokens.page);
+                self.color = Some(tokens.ink);
                 self.layout.width = 320.0;
                 self.layout.padding = 20.0;
                 self.layout.gap = 12.0;
                 self.radius = 8.0;
-                self.border_color = Some(Color::INK);
+                self.border_color = Some(tokens.border);
             }
             NodeKind::Progress | NodeKind::Slider => {
-                self.fill = Some(Color::FIELD);
-                self.color = Some(Color::INK);
+                self.fill = Some(tokens.field);
+                self.color = Some(tokens.ink);
                 self.layout.width = 160.0;
                 self.layout.height = if self.kind == NodeKind::Slider {
                     24.0
@@ -803,9 +810,9 @@ impl Node {
                 self.radius = 4.0;
             }
             NodeKind::TextField => {
-                self.fill = Some(Color::FIELD);
-                self.color = Some(Color::INK);
-                self.font_size = BODY_SIZE;
+                self.fill = Some(tokens.field);
+                self.color = Some(tokens.ink);
+                self.font_size = tokens.body_size;
                 self.layout.padding = 10.0;
             }
             _ => {}
@@ -1030,6 +1037,7 @@ pub struct Tree {
     pub(crate) reduced_motion: bool,
     pub(crate) gesture: Option<scroll_feel::Gesture>,
     pub(crate) flings: Vec<scroll_feel::Fling>,
+    pub(crate) tokens: Tokens,
 }
 
 impl Default for Tree {
@@ -1055,6 +1063,7 @@ impl Tree {
             reduced_motion: false,
             gesture: None,
             flings: Vec::new(),
+            tokens: Tokens::default(),
         }
     }
 
@@ -1132,6 +1141,7 @@ impl Tree {
         let id = NodeId(self.next_id);
         self.next_id += 1;
         let mut node = Node::new(id, kind);
+        node.apply_widget_defaults_with(&self.tokens);
         if let Some(pid) = parent {
             let parent_node = self.nodes.get_mut(&pid).ok_or_else(|| TreeError {
                 message: format!("unknown parent {pid}"),
@@ -1574,7 +1584,6 @@ impl Tree {
         {
             let node = self.get_mut(popup).expect("popup");
             node.name = Some("Options".into());
-            node.apply_widget_defaults();
         }
         let selected = options.iter().copied().find(|option| {
             self.get(*option)

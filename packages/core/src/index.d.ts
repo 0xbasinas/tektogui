@@ -30,6 +30,20 @@ export declare function transitionOp(
   durationMs?: number;
 };
 
+export declare function tokensOp(tokens?: {
+  page?: string;
+  ink?: string;
+  banner?: string;
+  onBanner?: string;
+  field?: string;
+  border?: string;
+  focus?: string;
+  gap?: number;
+  padding?: number;
+  bodySize?: number;
+  titleSize?: number;
+}): { op: "setTokens"; json: string };
+
 export declare function createSignal<T>(value: T, options?: { key?: string }): [() => T, (value: T | ((prev: T) => T)) => void];
 export declare function createEffect(fn: () => void): (() => void) & { dispose(): void };
 

@@ -10,7 +10,8 @@ use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
 use tekto_tree::{
-    Color, Easing, NodeId, NodeKind, NodePatch, OverlaySide, StyleTransition, Tree, TreeError,
+    Color, Easing, NodeId, NodeKind, NodePatch, OverlaySide, StyleTransition, TokenPatch, Tree,
+    TreeError,
 };
 use thiserror::Error;
 
@@ -116,6 +117,11 @@ pub enum HostOp {
         #[serde(default)]
         duration_ms: Option<u32>,
     },
+    /// Replace part of the quiet design tokens. `json` is a [`TokenPatch`]
+    /// object, for example `{"page":"#101010","gap":8}`.
+    SetTokens {
+        json: String,
+    },
 }
 
 /// Host that applies ops. The desktop QuickJS runtime and the web WASM
@@ -188,9 +194,6 @@ pub fn apply_ops(tree: &mut Tree, ops: &[HostOp]) -> Result<Vec<u64>, JsError> {
                 let kind = NodeKind::from_name(kind)
                     .ok_or_else(|| JsError::Message(format!("unknown node kind `{kind}`")))?;
                 let id = tree.add(kind, None)?;
-                if let Some(node) = tree.get_mut(id) {
-                    node.apply_widget_defaults();
-                }
                 created.push(id.raw());
             }
             HostOp::SetText { id, text } => {
@@ -265,6 +268,11 @@ pub fn apply_ops(tree: &mut Tree, ops: &[HostOp]) -> Result<Vec<u64>, JsError> {
                         duration_ms: duration_ms.map(|ms| ms as f32),
                     },
                 )?;
+            }
+            HostOp::SetTokens { json } => {
+                let patch: TokenPatch = serde_json::from_str(json)
+                    .map_err(|err| JsError::Message(format!("tokens: {err}")))?;
+                tree.apply_tokens(&patch)?;
             }
         }
     }
@@ -1048,6 +1056,40 @@ mod tests {
             }],
         );
         assert!(bad_easing.is_err());
+    }
+
+    #[test]
+    fn set_tokens_op_changes_later_nodes_and_rejects_bad_json() {
+        let mut tree = Tree::new();
+        apply_ops(
+            &mut tree,
+            &[HostOp::SetTokens {
+                json: r##"{"page":"#101010","gap":8}"##.into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(tree.tokens().page, Color::rgb(0x10, 0x10, 0x10));
+        assert_eq!(tree.tokens().gap, 8.0);
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        assert_eq!(
+            tree.get(root).unwrap().fill,
+            Some(Color::rgb(0x10, 0x10, 0x10))
+        );
+        assert!(apply_ops(
+            &mut tree,
+            &[HostOp::SetTokens {
+                json: r##"{"page":"teal"}"##.into(),
+            }],
+        )
+        .is_err());
+        assert!(apply_ops(
+            &mut tree,
+            &[HostOp::SetTokens {
+                json: "not json".into(),
+            }],
+        )
+        .is_err());
+        assert_eq!(tree.tokens().page, Color::rgb(0x10, 0x10, 0x10));
     }
 
     #[test]

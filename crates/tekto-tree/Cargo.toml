@@ -15,3 +15,6 @@ image-png = ["tekto-image/png"]
 tekto-image.workspace = true
 serde = { workspace = true }
 unicode-segmentation = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
