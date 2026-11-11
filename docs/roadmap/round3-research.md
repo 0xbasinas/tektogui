@@ -243,6 +243,12 @@ Each of these is a separate slice in `tekto-native`, with `Unsupported` / `Unava
 - **Android:** the Notes APK builds, installs, paints on the x86_64 AVD, and answers `tekto tree` over `adb forward`. The NativeActivity text field and IME overlay still need a live type-into-field check because the Notes screen has no field.
 - **Desktop IME:** the Windows route handles `WindowEvent::Ime`, but no test drives a real IME layout; the Windows pass typed committed text only.
 
+### Custom app bar
+
+**Implemented:** `app_bar(tree, parent, title)` builds a banner-coloured in-window bar and returns `AppBar { root, leading, title, actions }`: a leading slot, a title that takes the free space, and a right-hand actions group. `app_bar_action` and `app_bar_leading_button` add quiet buttons (no fill, `onBanner` text, focus radius). The bar follows the tree tokens, so a tinted `set_tokens` changes it. TSX has `appBar(title, actions)` and `appBarAction(label, onClick)`; `fill: "none"` (also accepted by a patch) clears a button fill so it sits on the bar. Tests cover structure, leading-versus-actions placement, quiet buttons, focus on click, and token colours.
+
+**Remaining:** This is client-area chrome only. Replacing the OS title bar needs an undecorated window, a drag region, and minimise/maximise/close controls per platform; that is the next slice. No overflow menu, no automatic back button, and no drag-to-move yet.
+
 ## Rendering performance
 
 Animations repaint on the window clock (16 ms). A frame used to re-run Taffy and Parley every time even when only a colour or opacity tween was running. `Tree` now carries a `layout_dirty` flag: structure, geometry, text, focus, scroll, overlays and tab binding mark it; `get_mut` marks it for app and widget edits; a layout pass clears it; and a position or size tween marks it from `advance`. The desktop loop lays out only when the viewport changed or the flag is set, so a colour or opacity tween paints without relayout. Android still lays out every frame because insets can change. The demo can also run on the optional GPU renderer: `cargo run -p round3-demo --features gpu`.

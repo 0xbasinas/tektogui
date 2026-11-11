@@ -7,6 +7,9 @@ use tekto_tree::{Color, LayoutStyle, Node, NodeId, NodeKind, Tree, TreeError};
 mod lazy;
 pub use lazy::KeyedList;
 
+mod app_bar;
+pub use app_bar::{app_bar, app_bar_action, app_bar_leading_button, AppBar, APP_BAR_HEIGHT};
+
 pub use tekto_tree::{BODY_SIZE, PAGE_PADDING, STACK_GAP};
 /// Default title text size.
 pub const TITLE_SIZE: f32 = 22.0;

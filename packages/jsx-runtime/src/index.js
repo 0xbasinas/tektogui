@@ -11,6 +11,29 @@ export const Fragment = Symbol.for("tekto.fragment");
 export function For(props) { return { type: FOR, props, key: null }; }
 const FOR = Symbol.for("tekto.for");
 
+/** A banner-coloured in-window app bar. `actions` are elements shown on the right. */
+export function appBar(title, actions = []) {
+  return jsx("rect", {
+    name: "app bar",
+    height: 56,
+    padding: 12,
+    gap: 8,
+    column: false,
+    fill: "#3a424a",
+    children: [
+      jsx("text", { name: title, fontSize: 20, color: "#f4f3f0", grow: 1, children: title }, null),
+      jsx("group", { name: "app bar actions", column: false, gap: 8, children: actions }, null),
+    ],
+  }, null);
+}
+
+/** A quiet button for an app bar action: no fill, banner text colour. */
+export function appBarAction(label, onClick) {
+  const props = { fill: "none", color: "#f4f3f0", height: 32, padding: 6, radius: 6, children: label };
+  if (onClick) props.onClick = onClick;
+  return jsx("button", props, null);
+}
+
 /** A conditional whose active branch stays mounted while its truthiness is unchanged. */
 export function Show({ when, children, fallback = null }) {
   if (typeof when !== "function") throw new TypeError("Show requires a when accessor");

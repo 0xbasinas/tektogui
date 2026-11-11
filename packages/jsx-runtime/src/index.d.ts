@@ -1,5 +1,8 @@
 export const Fragment: symbol;
 /** Retained keyed list. Each child must produce one Tekto node. */
+export function appBar(title: string, actions?: TektoElement[]): TektoElement;
+export function appBarAction(label: string, onClick?: () => void): TektoElement;
+
 export function For<T>(props: { each: () => T[]; by: (item: T) => string | number; children: (item: () => T) => TektoElement }): TektoElement;
 /** Keep the current branch mounted until the condition changes truthiness. */
 export function Show<T>(props: { when: () => T; children: TektoElement | ((value: () => NonNullable<T>) => TektoElement); fallback?: TektoElement | null }): TektoElement;

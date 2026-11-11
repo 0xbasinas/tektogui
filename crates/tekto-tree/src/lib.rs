@@ -2113,9 +2113,15 @@ impl Tree {
             node.name = Some(name);
         }
         if let Some(fill) = patch.fill {
-            node.fill = Some(Color::from_hex(&fill).ok_or_else(|| TreeError {
-                message: format!("bad fill color {fill}"),
-            })?);
+            // `none` or an empty value clears the fill, which lets a TSX
+            // button sit on a coloured app bar without a second box.
+            node.fill = if fill.trim().eq_ignore_ascii_case("none") || fill.trim().is_empty() {
+                None
+            } else {
+                Some(Color::from_hex(&fill).ok_or_else(|| TreeError {
+                    message: format!("bad fill color {fill}"),
+                })?)
+            };
         }
         if let Some(radius) = patch.radius {
             node.radius = radius.max(0.0);
