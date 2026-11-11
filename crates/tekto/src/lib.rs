@@ -41,9 +41,9 @@ pub use tekto_tree::{
 };
 
 pub use tekto_widgets::{
-    banner, button, list, list_item, notes_tree, scroll, text, text_field, title_on_banner, window,
-    ListIds, ListRow, BANNER_HEIGHT, BANNER_PADDING, BODY_SIZE, LIST_GAP, LIST_ROW_PADDING,
-    PAGE_PADDING, STACK_GAP, TITLE_SIZE,
+    banner, button, checkbox, list, list_item, notes_tree, scroll, text, text_field,
+    title_on_banner, window, ListIds, ListRow, BANNER_HEIGHT, BANNER_PADDING, BODY_SIZE, LIST_GAP,
+    LIST_ROW_PADDING, PAGE_PADDING, STACK_GAP, TITLE_SIZE,
 };
 
 /// Layout, paint with the CPU renderer, and write a PNG if `out` is set.

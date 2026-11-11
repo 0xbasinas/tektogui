@@ -446,3 +446,66 @@ fn jsx_field_ops_render_the_same_hint_as_rust() {
     assert_eq!(field.label.as_deref(), Some("Title"));
     assert_eq!(field.value.as_deref(), Some(""));
 }
+
+#[test]
+fn checkbox_headless() {
+    use std::sync::{Arc, Mutex};
+    use tekto::{checkbox, window, NodePatch, Tree};
+    use tekto_tree::{route_named_key, NamedActionKey, TreeEvent};
+    let mut tree = Tree::new();
+    let root = window(&mut tree, "Checkbox", 240.0, 100.0).unwrap();
+    let id = checkbox(&mut tree, root, "Remember", false).unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    tree.set_event_handler(move |_, event| captured.lock().unwrap().push(event));
+    layout_tree(&mut tree, 240.0, 100.0);
+    assert!(tree.to_pretty_text().contains("checked=false"));
+    let dump = accesskit_dump(&tree).unwrap();
+    let node = dump.nodes.iter().find(|n| n.id == id.raw()).unwrap();
+    assert_eq!(node.role, "CheckBox");
+    assert_eq!(node.toggled, Some(false));
+    let png = render_headless_to_file(&tree, 240, 100, None).unwrap();
+    compare_png(
+        &png,
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots/checkbox.png"),
+    );
+    assert!(tree.traverse_focus(false));
+    assert_eq!(tree.focus, Some(id));
+    let bounds = tree.get(id).unwrap().bounds;
+    assert_eq!(tree.click_at(bounds.x + 5.0, bounds.y + 5.0), Some(id));
+    assert!(tree.get(id).unwrap().checked);
+    assert_eq!(
+        accesskit_dump(&tree)
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == id.raw())
+            .unwrap()
+            .toggled,
+        Some(true)
+    );
+    tree.click(id).unwrap();
+    assert!(!tree.get(id).unwrap().checked);
+    let (_, action) = route_named_key(&mut tree, NamedActionKey::Space, false);
+    tree.click(action.unwrap()).unwrap();
+    assert!(tree.get(id).unwrap().checked);
+    assert_eq!(
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| **e == TreeEvent::Changed(id))
+            .count(),
+        3
+    );
+    tree.patch(
+        id,
+        NodePatch {
+            disabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(tree.click(id).is_err());
+    assert!(!tree.traverse_focus(false));
+}

@@ -57,8 +57,11 @@ pub fn route_named_key(
         NamedActionKey::ShiftTab => (tree.traverse_focus(true), None),
         NamedActionKey::Enter | NamedActionKey::Space => {
             let button = tree.focus.filter(|id| {
-                tree.get(*id)
-                    .is_some_and(|n| n.kind == NodeKind::Button && !n.disabled)
+                tree.get(*id).is_some_and(|n| {
+                    (n.kind == NodeKind::Button
+                        || (key == NamedActionKey::Space && n.kind == NodeKind::Checkbox))
+                        && !n.disabled
+                })
             });
             (false, button.filter(|_| !repeat))
         }
@@ -116,6 +119,7 @@ pub enum NodeKind {
     Rect,
     Text,
     Button,
+    Checkbox,
     /// Single-line editable value. `name` is the label; `text` is the value.
     TextField,
     /// Vertical clip of overflowing children. `scroll_y` shifts them up.
@@ -144,6 +148,7 @@ impl NodeKind {
             NodeKind::Rect => "rect",
             NodeKind::Text => "text",
             NodeKind::Button => "button",
+            NodeKind::Checkbox => "checkbox",
             NodeKind::TextField => "text_field",
             NodeKind::Scroll => "scroll",
             NodeKind::List => "list",
@@ -159,6 +164,7 @@ impl NodeKind {
             "rect" => Some(Self::Rect),
             "text" => Some(Self::Text),
             "button" => Some(Self::Button),
+            "checkbox" => Some(Self::Checkbox),
             "text_field" => Some(Self::TextField),
             "scroll" => Some(Self::Scroll),
             "list" => Some(Self::List),
@@ -177,6 +183,7 @@ impl NodeKind {
             NodeKind::Rect,
             NodeKind::Text,
             NodeKind::Button,
+            NodeKind::Checkbox,
             NodeKind::TextField,
             NodeKind::Scroll,
             NodeKind::List,
@@ -197,6 +204,7 @@ impl NodeKind {
             | NodeKind::Rect
             | NodeKind::Text
             | NodeKind::Button
+            | NodeKind::Checkbox
             | NodeKind::List
             | NodeKind::ListItem => &["click"],
         }
@@ -342,6 +350,8 @@ pub struct Node {
     pub kind: NodeKind,
     #[serde(default)]
     pub disabled: bool,
+    #[serde(default)]
+    pub checked: bool,
     pub name: Option<String>,
     pub text: Option<String>,
     pub fill: Option<Color>,
@@ -433,6 +443,7 @@ impl Node {
             id,
             kind,
             disabled: false,
+            checked: false,
             name: None,
             text: None,
             fill: None,
@@ -470,6 +481,11 @@ impl Node {
                 self.color = Some(Color::ON_BANNER);
                 self.font_size = BODY_SIZE;
                 self.layout.padding = 12.0;
+            }
+            NodeKind::Checkbox => {
+                self.color = Some(Color::INK);
+                self.font_size = BODY_SIZE;
+                self.layout.padding = 4.0;
             }
             NodeKind::TextField => {
                 self.fill = Some(Color::FIELD);
@@ -572,6 +588,7 @@ pub enum ImeEvent {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NodePatch {
     pub disabled: Option<bool>,
+    pub checked: Option<bool>,
     pub text: Option<String>,
     pub name: Option<String>,
     pub fill: Option<String>,
@@ -845,7 +862,12 @@ impl Tree {
         let mut eligible = Vec::new();
         while let Some(id) = stack.pop() {
             if let Some(node) = self.get(id) {
-                if !node.disabled && matches!(node.kind, NodeKind::Button | NodeKind::TextField) {
+                if !node.disabled
+                    && matches!(
+                        node.kind,
+                        NodeKind::Button | NodeKind::TextField | NodeKind::Checkbox
+                    )
+                {
                     eligible.push(id);
                 }
                 stack.extend(node.children.iter().rev().copied());
@@ -897,6 +919,17 @@ impl Tree {
                 node.preedit_cursor = None;
                 node.caret = node.text.as_deref().unwrap_or("").chars().count();
             }
+        }
+        let changed = self.nodes.get_mut(&id).is_some_and(|node| {
+            if node.kind == NodeKind::Checkbox {
+                node.checked = !node.checked;
+                true
+            } else {
+                false
+            }
+        });
+        if changed {
+            self.emit(TreeEvent::Changed(id));
         }
         self.emit(TreeEvent::Click(id));
         Ok(())
@@ -1203,13 +1236,25 @@ impl Tree {
         let node = self.nodes.get_mut(&id).ok_or_else(|| TreeError {
             message: format!("unknown node {id}"),
         })?;
-        if patch.disabled.is_some() && !matches!(node.kind, NodeKind::Button | NodeKind::TextField)
+        if patch.disabled.is_some()
+            && !matches!(
+                node.kind,
+                NodeKind::Button | NodeKind::TextField | NodeKind::Checkbox
+            )
         {
             return Err(TreeError {
                 message: format!(
-                    "disabled is only supported on buttons and text fields (node {id})"
+                    "disabled is only supported on buttons, text fields, and checkboxes (node {id})"
                 ),
             });
+        }
+        if let Some(checked) = patch.checked {
+            if node.kind != NodeKind::Checkbox {
+                return Err(TreeError {
+                    message: format!("checked is only supported on checkboxes (node {id})"),
+                });
+            }
+            node.checked = checked;
         }
         if let Some(disabled) = patch.disabled {
             node.disabled = disabled;
@@ -1302,6 +1347,11 @@ impl Tree {
         } else {
             format!("\"{}\"", escape_quotes(&node.display_name()))
         };
+        let label = if node.kind == NodeKind::Checkbox {
+            format!("{label} checked={}", node.checked)
+        } else {
+            label
+        };
         let label = if node.disabled {
             format!("{label} disabled=true")
         } else {
@@ -1330,6 +1380,7 @@ impl Tree {
             id: node.id.raw(),
             kind: node.kind,
             disabled: node.disabled,
+            checked: node.checked,
             name: node.name.clone(),
             text: node.text.clone(),
             fill: node.fill.map(|c| c.to_hex()),
@@ -1363,6 +1414,7 @@ impl Tree {
             id: node.id.raw(),
             kind: node.kind,
             disabled: node.disabled,
+            checked: node.checked,
             name: node.name.clone(),
             text: node.text.clone(),
             fill: node.fill.map(|c| c.to_hex()),
@@ -1430,6 +1482,8 @@ pub struct NodeDump {
     pub kind: NodeKind,
     #[serde(default)]
     pub disabled: bool,
+    #[serde(default)]
+    pub checked: bool,
     pub name: Option<String>,
     pub text: Option<String>,
     pub fill: Option<String>,
