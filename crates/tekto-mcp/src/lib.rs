@@ -978,6 +978,7 @@ fn inspect_node(tree: &Tree, id: NodeId) -> Result<Value, McpError> {
     }
     Ok(json!({"version": 1, "id": id.raw(), "ancestry": ancestry,
         "semantics": semantic, "focused": tree.focus == Some(id),
+        "pointer_captured": tree.pointer_capture() == Some(id),
         "bounds": node.bounds, "visible_bounds": visible, "ancestor_clips": clips,
         "layout": node.layout, "scroll_y": node.scroll_y, "scroll_extent": node.scroll_extent}))
 }

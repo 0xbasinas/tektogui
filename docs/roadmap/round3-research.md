@@ -186,15 +186,9 @@ These three work well together, and can share the `tekto-test` crate above.
 
 ### Pointer capture and in-app drag
 
-- **Name:** Pointer capture, then drag.
-- **What it does:** Pointer down / move / up / cancel with capture by node id, released if the node is removed or focus is lost. Then a small in-app drag (for sliders and list reorder), plus an agent action such as `ui.drag { from, to }`. OS file drop can be a later slice (`DroppedFile`).
-- **Why:** Flutter, Compose, and Qt have gesture and capture systems. Without capture, a drag breaks when the pointer leaves the control.
-- **Priority:** medium. **Size:** M.
-- **Crates it touches:** `tekto-platform`, `tekto-tree`, later MCP/CLI, and widgets that need drag.
-- **Design notes:** First slice is one pointer, inside the tree. No pinch, no cross-window drag, no gesture DSL.
-- **DX fit:** Agents get a deterministic drag, not a pointer-only control. No new deps.
-- **Acceptance:** Tests for cancel, nesting, and not fighting scroll. A slider or reorder demo works with pointer and with the agent action.
-- **Licence:** Own MIT code.
+**Implemented:** Pointer capture is part of the scene tree: `Tree::capture_pointer` (attached, enabled, visible only), `release_pointer`, and `pointer_capture`. It is dropped automatically when the captured node is removed or when focus moves to a different node, and `ui.inspect` reports `pointer_captured`. The desktop pointer router no longer keeps its own capture field; it captures the slider on press, uses the tree's capture for motion (so leaving the bounds still tracks), and releases it on end or cancel. The existing slider drag, scroll-conflict, and cancelled-touch tests still pass, plus tree-level tests for release on remove, focus change, disabled nodes, and detached nodes.
+
+**Remaining:** No `ui.drag { from, to }` agent route yet; `ui.action` set-value covers sliders programmatically. No list-reorder drag or drag events for app callbacks, no pinch, no cross-window drag, and no gesture DSL. Text selection still uses its own `text_capture` rather than the shared capture.
 
 ### JS native permission list
 

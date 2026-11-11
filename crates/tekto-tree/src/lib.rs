@@ -1043,6 +1043,8 @@ pub struct Tree {
     pub focus: Option<NodeId>,
     /// Last node that was clicked, if any.
     pub last_click: Option<NodeId>,
+    /// Node receiving pointer motion until the current press ends.
+    pub(crate) pointer_capture: Option<NodeId>,
     pub(crate) transitions: Vec<animate::ActiveTransition>,
     /// Milliseconds last passed to [`Tree::advance`].
     pub(crate) time_ms: f64,
@@ -1070,6 +1072,7 @@ impl Tree {
             tab_panels: HashMap::new(),
             focus: None,
             last_click: None,
+            pointer_capture: None,
             transitions: Vec::new(),
             time_ms: 0.0,
             reduced_motion: false,
@@ -1340,6 +1343,12 @@ impl Tree {
         for panel in owned_panels {
             let _ = self.remove(panel);
         }
+        if self
+            .pointer_capture
+            .is_some_and(|captured| queued.contains(&captured))
+        {
+            self.pointer_capture = None;
+        }
         for cur in &queued {
             self.nodes.remove(cur);
             if self.focus == Some(*cur) {
@@ -1451,6 +1460,38 @@ impl Tree {
         self.set_focus(eligible[next]).is_ok()
     }
 
+    /// Capture pointer motion for one attached node until the press ends.
+    ///
+    /// The node must be visible and enabled. Capture is cleared when the node
+    /// is removed, when focus moves to a different node, or by
+    /// [`Self::release_pointer`]. A slider drag is the current user.
+    pub fn capture_pointer(&mut self, id: NodeId) -> Result<(), TreeError> {
+        let attached =
+            self.root == Some(id) || self.get(id).is_some_and(|node| node.parent.is_some());
+        if !attached || !self.get(id).is_some_and(|node| !node.disabled) {
+            return Err(TreeError {
+                message: format!("cannot capture pointer for {id}"),
+            });
+        }
+        if !self.is_visible(id) {
+            return Err(TreeError {
+                message: format!("cannot capture pointer for hidden node {id}"),
+            });
+        }
+        self.pointer_capture = Some(id);
+        Ok(())
+    }
+
+    /// Drop the capture, if any, and return the node that had it.
+    pub fn release_pointer(&mut self) -> Option<NodeId> {
+        self.pointer_capture.take()
+    }
+
+    /// The node receiving pointer motion for the current press.
+    pub fn pointer_capture(&self) -> Option<NodeId> {
+        self.pointer_capture
+    }
+
     /// Set AccessKit / keyboard focus. The id must already be in the tree.
     ///
     /// Leaving a text field drops its preedit. The composition is not committed.
@@ -1487,6 +1528,9 @@ impl Tree {
             return Err(TreeError {
                 message: format!("node {id} is disabled"),
             });
+        }
+        if self.pointer_capture.is_some_and(|captured| captured != id) {
+            self.pointer_capture = None;
         }
         if self.focus != Some(id) {
             if let Some(prev) = self.focus {
@@ -2293,6 +2337,33 @@ fn image_dump(node: &Node) -> Option<ImageDump> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pointer_capture_releases_on_remove_and_focus_change() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let slider = tree.add(NodeKind::Slider, Some(root)).unwrap();
+        let button = tree.add(NodeKind::Button, Some(root)).unwrap();
+
+        tree.capture_pointer(slider).unwrap();
+        assert_eq!(tree.pointer_capture(), Some(slider));
+        // Keeping focus on the captured node keeps the capture.
+        tree.set_focus(slider).unwrap();
+        assert_eq!(tree.pointer_capture(), Some(slider));
+        // Focus moving elsewhere drops it.
+        tree.set_focus(button).unwrap();
+        assert_eq!(tree.pointer_capture(), None);
+
+        tree.capture_pointer(slider).unwrap();
+        tree.remove(slider).unwrap();
+        assert_eq!(tree.pointer_capture(), None);
+
+        let disabled = tree.add(NodeKind::Slider, Some(root)).unwrap();
+        tree.get_mut(disabled).unwrap().disabled = true;
+        assert!(tree.capture_pointer(disabled).is_err());
+        let detached = tree.add(NodeKind::Slider, None).unwrap();
+        assert!(tree.capture_pointer(detached).is_err());
+    }
 
     #[test]
     fn multiline_fields_keep_newlines_and_move_to_line_edges() {
