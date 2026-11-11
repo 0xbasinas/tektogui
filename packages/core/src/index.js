@@ -6,7 +6,10 @@ export function createSignal(value) {
   const subs = new Set();
   let v = value;
   const get = () => {
-    if (current) subs.add(current);
+    if (current) {
+      subs.add(current);
+      current.dependencies.add(subs);
+    }
     return v;
   };
   const set = (next) => {
@@ -44,14 +47,25 @@ export function nativeOpJson(op) {
 }
 
 export function createEffect(fn) {
+  let active = true;
   const run = () => {
+    if (!active) return;
+    for (const subs of run.dependencies) subs.delete(run);
+    run.dependencies.clear();
+    const previous = current;
     current = run;
     try {
       fn();
     } finally {
-      current = null;
+      current = previous;
     }
   };
-  run();
+  run.dependencies = new Set();
+  run.dispose = () => {
+    active = false;
+    for (const subs of run.dependencies) subs.delete(run);
+    run.dependencies.clear();
+  };
+  try { run(); } catch (error) { run.dispose(); throw error; }
   return run;
 }
