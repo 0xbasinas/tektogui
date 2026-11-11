@@ -38,6 +38,9 @@ struct Inner {
     /// Last uploaded image keyed by [`tekto_image::Image::id`]. The pixel
     /// copy and format conversion happen once per image, not once per frame.
     image: Option<(u64, vello::peniko::ImageData)>,
+    /// On-screen surface, when the host asked for direct presentation.
+    surface: Option<wgpu::Surface<'static>>,
+    config: Option<wgpu::SurfaceConfiguration>,
 }
 
 pub struct GpuRenderer {
@@ -80,6 +83,133 @@ impl GpuRenderer {
         ))
     }
 
+    /// Build a renderer that presents straight to a native window surface.
+    ///
+    /// The surface shares this device and queue, so a frame is rendered and
+    /// presented without a CPU readback or a softbuffer blit. The caller must
+    /// keep the window alive for as long as the renderer.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_for_window(
+        width: u32,
+        height: u32,
+        window_handle: wgpu::rwh::RawWindowHandle,
+        display_handle: wgpu::rwh::RawDisplayHandle,
+    ) -> Result<Self, RenderError> {
+        let width = width.max(1);
+        let height = height.max(1);
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        // Safety: the caller owns the window and keeps it alive with the renderer.
+        let surface = unsafe {
+            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                raw_display_handle: Some(display_handle),
+                raw_window_handle: window_handle,
+            })
+        }
+        .map_err(|err| RenderError::msg(format!("window surface: {err}")))?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+        }))
+        .map_err(|err| RenderError::msg(format!("no GPU adapter: {err}")))?;
+        let adapter_name = adapter.get_info().name;
+        let desc = device_desc(&adapter);
+        let (device, queue) = pollster::block_on(adapter.request_device(&desc))
+            .map_err(|err| RenderError::msg(format!("GPU device: {err}")))?;
+        let config = surface
+            .get_default_config(&adapter, width, height)
+            .ok_or_else(|| RenderError::msg("window surface is not supported"))?;
+        surface.configure(&device, &config);
+        let renderer = Self::from_device(width, height, device, queue, adapter_name)?;
+        {
+            let mut inner = renderer.inner.borrow_mut();
+            inner.surface = Some(surface);
+            inner.config = Some(config);
+        }
+        Ok(renderer)
+    }
+
+    /// Reconfigure the surface after a window resize.
+    pub fn configure_surface(&mut self, width: u32, height: u32) {
+        let width = width.max(1);
+        let height = height.max(1);
+        let mut inner = self.inner.borrow_mut();
+        let (surface, mut config) = match (inner.surface.take(), inner.config.take()) {
+            (Some(surface), Some(config)) => (surface, config),
+            (surface, config) => {
+                inner.surface = surface;
+                inner.config = config;
+                return;
+            }
+        };
+        if config.width != width || config.height != height {
+            config.width = width;
+            config.height = height;
+            surface.configure(&inner.device, &config);
+        }
+        inner.surface = Some(surface);
+        inner.config = Some(config);
+    }
+
+    /// Draw the recorded scene into the window surface and present it.
+    ///
+    /// Returns `Ok(false)` when no surface was attached, so the caller can
+    /// fall back to the softbuffer path.
+    pub fn present_window(&mut self) -> Result<bool, RenderError> {
+        let mut inner = self.inner.borrow_mut();
+        let (surface, config) = match (inner.surface.take(), inner.config.take()) {
+            (Some(surface), Some(config)) => (surface, config),
+            (surface, config) => {
+                inner.surface = surface;
+                inner.config = config;
+                return Ok(false);
+            }
+        };
+        drop(inner);
+        let frame = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Timeout => {
+                let mut inner = self.inner.borrow_mut();
+                inner.surface = Some(surface);
+                inner.config = Some(config);
+                return Err(RenderError::msg("surface timeout"));
+            }
+            wgpu::CurrentSurfaceTexture::Occluded => {
+                let mut inner = self.inner.borrow_mut();
+                inner.surface = Some(surface);
+                inner.config = Some(config);
+                return Ok(false);
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                let mut inner = self.inner.borrow_mut();
+                inner.surface = Some(surface);
+                inner.config = Some(config);
+                return Err(RenderError::msg("surface outdated"));
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                let mut inner = self.inner.borrow_mut();
+                inner.surface = Some(surface);
+                inner.config = Some(config);
+                return Err(RenderError::msg("surface lost"));
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                let mut inner = self.inner.borrow_mut();
+                inner.surface = Some(surface);
+                inner.config = Some(config);
+                return Err(RenderError::msg("surface validation"));
+            }
+        };
+        let result = self.present_to(&frame.texture, config.format);
+        frame.present();
+        let mut inner = self.inner.borrow_mut();
+        inner.surface = Some(surface);
+        inner.config = Some(config);
+        result?;
+        Ok(true)
+    }
+
     fn from_device(
         width: u32,
         height: u32,
@@ -112,6 +242,8 @@ impl GpuRenderer {
                 clip_depth: 0,
                 pixels: None,
                 image: None,
+                surface: None,
+                config: None,
             }),
         })
     }
