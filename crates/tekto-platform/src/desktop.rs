@@ -275,7 +275,9 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(state) = self.state.as_mut() {
-                    relayout_window(state);
+                    // The redraw path re-reads the viewport and lays out once.
+                    // Laying out here as well doubled the work on every step
+                    // of a live resize and made the window look frozen.
                     state.window.request_redraw();
                 }
             }
