@@ -295,6 +295,13 @@ mod tests {
                 fs::create_dir_all(target.join("src")).unwrap();
                 fs::copy(source.join("package.json"), target.join("package.json")).unwrap();
                 fs::copy(source.join("src/index.d.ts"), target.join("src/index.d.ts")).unwrap();
+                if package == "core" {
+                    fs::copy(
+                        source.join("src/native-ops.d.ts"),
+                        target.join("src/native-ops.d.ts"),
+                    )
+                    .unwrap();
+                }
                 if package == "jsx-runtime" {
                     fs::copy(
                         source.join("src/jsx-types.d.ts"),

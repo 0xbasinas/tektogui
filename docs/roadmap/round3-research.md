@@ -192,15 +192,9 @@ These three work well together, and can share the `tekto-test` crate above.
 
 ### Typed native API and template types
 
-- **Name:** One command list, generated typings.
-- **What it does:** A single list of native commands (name, args, result) generates Rust stubs and TypeScript `.d.ts`. The scaffolder template also gets a `typecheck` script and typings from `components.json`.
-- **Why:** Tauri `invoke` typings and Wails bindings reduce drift. Docs already note that Rust and TS APIs are not fully equal. Agents write fewer wrong props with types.
-- **Priority:** medium. **Size:** M for generated native typings, S for the template typecheck.
-- **Crates / packages it touches:** `tekto-native`, `@tektogui/jsx-runtime` typings, `create-tektogui`.
-- **Design notes:** Build-time script only; no runtime cost. No third-party plugin ecosystem in this slice.
-- **DX fit:** Helps both humans and agents. Works with pnpm, bun, and npm. TypeScript stays a dev dependency of the template.
-- **Acceptance:** A missing or mistyped native call is a type error. `create-tektogui` output typechecks. The generated list matches the Rust handlers.
-- **Licence:** Own MIT code. TypeScript is Apache-2.0.
+**Implemented:** `crates/tekto-native/native-ops.json` is the one list: each op has a JS name, argument types, an optional result type, and an example object the Rust side can decode. `scripts/generate-native-types.mjs` writes `packages/core/src/native-ops.d.ts` (`NativeOp` union) and `npm run generate:native-types` regenerates it; a `--check` test in `packages/core/native-types.test.js` fails when the file is stale. `@tektogui/core` re-exports that union from its declarations, so `nativeOpJson` rejects a misspelled op or wrong argument type. `NativeOp::name()` is an exhaustive Rust match, and `tekto-native` has a drift test that decodes every JSON example into the real enum, checks the name and serialized tag, and fails if an op disappears from the list. The scaffolder copies the generated declarations into a generated app, and its typecheck test passed. The template already had the `tsconfig`/`typecheck` script and generated JSX prop types. Build-time only, no runtime cost.
+
+**Remaining:** Rust stubs are not generated from the list; the enum and its handlers stay hand-written, and the drift test is what keeps the two sides aligned. The generator has no result-type checking beyond the declared string, and there is no per-platform capability table in the list.
 
 ### QuickJS bytecode in release builds
 

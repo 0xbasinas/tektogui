@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "comment": "One list of native ops for the JS host. scripts/generate-native-types.mjs writes packages/core/src/native-ops.d.ts from it; the tekto-native drift test parses it into the Rust enum.",
+  "ops": [
+    { "name": "filesOpenDialog", "args": {}, "result": "string | null", "example": { "op": "filesOpenDialog" } },
+    { "name": "filesSaveDialog", "args": {}, "result": "string | null", "example": { "op": "filesSaveDialog" } },
+    { "name": "clipboardGetText", "args": {}, "result": "string", "example": { "op": "clipboardGetText" } },
+    { "name": "clipboardSetText", "args": { "text": "string" }, "example": { "op": "clipboardSetText", "text": "hi" } },
+    { "name": "filesReadText", "args": { "path": "string" }, "result": "string", "example": { "op": "filesReadText", "path": "note.txt" } },
+    { "name": "filesWriteText", "args": { "path": "string", "text": "string" }, "example": { "op": "filesWriteText", "path": "note.txt", "text": "hi" } },
+    { "name": "filesReadBytes", "args": { "path": "string" }, "result": "number[]", "example": { "op": "filesReadBytes", "path": "note.bin" } },
+    { "name": "filesWriteBytes", "args": { "path": "string", "bytes": "number[]" }, "example": { "op": "filesWriteBytes", "path": "note.bin", "bytes": [0, 1, 255] } },
+    { "name": "notificationsShow", "args": { "title": "string", "body": "string" }, "example": { "op": "notificationsShow", "title": "Tekto", "body": "Saved" } },
+    { "name": "trayShow", "args": { "label": "string", "menu": "{ id: string; label: string }[]" }, "example": { "op": "trayShow", "label": "Tekto", "menu": [{ "id": "open", "label": "Open" }] } },
+    { "name": "trayHide", "args": {}, "example": { "op": "trayHide" } },
+    { "name": "traySetLabel", "args": { "label": "string" }, "example": { "op": "traySetLabel", "label": "Tekto" } },
+    { "name": "trayTakeClick", "args": {}, "result": "string | null", "example": { "op": "trayTakeClick" } },
+    { "name": "shortcutsRegister", "args": { "accelerator": "string", "id": "string" }, "example": { "op": "shortcutsRegister", "accelerator": "Ctrl+K", "id": "search" } },
+    { "name": "shortcutsUnregister", "args": { "id": "string" }, "example": { "op": "shortcutsUnregister", "id": "search" } },
+    { "name": "shortcutsTakeActivation", "args": {}, "result": "string | null", "example": { "op": "shortcutsTakeActivation" } }
+  ]
+}
