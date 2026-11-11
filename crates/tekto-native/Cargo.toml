@@ -24,7 +24,7 @@ thiserror = { workspace = true }
 
 # arboard 3.7.0 is MIT OR Apache-2.0. Text only (no image-data). Wayland uses
 # `wayland-data-control` (wl-clipboard-rs, MIT OR Apache-2.0). X11 uses x11rb
-# (MIT OR Apache-2.0). Windows uses arboard without the Wayland feature.
+# (MIT OR Apache-2.0). Windows uses native system APIs.
 [target.'cfg(target_os = "linux")'.dependencies]
 # libc is MIT OR Apache-2.0; openat confines file access without symlink races.
 libc = "0.2"
@@ -37,8 +37,6 @@ arboard = { version = "3.7.0", default-features = false, features = ["wayland-da
 [target.'cfg(target_os = "macos")'.dependencies]
 arboard = { version = "3.7.0", default-features = false }
 
-[target.'cfg(target_os = "windows")'.dependencies]
-arboard = { version = "3.7.0", default-features = false }
 
 # Android notifications. Both crates are MIT OR Apache-2.0. `ndk-context` is
 # the same 0.1 handle `android-activity` publishes. `jni` default features
