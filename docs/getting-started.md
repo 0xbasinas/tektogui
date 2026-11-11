@@ -182,3 +182,5 @@ A script can create nodes with `tekto.create` / `tekto.setText` / `tekto.append`
   Open the printed URL. Saving `examples/notes/src/app.tsx` reloads the page. `POST /patch` on that server is live `ui.patch`. Set `TEKTO_DEV_URL` to a desktop dev server to forward writeback. A Node check of the same sketch is `node --test packages/wasm/tsx-test.js`.
 
   Commands and the optional `packages/wasm/smoke.html` and `gpu.html` pages are in [the web-build skill](../.agents/skills/web-build/SKILL.md). Do not enable `quickjs` or `gpu` for the default wasm check. `gpu` is a separate, large wasm build.
+
+Buttons and text fields can be disabled with `tree.patch(id, NodePatch { disabled: Some(true), ..Default::default() })` in Rust or `disabled={true}` in TSX. Disabling a focused control returns focus to the window root and discards any unfinished text composition. Set `disabled` to `false` to enable it again.

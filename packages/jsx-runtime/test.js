@@ -107,17 +107,18 @@ test("component schema lists every prop JSX forwards on each kind", () => {
   }
   assert.throws(() => renderToOps(jsx("nope", {})), /unknown element type nope/);
 
-  // mount() forwards any catalog prop on every kind (one global set).
-  // A prop listed on only some kinds is a lie to agents reading app.components.
+  // Disabled is supported only on interactive controls.
   const aliasKeys = new Set(Object.keys(componentSchema.propAliases ?? {}));
   const forwarded = new Set(
     componentSchema.components.flatMap((c) => c.props.map((p) => p.name)).filter((name) => !aliasKeys.has(name)),
   );
+  forwarded.delete("disabled");
   forwarded.add("title");
   for (const spec of componentSchema.components) {
     assert.ok(Array.isArray(spec.props));
     assert.ok(Array.isArray(spec.events));
     const listed = new Set(spec.props.map((p) => p.name));
+    assert.equal(listed.has("disabled"), ["button", "text_field"].includes(spec.name));
     for (const key of forwarded) {
       assert.ok(listed.has(key), `${spec.name} omits prop ${key} that JSX forwards`);
     }
@@ -185,4 +186,12 @@ test("failed mount rolls back created nodes and reactive bindings", async () => 
   assert.deepEqual(removed, [2, 1]);
   setValue(1);
   assert.deepEqual(writes, [[2, "0"]]);
+});
+
+test("disabled controls lower their state to host props", () => {
+  for (const kind of ["button", "text_field"]) {
+    const ops = renderToOps(jsx(kind, { disabled: true }));
+    assert.ok(renderToOps(jsx(kind, { disabled: false })).some((op) => op.op === "setProp" && op.key === "disabled" && op.value === "false"));
+    assert.ok(ops.some((op) => op.op === "setProp" && op.key === "disabled" && op.value === "true"));
+  }
 });

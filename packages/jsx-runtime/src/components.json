@@ -96,6 +96,7 @@
       "jsxProps": [{"name": "onClick", "type": "function", "description": "No-argument callback on a retained QuickJS host."}],
       "description": "Labeled button. Defaults to the same fill, color, font size, and padding as Rust button().",
       "props": [
+        {"name": "disabled", "type": "boolean"},
         {"name": "name", "type": "string", "description": "Accessible label. Defaults from the text child when unset."},
         {"name": "title", "type": "string", "description": "Alias of name."},
         {"name": "text", "type": "string"},
@@ -117,6 +118,7 @@
       "name": "text_field",
       "description": "Single-line field with the same style defaults as Rust text_field(). name is the label. text is the committed value.",
       "props": [
+        {"name": "disabled", "type": "boolean"},
         {"name": "name", "type": "string", "description": "Accessible label."},
         {"name": "title", "type": "string", "description": "Alias of name."},
         {"name": "text", "type": "string", "description": "Committed value."},

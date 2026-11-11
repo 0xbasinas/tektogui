@@ -64,8 +64,8 @@ export namespace JSX {
   type StaticProps = CommonProps & { text?: string | number };
   interface IntrinsicElements {
     text: CommonProps & { text?: string | number | (() => string | number) };
-    button: StaticProps & { onClick?: () => void };
+    button: StaticProps & { disabled?: boolean; onClick?: () => void };
     window: StaticProps; group: StaticProps; rect: StaticProps;
-    text_field: StaticProps; scroll: StaticProps; list: StaticProps; list_item: StaticProps;
+    text_field: StaticProps & { disabled?: boolean }; scroll: StaticProps; list: StaticProps; list_item: StaticProps;
   }
 }

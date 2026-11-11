@@ -202,6 +202,12 @@ pub fn apply_in(root: &Path, prefer: Prefer, old: &Snapshot, patch: &NodePatch) 
         };
     };
     let mut report = WritebackReport::default();
+    if patch.disabled.is_some() {
+        report.skipped.push(WritebackSkip {
+            prop: "disabled".into(),
+            reason: "disabled writeback is not supported".into(),
+        });
+    }
     if let Some(new_text) = patch.text.as_deref() {
         one(
             &root,

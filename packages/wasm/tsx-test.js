@@ -23,6 +23,14 @@ function haveEsbuild() {
   return !found.error && found.status === 0;
 }
 
+test("applyUiPatch forwards disabled booleans", () => {
+  const calls = [];
+  const host = { setText() {}, setProp: (...args) => calls.push(args) };
+  applyUiPatch(host, { id: 3, disabled: true });
+  applyUiPatch(host, { id: 3, disabled: false });
+  assert.deepEqual(calls, [[3, "disabled", "true"], [3, "disabled", "false"]]);
+});
+
 test("Notes TSX bundle mounts on the wasm core", async (t) => {
   if (!requireOrSkip(t, haveEsbuild(), "esbuild is unavailable (PATH or ESBUILD)")) return;
   if (!requireOrSkip(t, existsSync(wasmPath), `no wasm module at ${wasmPath}`)) return;
