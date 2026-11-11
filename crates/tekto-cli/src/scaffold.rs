@@ -174,7 +174,7 @@ pub fn write_app(dest: &Path, package: &str, repo_root: &Path) -> Result<(), Sca
             "@tektogui/core": package_path("core"),
             "@tektogui/jsx-runtime": package_path("jsx-runtime")
         },
-        "devDependencies": { "typescript": "^6.0.3", "@tektogui/build": package_path("build") }
+        "devDependencies": { "typescript": "^6.0.3", "esbuild": "^0.25.12", "@tektogui/build": package_path("build") }
     });
     let tsconfig = serde_json::json!({
         "compilerOptions": { "target": "ES2020", "module": "ESNext", "moduleResolution": "Bundler",
@@ -202,6 +202,13 @@ pub fn write_app(dest: &Path, package: &str, repo_root: &Path) -> Result<(), Sca
                 serde_json::to_string_pretty(&tsconfig)
                     .map_err(|e| ScaffoldError(e.to_string()))?
             ),
+        ),
+        // pnpm 10+ refuses to run a dependency's install script until it is
+        // approved. esbuild needs its script to place the platform binary, so
+        // generated apps allow that one build. npm and bun ignore this file.
+        (
+            "pnpm-workspace.yaml",
+            "allowBuilds:\n  esbuild: true\n".into(),
         ),
     ];
     for (rel, contents) in files {
