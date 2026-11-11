@@ -135,6 +135,7 @@ impl Renderer for CpuRenderer {
     }
 
     fn begin_frame(&mut self, clear: TektoColor) {
+        self.clips.clear();
         self.pixmap.fill(to_color(clear));
     }
 
@@ -213,12 +214,13 @@ impl Renderer for CpuRenderer {
         let mut paint = Paint::default();
         paint.set_color(to_color(color));
         paint.anti_alias = true;
+        let mask = self.clip_mask();
         self.pixmap.fill_path(
             &path,
             &paint,
             FillRule::EvenOdd,
             Transform::from_scale(s, s),
-            None,
+            mask.as_ref(),
         );
     }
 

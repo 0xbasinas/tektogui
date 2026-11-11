@@ -1,9 +1,9 @@
 //! wgpu + Vello renderer. Compiled only with the `gpu` feature.
 //!
 //! The scene is recorded on the CPU and rasterized on the GPU into an
-//! offscreen texture. The window still presents those pixels through
-//! softbuffer (`rgba8`), same as the CPU backend. Headless snapshots
-//! stay on [`crate::CpuRenderer`].
+//! offscreen texture. Desktop windows can present it directly to a GPU
+//! surface; `rgba8` reads it back for hosts using softbuffer. Headless
+//! snapshots stay on [`crate::CpuRenderer`].
 
 use crate::{RenderError, Renderer};
 use parley::PositionedLayoutItem;
@@ -1001,7 +1001,7 @@ mod tests {
         }
         let image = Image::new(4, 4, px).unwrap();
         type Case = (&'static str, fn(&mut dyn Renderer, &Image));
-        let cases: [Case; 8] = [
+        let cases: [Case; 9] = [
             ("fill_rect", |r, _| {
                 r.fill_rect(Rect::new(8.0, 8.0, 40.0, 24.0), Color::BANNER)
             }),
@@ -1010,6 +1010,11 @@ mod tests {
             }),
             ("stroke_rrect", |r, _| {
                 r.stroke_rrect(Rect::new(8.0, 8.0, 60.0, 40.0), 6.0, 2.0, Color::INK)
+            }),
+            ("clipped_stroke_rrect", |r, _| {
+                r.push_clip(Rect::new(0.0, 0.0, 36.0, 64.0));
+                r.stroke_rrect(Rect::new(8.0, 8.0, 60.0, 40.0), 6.0, 2.0, Color::INK);
+                r.pop_clip();
             }),
             ("draw_line", |r, _| {
                 r.draw_line(6.0, 6.0, 80.0, 50.0, 3.0, Color::INK)
