@@ -30,6 +30,7 @@ pub use tekto_platform::{
 pub use tekto_render::{
     paint_tree, render_tree_png, CpuRenderer, GpuRenderer, RenderError, Renderer,
 };
+pub use tekto_text::set_fallback_font;
 pub use tekto_tree::{
     ease_smoothstep, reduced_motion_requested, Action, Color, FieldKey, ImeEvent, LayoutStyle,
     Node, NodeId, NodeKind, NodePatch, RecordedKey, Recording, Rect, StateInfo, Store, StoreError,

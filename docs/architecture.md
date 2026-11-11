@@ -133,3 +133,36 @@ The Android app-private file implementation needs a device check. No storage per
 - Write and read text and arbitrary bytes through Rust and NativeOp, then restart and verify persistence.
 - Check missing files, invalid UTF-8, traversal, and symlinks return errors. Parent directories must already exist.
 - Confirm open and save report `Unsupported`. Picker launch, cancel, content URI grants, and URI access remain future work and must be checked once implemented.
+
+### Supplied fallback font
+
+By default Tekto registers only bundled Roboto Regular, without system font
+lookup. Roboto does not cover many scripts, including Japanese; missing glyphs
+appear as boxes. Applications may supply one additional font or font collection
+at startup. For Rust, call `tekto::set_fallback_font(bytes)` before creating any
+text engine or laying out or painting a tree. It rejects invalid data and calls
+after text initialization. For native Rust or TSX hosts, setting
+`TEKTO_FALLBACK_FONT` to a local font file before starting the process provides
+the same configuration; unreadable or invalid files stop startup with an error.
+The Rust API takes precedence when called first. Roboto stays first in the
+family list; supplied families are considered in font-file order for missing
+glyphs. All layout and paint engines use the same immutable configuration.
+A custom Rust host can supply bytes on targets without environment variables.
+The existing browser WASM host does not expose font configuration to JavaScript;
+its TSX apps retain the default until that host gains a configuration entry point. Font
+coverage and redistribution rights are the application's responsibility. No
+system fonts are discovered and no extra font is bundled.
+
+To exercise CJK locally, obtain a font covering `日本` under terms suitable for
+your use and leave it outside the repository. For example, a locally installed
+Noto Sans CJK font can be used without copying or redistributing it:
+
+```bash
+TEKTO_TEST_CJK_FONT=/path/to/NotoSansCJK-Regular.ttc cargo test --offline -p tekto --test fallback_font
+TEKTO_TEST_CJK_FONT=/path/to/NotoSansCJK-Regular.ttc cargo test --offline -p tekto-text --lib
+```
+
+The optional tests skip when the variable is absent. The rendering test writes
+`target/tektogui-shots/fallback-cjk.png` for visual inspection. The supplied
+font must actually cover both characters; font licensing must be checked before
+redistributing it.
