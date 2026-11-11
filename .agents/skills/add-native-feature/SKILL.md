@@ -86,7 +86,7 @@ OS limits:
 - An elevated (high integrity) process and a normal process do not share registrations. The higher integrity owner keeps the chord. This API cannot unregister a hotkey it did not register.
 - Headless and non-Windows builds do not call this API. Without the feature the calls return `Unsupported`. Do not open displays `:1` or `:2` on the Linux path.
 
-There is no Windows runtime test. Compile-check only:
+The Windows handoff report records the available live checks. Cross-check commands:
 
 ```bash
 cargo check -p tekto-native --target x86_64-pc-windows-gnu --features shortcuts
@@ -94,7 +94,7 @@ cargo check -p tekto --target x86_64-pc-windows-gnu --features shortcuts
 cargo check -p tekto-js --target x86_64-pc-windows-gnu --features shortcuts
 ```
 
-Those commands do not link or run on Windows. Register, unregister, and a callback while the app is in the background still need a Windows machine. Issue #49 stays open until that runtime check exists.
+A Windows live check registered and unregistered a shortcut and received its callback while another application had focus. See the Windows handoff report.
 
 ## Linux tray
 
@@ -110,14 +110,14 @@ No session bus, a refused connection, or a missing watcher is `NativeError::Unav
 
 Menu rules match Linux: at most 16 rows, unique non-empty ids, no NUL. The tooltip must also fit in 127 UTF-16 units (`szTip` is 128 units including NUL). A longer label or a bad menu is `NativeError::Message`. If the window cannot be created, or `Shell_NotifyIconW` rejects the icon, the error is `NativeError::Unavailable` with reason `Windows shell notification area is unavailable`. Headless and non-Windows builds do not call this API. Without the feature the calls return `Unsupported`.
 
-There is no Windows runtime test. Compile-check only:
+The Windows handoff report records the available live checks. Cross-check commands:
 
 ```bash
 cargo check -p tekto-native --target x86_64-pc-windows-gnu --features tray
 cargo check -p tekto --target x86_64-pc-windows-gnu --features tray
 ```
 
-Those commands do not link or run on Windows. Icon lifetime, the popup menu, and a session with no notification area still need a Windows machine. Issue #47 stays open until that runtime check exists.
+A Windows live check showed the icon, received a popup-menu selection, and hid the icon. A session without a notification area remains untested. See the Windows handoff report.
 
 ## Linux notifications
 
@@ -125,7 +125,7 @@ Those commands do not link or run on Windows. Icon lifetime, the popup menu, and
 
 ## Windows notifications
 
-`Notifications::show` on Windows uses the Vista-and-later balloon API `Shell_NotifyIconW` (`shell32`), plus `CreateWindowExW`, `DestroyWindow`, and `LoadIconW` (`user32`). No extra crate. The call adds a temporary notification-area icon (`NIM_ADD`, `NIF_ICON | NIF_INFO`, `NIIF_INFO`, `IDI_APPLICATION`) on a hidden `STATIC` window, waits 30 seconds on that thread, then deletes the icon (`NIM_DELETE`) and destroys the window. Success means the shell accepted `NIM_ADD`. The shell can still hide or delay the balloon. There is no Windows runtime test; this host did not show a toast.
+`Notifications::show` on Windows uses the Vista-and-later balloon API `Shell_NotifyIconW` (`shell32`), plus `CreateWindowExW`, `DestroyWindow`, and `LoadIconW` (`user32`). No extra crate. The call adds a temporary notification-area icon (`NIM_ADD`, `NIF_ICON | NIF_INFO`, `NIIF_INFO`, `IDI_APPLICATION`) on a hidden `STATIC` window, waits 30 seconds on that thread, then deletes the icon (`NIM_DELETE`) and destroys the window. Success means the shell accepted `NIM_ADD`. The shell can still hide or delay the balloon. A Windows live call returned success, but the user did not see a notification; see the Windows handoff report.
 
 Title must fit in 63 UTF-16 units and body in 255 (the API buffers are 64 and 256, including the NUL). A NUL or a longer string is `NativeError::Message`. If the window, icon, or `Shell_NotifyIconW` call fails, the error is `NativeError::Unavailable` with reason `Windows shell notification area is unavailable`. Compile-check only:
 
@@ -192,7 +192,7 @@ That does not install an APK and does not touch the device clipboard. A live rou
 
 ## Windows open and save dialogs
 
-`Files::open_dialog` and `Files::save_dialog` on Windows call `GetOpenFileNameW` and `GetSaveFileNameW` from `comdlg32` (`src/windows_dialog.rs`). No extra crate. The struct is `OPENFILENAMEW`. Flags are `OFN_EXPLORER`, `OFN_HIDEREADONLY`, `OFN_NOCHANGEDIR`, and `OFN_PATHMUSTEXIST`. Open also sets `OFN_FILEMUSTEXIST`. Save also sets `OFN_OVERWRITEPROMPT` (same idea as zenity `--confirm-overwrite`). The filter is all files. The path buffer is 32768 UTF-16 units. A chosen file is `Ok(Some(path))` only when the path is a drive path (`C:\...`) or a UNC path (`\\server\share\...`). Cancel is `Get*FileNameW` returning false and `CommDlgExtendedError` returning 0, which is `Ok(None)`. Any other dialog error is `NativeError::Unavailable` with reason `Windows common file dialog is unavailable` (no interactive desktop, initialization failure, or a buffer the API rejects). A path that is not absolute uses reason `file dialog did not return an absolute path`. A UTF-16 sequence that is not Unicode is `NativeError::Message`. The call blocks on the thread that invokes it. It does not change the process directory. Headless and non-Windows builds do not call this API. There is no Windows runtime test; this host did not open a dialog. Compile-check only:
+`Files::open_dialog` and `Files::save_dialog` on Windows call `GetOpenFileNameW` and `GetSaveFileNameW` from `comdlg32` (`src/windows_dialog.rs`). No extra crate. The struct is `OPENFILENAMEW`. Flags are `OFN_EXPLORER`, `OFN_HIDEREADONLY`, `OFN_NOCHANGEDIR`, and `OFN_PATHMUSTEXIST`. Open also sets `OFN_FILEMUSTEXIST`. Save also sets `OFN_OVERWRITEPROMPT` (same idea as zenity `--confirm-overwrite`). The filter is all files. The path buffer is 32768 UTF-16 units. A chosen file is `Ok(Some(path))` only when the path is a drive path (`C:\...`) or a UNC path (`\\server\share\...`). Cancel is `Get*FileNameW` returning false and `CommDlgExtendedError` returning 0, which is `Ok(None)`. Any other dialog error is `NativeError::Unavailable` with reason `Windows common file dialog is unavailable` (no interactive desktop, initialization failure, or a buffer the API rejects). A path that is not absolute uses reason `file dialog did not return an absolute path`. A UTF-16 sequence that is not Unicode is `NativeError::Message`. The call blocks on the thread that invokes it. It does not change the process directory. Headless and non-Windows builds do not call this API. A Windows live check opened both dialogs; cancellation and overwrite results need further investigation. Cross-check:
 
 ```bash
 cargo check --target x86_64-pc-windows-gnu -p tekto-native
