@@ -5,7 +5,7 @@ description: Add or change a Tekto dev-server HTTP endpoint and the matching MCP
 
 # Add an MCP tool
 
-The stdio MCP server (`tekto mcp`) is a proxy. Real work happens on the localhost dev HTTP server started by `tekto dev` or a window with `dev_server: true`.
+The stdio MCP server (`tekto mcp`) is a proxy for the `ui.*` and other `app.*` tools (`app.components` is answered locally). Real work happens on the localhost dev HTTP server started by `tekto dev` or a window with `dev_server: true`.
 
 ## Files to touch
 
@@ -31,7 +31,7 @@ The stdio MCP server (`tekto mcp`) is a proxy. Real work happens on the localhos
 | `app.states` | `GET /states` | `tekto states` |
 | `app.restore` | `POST /states/restore` `{"index":N}` | `tekto restore N` |
 | `app.logs` | `GET /logs` | none |
-| `app.components` | `GET /components` | none. Returns `packages/jsx-runtime/src/components.json`. Works with no running app (the stdio tool does not call the dev server). |
+| `app.components` | `GET /components` | none. Returns `packages/jsx-runtime/src/components.json`. The stdio tool works with no running app (it does not call the dev server); `GET /components` needs a running dev server. |
 
 Protocol version in `initialize` is `2024-11-05`. Stdio uses newline-delimited JSON-RPC, with legacy `Content-Length` frames accepted and answered in kind. Stdout is protocol-only. The advertised initialization version remains `2024-11-05`. Tool results use `{ "content": [{ "type": "text", "text": "…" }] }` (screenshots use `type: "image"` + base64 + `mimeType: "image/png"`).
 

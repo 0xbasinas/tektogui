@@ -36,7 +36,7 @@ Agents can use the same HTTP server directly: `GET /health` checks availability,
 cargo run -p tekto-cli -- mcp
 ```
 
-This proxies MCP requests to the same HTTP server. Stdio uses one JSON-RPC message per line (no raw newlines inside a message); stdout is reserved for protocol messages. Legacy `Content-Length` frames are also accepted and answered in the same format. Initialization still advertises protocol version `2024-11-05`; this does not claim full support for newer MCP protocol semantics or verified interoperability with a real MCP client.
+This proxies MCP tool calls to the same HTTP server, except `app.components`, which it answers locally. Stdio uses one JSON-RPC message per line (no raw newlines inside a message); stdout is reserved for protocol messages. Legacy `Content-Length` frames are also accepted and answered in the same format. Initialization still advertises protocol version `2024-11-05`; this does not claim full support for newer MCP protocol semantics or verified interoperability with a real MCP client.
 
 For a local framing check without a running app:
 
@@ -60,7 +60,7 @@ Tools in the first slice:
 | `app.logs` | Recent log lines |
 | `app.components` | JSON schema of widgets, props, and events. No running app required |
 
-`app.components` (and `GET /components`) returns `packages/jsx-runtime/src/components.json`. That file is the list `@tektogui/jsx-runtime` mounts. Kinds match `NodeKind` (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`, `list`, `list_item`). Each kind lists every prop the host `setProp` accepts (`width`, `height`, `column`, `justifyCenter`, `text`, `name`, `fill`, `color`, `fontSize`, `padding`, `gap`), because JSX forwards that set on every kind. `title` is an alias of `name` (`font_size` and `justify_center` are the snake_case aliases). Events are host actions, not `onClick` props: `click` on every kind, plus `type`, `key`, and `ime` on `text_field`, and `scroll` on `scroll`. The Rust `banner()` helper is a `rect`, not its own kind.
+`app.components` (and the dev-server route `GET /components`, which does need a running server) returns `packages/jsx-runtime/src/components.json`. That file is the list `@tektogui/jsx-runtime` mounts. Kinds match `NodeKind` (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`, `list`, `list_item`). Each kind lists every prop the host `setProp` accepts (`width`, `height`, `column`, `justifyCenter`, `text`, `name`, `fill`, `color`, `fontSize`, `padding`, `gap`), because JSX forwards that set on every kind. `title` is an alias of `name` (`font_size` and `justify_center` are the snake_case aliases). Events are host actions, not `onClick` props: `click` on every kind, plus `type`, `key`, and `ime` on `text_field`, and `scroll` on `scroll`. The Rust `banner()` helper is a `rect`, not its own kind.
 
 Live patches change the running tree immediately and do not require a reload. `POST /patch` and `ui.patch` accept JSON `{ "id", "text?", "name?", "fill?", "color?", "fontSize?", "padding?", "gap?" }` (`#rrggbb` or `#rrggbbaa`) and return the updated node, or a clear error (unknown id, bad color).
 
