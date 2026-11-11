@@ -1,5 +1,6 @@
 /** Tekto controls showcase. Run with packages/wasm/dev.js or tekto dev --js. */
 import { createSignal } from "@tektogui/core";
+import { appBar, appBarAction } from "@tektogui/jsx-runtime";
 
 // Two colors and a transparent circle make contain/cover and alpha easy to see.
 function makeImage() {
@@ -20,9 +21,10 @@ export function App() {
   const picture = makeImage();
   return (
     <window title="Tekto showcase" width={640} height={400} fill="#f4f3f0" padding={18} gap={10}>
-      <rect name="Header" height={48} fill="#3a424a" radius={8} padding={10} justifyCenter={true}>
-        <text color="#f4f3f0" fontSize={20}>Tekto showcase</text>
-      </rect>
+      {appBar("Tekto showcase", [
+        appBarAction("Reset", () => setCount(0)),
+        appBarAction("Add ten", () => setCount(value => value + 10)),
+      ])}
       <group column={false} gap={14} height={100}>
         <group width={178} gap={5}>
           <text fontSize={14}>Image: contain</text>

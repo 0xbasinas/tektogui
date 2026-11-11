@@ -5,6 +5,7 @@
 //! buttons are quiet: no fill, banner text colour, and a radius on focus.
 
 use super::*;
+use tekto_tree::WindowControl;
 
 /// Height of an app bar in logical pixels.
 pub const APP_BAR_HEIGHT: f32 = 56.0;
@@ -32,6 +33,7 @@ pub fn app_bar(tree: &mut Tree, parent: NodeId, title: &str) -> Result<AppBar, W
         node.layout.padding = APP_BAR_PADDING;
         node.layout.gap = 8.0;
         node.layout.column = false;
+        node.drag_window = true;
     }
     let leading = tree.add(NodeKind::Group, Some(root))?;
     if let Some(node) = tree.get_mut(leading) {
@@ -46,6 +48,7 @@ pub fn app_bar(tree: &mut Tree, parent: NodeId, title: &str) -> Result<AppBar, W
         node.color = Some(tokens.on_banner);
         node.font_size = tokens.body_size;
         node.grow = 1.0;
+        node.drag_window = true;
     }
     let actions = tree.add(NodeKind::Group, Some(root))?;
     if let Some(node) = tree.get_mut(actions) {
@@ -59,6 +62,30 @@ pub fn app_bar(tree: &mut Tree, parent: NodeId, title: &str) -> Result<AppBar, W
         title: title_id,
         actions,
     })
+}
+
+/// Add minimise, maximise and close buttons for an undecorated window.
+///
+/// The three buttons carry `WindowControl` values, which the desktop host
+/// applies when they are clicked or activated from the keyboard.
+pub fn app_bar_window_controls(tree: &mut Tree, bar: &AppBar) -> Result<[NodeId; 3], WidgetError> {
+    let specs = [
+        (WindowControl::Minimize, "Minimise", "\u{2013}"),
+        (WindowControl::Maximize, "Maximise", "+"),
+        (WindowControl::Close, "Close", "\u{00d7}"),
+    ];
+    let mut ids = [bar.root; 3];
+    for (index, (control, name, glyph)) in specs.into_iter().enumerate() {
+        let id = action_button(tree, bar.actions, glyph)?;
+        if let Some(node) = tree.get_mut(id) {
+            node.name = Some(name.into());
+            node.text = Some(glyph.into());
+            node.window_control = control;
+            node.layout.width = 32.0;
+        }
+        ids[index] = id;
+    }
+    Ok(ids)
 }
 
 /// Add a quiet text button to the bar's right-hand actions.

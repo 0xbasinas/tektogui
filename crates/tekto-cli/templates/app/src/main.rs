@@ -52,6 +52,7 @@ fn real_main() -> Result<(), Box<dyn std::error::Error>> {
                 width: 640,
                 height: 400,
                 dev_server: true,
+                decorations: true,
             },
         )?;
     }

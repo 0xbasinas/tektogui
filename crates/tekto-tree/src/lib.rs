@@ -531,12 +531,29 @@ pub const STACK_GAP: f32 = 20.0;
 pub const BODY_SIZE: f32 = 20.0;
 
 /// A node in the scene tree.
+/// A native window action bound to a node, for undecorated windows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowControl {
+    #[default]
+    None,
+    Minimize,
+    Maximize,
+    Close,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Node {
     pub id: NodeId,
     pub kind: NodeKind,
     #[serde(default)]
     pub disabled: bool,
+    /// Makes the node a drag region for an undecorated window.
+    #[serde(default)]
+    pub drag_window: bool,
+    /// Native window action performed when this node is activated.
+    #[serde(default)]
+    pub window_control: WindowControl,
     #[serde(default)]
     pub checked: bool,
     /// Normalized progress from zero to one.
@@ -701,6 +718,8 @@ impl Node {
             id,
             kind,
             disabled: false,
+            drag_window: false,
+            window_control: WindowControl::None,
             checked: false,
             progress: 0.0,
             multiline: false,
@@ -969,6 +988,12 @@ pub enum ImeEvent {
 pub struct NodePatch {
     pub disabled: Option<bool>,
     pub checked: Option<bool>,
+    /// Makes this node a drag region on an undecorated window.
+    #[serde(default, alias = "dragWindow")]
+    pub drag_window: Option<bool>,
+    /// Native window action for activation: `minimize`, `maximize`, `close`, `none`.
+    #[serde(default, alias = "windowControl")]
+    pub window_control: Option<String>,
     /// Normalized progress, clamped to 0..=1.
     pub value: Option<f32>,
     pub text: Option<String>,
@@ -1057,6 +1082,8 @@ pub struct Tree {
     pub(crate) layout_dirty: bool,
     /// Clock value when the caret was last moved or edited, for blink reset.
     pub(crate) caret_origin_ms: f64,
+    /// Set by a click on a node with a native window action; the host takes it.
+    pub(crate) pending_window_control: Option<WindowControl>,
 }
 
 impl Default for Tree {
@@ -1086,6 +1113,7 @@ impl Tree {
             tokens: Tokens::default(),
             layout_dirty: true,
             caret_origin_ms: 0.0,
+            pending_window_control: None,
         }
     }
 
@@ -1186,6 +1214,14 @@ impl Tree {
     /// Show the caret solid and restart the blink from now.
     pub fn reset_caret_blink(&mut self) {
         self.caret_origin_ms = self.time_ms;
+    }
+
+    /// Take the native window action requested by the last click, if any.
+    ///
+    /// The desktop host applies this after delivering a pointer or key event;
+    /// other hosts (web, CLI, MCP) can ignore it.
+    pub fn take_window_control(&mut self) -> Option<WindowControl> {
+        self.pending_window_control.take()
     }
 
     pub fn ids(&self) -> impl Iterator<Item = NodeId> + '_ {
@@ -1641,6 +1677,11 @@ impl Tree {
     pub fn click(&mut self, id: NodeId) -> Result<(), TreeError> {
         self.set_focus(id)?;
         self.last_click = Some(id);
+        if let Some(control) = self.get(id).map(|node| node.window_control) {
+            if control != WindowControl::None {
+                self.pending_window_control = Some(control);
+            }
+        }
         if let Some(node) = self.nodes.get_mut(&id) {
             if node.kind == NodeKind::TextField {
                 node.preedit.clear();
@@ -2090,6 +2131,22 @@ impl Tree {
         if let Some(disabled) = patch.disabled {
             node.disabled = disabled;
         }
+        if let Some(drag) = patch.drag_window {
+            node.drag_window = drag;
+        }
+        if let Some(control) = patch.window_control {
+            node.window_control = match control.trim().to_ascii_lowercase().as_str() {
+                "" | "none" => WindowControl::None,
+                "minimize" => WindowControl::Minimize,
+                "maximize" => WindowControl::Maximize,
+                "close" => WindowControl::Close,
+                other => {
+                    return Err(TreeError {
+                        message: format!("unknown window control `{other}`"),
+                    });
+                }
+            };
+        }
         if let Some(text) = patch.text {
             // Buttons and labels start with name == text. A text field's name
             // is the accessible label and must stay put when the value changes.
@@ -2189,6 +2246,38 @@ impl Tree {
         }
         let root = self.root?;
         self.hit_in(root, x, y)
+    }
+
+    /// Whether a press at this point should start a native window drag.
+    ///
+    /// The walk stops at an interactive node, so a button inside a drag
+    /// region stays clickable.
+    pub fn drag_region_at(&self, x: f32, y: f32) -> bool {
+        let mut current = self.hit(x, y);
+        while let Some(id) = current {
+            let Some(node) = self.get(id) else {
+                return false;
+            };
+            if matches!(
+                node.kind,
+                NodeKind::Button
+                    | NodeKind::TextField
+                    | NodeKind::Slider
+                    | NodeKind::Tab
+                    | NodeKind::Checkbox
+                    | NodeKind::Switch
+                    | NodeKind::Radio
+                    | NodeKind::Select
+                    | NodeKind::MenuItem
+            ) {
+                return false;
+            }
+            if node.drag_window {
+                return true;
+            }
+            current = node.parent;
+        }
+        false
     }
 
     fn hit_in(&self, id: NodeId, x: f32, y: f32) -> Option<NodeId> {

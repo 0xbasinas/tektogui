@@ -1,16 +1,19 @@
 //! Round 3 feature demo, to try by hand.
 //!
-//! Tokens are set before the widgets exist, so the whole screen uses the
-//! tinted palette. The bar under the header runs a repeating colour tween.
-//! The split pane collapses its right side when the window is narrower than
-//! 760 logical pixels and moves focus to the split. The slider keeps tracking
-//! after the pointer leaves its bounds because capture lives in the tree.
+//! The window is undecorated, so the in-window app bar is the title bar: drag
+//! it to move the window and use the three buttons on the right to minimise,
+//! maximise and close. Tokens are set before the widgets exist, so the whole
+//! screen uses the tinted palette. The bar under the text runs a repeating
+//! colour tween. The split pane collapses its right side when the window is
+//! narrower than 760 logical pixels and moves focus to the split. The slider
+//! keeps tracking after the pointer leaves its bounds because capture lives in
+//! the tree.
 //!
 //!   cargo run -p round3-demo
 
 use tekto::{
-    banner, progress, slider, split_pane, text, text_field, title_on_banner, window, Color, Easing,
-    NodeKind, StyleTransition, Tree, WindowOptions, BANNER_HEIGHT,
+    app_bar, app_bar_leading_button, app_bar_window_controls, progress, slider, split_pane, text,
+    text_field, window, Color, Easing, NodeKind, StyleTransition, Tree, WindowOptions,
 };
 
 fn main() {
@@ -29,6 +32,7 @@ fn real_main() -> Result<(), Box<dyn std::error::Error>> {
             width: 900,
             height: 640,
             dev_server: true,
+            decorations: false,
         },
     )?;
     Ok(())
@@ -46,17 +50,30 @@ fn demo() -> Result<Tree, Box<dyn std::error::Error>> {
     tree.set_tokens(tokens);
 
     let root = window(&mut tree, "Tekto round 3", 900.0, 640.0)?;
-    let header = banner(&mut tree, root, f32::NAN, BANNER_HEIGHT)?;
-    title_on_banner(&mut tree, header, "Round 3: things to try", f32::NAN)?;
+    if let Some(node) = tree.get_mut(root) {
+        // Flush chrome: the app bar spans the window edge to edge.
+        node.layout.padding = 0.0;
+    }
+    let bar = app_bar(&mut tree, root, "Round 3: things to try")?;
+    app_bar_leading_button(&mut tree, &bar, "Menu")?;
+    app_bar_window_controls(&mut tree, &bar)?;
+
+    let content = tree.add(NodeKind::Group, Some(root))?;
+    if let Some(node) = tree.get_mut(content) {
+        node.layout.padding = 20.0;
+        node.layout.gap = 16.0;
+        node.layout.column = true;
+    }
+
     text(
         &mut tree,
-        root,
-        "Resize below 760 px: the right pane collapses. Drag the slider outside its bounds: capture keeps tracking. The bar below pulses with a repeating colour tween.",
+        content,
+        "Drag the bar to move the window; the buttons on its right minimise, maximise and close. Resize below 760 px: the right pane collapses. Drag the slider outside its bounds: capture keeps tracking.",
         15.0,
         Color::INK,
     )?;
 
-    let pulse = tree.add(NodeKind::Rect, Some(root))?;
+    let pulse = tree.add(NodeKind::Rect, Some(content))?;
     if let Some(node) = tree.get_mut(pulse) {
         node.name = Some("pulse".into());
         node.fill = Some(Color::rgb(0x2f, 0x4a, 0x5f));
@@ -74,7 +91,7 @@ fn demo() -> Result<Tree, Box<dyn std::error::Error>> {
         },
     )?;
 
-    let split = split_pane(&mut tree, root, 760.0, 16.0)?;
+    let split = split_pane(&mut tree, content, 760.0, 16.0)?;
     text(
         &mut tree,
         split.primary,

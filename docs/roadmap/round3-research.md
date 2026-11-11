@@ -247,7 +247,9 @@ Each of these is a separate slice in `tekto-native`, with `Unsupported` / `Unava
 
 **Implemented:** `app_bar(tree, parent, title)` builds a banner-coloured in-window bar and returns `AppBar { root, leading, title, actions }`: a leading slot, a title that takes the free space, and a right-hand actions group. `app_bar_action` and `app_bar_leading_button` add quiet buttons (no fill, `onBanner` text, focus radius). The bar follows the tree tokens, so a tinted `set_tokens` changes it. TSX has `appBar(title, actions)` and `appBarAction(label, onClick)`; `fill: "none"` (also accepted by a patch) clears a button fill so it sits on the bar. Tests cover structure, leading-versus-actions placement, quiet buttons, focus on click, and token colours.
 
-**Remaining:** This is client-area chrome only. Replacing the OS title bar needs an undecorated window, a drag region, and minimise/maximise/close controls per platform; that is the next slice. No overflow menu, no automatic back button, and no drag-to-move yet.
+`WindowOptions.decorations = false` removes the OS title bar. A node with `drag_window` starts `Window::drag_window()` on a left press, and the walk from the hit node stops at an interactive widget, so a button inside the bar still clicks. `app_bar_window_controls` adds minimise, maximise and close buttons that carry `window_control`; the desktop host applies them on mouse click or keyboard activation, and close exits the event loop. The round 3 demo runs undecorated with the bar flush to the window edge (drag it, use the three buttons). Tests cover the drag-region walk, the three control values, and patching `windowControl` /`dragWindow` (including an unknown value).
+
+**Remaining:** An undecorated window loses the OS edge resize handles and snap layouts, and double-click-to-maximise is not wired; custom resize borders and hit testing are the next step. The TSX props for `dragWindow` and `windowControl` are not exposed yet (only the Rust API and the app bar helpers), so a TSX app cannot opt into undecorated chrome by itself. No overflow menu and no automatic back button.
 
 ## Rendering performance
 

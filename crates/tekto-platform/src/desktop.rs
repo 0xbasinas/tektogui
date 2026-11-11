@@ -64,6 +64,8 @@ struct State {
     viewport: Arc<Mutex<Viewport>>,
     /// Origin for [`Tree::advance`]. Zero at the first frame of this surface.
     anim_origin: Instant,
+    /// Set by a close control; the event loop exits on the next wake.
+    close_requested: bool,
     #[cfg(feature = "a11y-os")]
     adapter: accesskit_winit::Adapter,
 }
@@ -86,6 +88,7 @@ impl ApplicationHandler<AppEvent> for App {
         }
         let attrs = Window::default_attributes()
             .with_title(self.opts.title.clone())
+            .with_decorations(self.opts.decorations)
             .with_inner_size(winit::dpi::LogicalSize::new(
                 self.opts.width,
                 self.opts.height,
@@ -132,6 +135,7 @@ impl ApplicationHandler<AppEvent> for App {
             handle: self.handle.clone(),
             viewport: Arc::clone(&self.viewport),
             anim_origin: Instant::now(),
+            close_requested: false,
             #[cfg(feature = "a11y-os")]
             adapter,
         });
@@ -147,6 +151,14 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self
+            .state
+            .as_ref()
+            .is_some_and(|state| state.close_requested)
+        {
+            event_loop.exit();
+            return;
+        }
         // The commit echo, when the OS sends one, is already in this burst.
         // A key after the queue goes idle is the user's next keystroke.
         if let Some(state) = self.state.as_mut() {
@@ -250,6 +262,23 @@ impl ApplicationHandler<AppEvent> for App {
             } => {
                 if let Some(state) = self.state.as_mut() {
                     let pressed = button_state == ElementState::Pressed;
+                    if pressed {
+                        let drag = state
+                            .pointer
+                            .cursor
+                            .filter(|_| !state.pointer.swallow_mouse)
+                            .is_some_and(|(x, y)| {
+                                state
+                                    .tree
+                                    .lock()
+                                    .ok()
+                                    .is_some_and(|tree| tree.drag_region_at(x, y))
+                            });
+                        if drag {
+                            let _ = state.window.drag_window();
+                            return;
+                        }
+                    }
                     let op = state.pointer.on_left_button(pressed);
                     deliver_pointer(state, op);
                 }
@@ -687,8 +716,30 @@ fn deliver_pointer(state: &mut State, op: PointerOp) {
     } else {
         false
     };
+    let control = {
+        state
+            .tree
+            .lock()
+            .ok()
+            .and_then(|mut tree| tree.take_window_control())
+    };
+    if let Some(control) = control {
+        apply_window_control(state, control);
+    }
     if changed {
         state.window.request_redraw();
+    }
+}
+
+fn apply_window_control(state: &mut State, control: tekto_tree::WindowControl) {
+    match control {
+        tekto_tree::WindowControl::Minimize => state.window.set_minimized(true),
+        tekto_tree::WindowControl::Maximize => {
+            let maximized = state.window.is_maximized();
+            state.window.set_maximized(!maximized);
+        }
+        tekto_tree::WindowControl::Close => state.close_requested = true,
+        tekto_tree::WindowControl::None => {}
     }
 }
 
@@ -816,10 +867,23 @@ fn apply_field_key(state: &mut State, event: &KeyEvent) {
             state.modifiers.state(),
             &mut state.last_ime_commit,
         );
-        changed || click.is_some_and(|id| tree.click(id).is_ok())
+        if let Some(id) = click {
+            let _ = tree.click(id);
+        }
+        changed
     } else {
         false
     };
+    let control = {
+        state
+            .tree
+            .lock()
+            .ok()
+            .and_then(|mut tree| tree.take_window_control())
+    };
+    if let Some(control) = control {
+        apply_window_control(state, control);
+    }
     if changed {
         state.window.request_redraw();
     }
