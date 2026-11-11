@@ -60,7 +60,7 @@ export function renderToOps(element: TektoElement): HostOpJson[];
 
 /** JSX props for Tekto nodes. Reactive text is limited to text nodes. */
 export namespace JSX {
-  type CommonProps = { name?: string; title?: string; width?: number; height?: number; fill?: string; color?: string; fontSize?: number; padding?: number; gap?: number; column?: boolean; justifyCenter?: boolean; children?: unknown };
+  type CommonProps = { disabled?: boolean; name?: string; title?: string; width?: number; height?: number; fill?: string; color?: string; fontSize?: number; padding?: number; gap?: number; column?: boolean; justifyCenter?: boolean; children?: unknown };
   type StaticProps = CommonProps & { text?: string | number };
   interface IntrinsicElements {
     text: CommonProps & { text?: string | number | (() => string | number) };

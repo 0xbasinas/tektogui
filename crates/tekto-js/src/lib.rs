@@ -209,6 +209,7 @@ fn parse_bool(key: &str, value: &str) -> Result<bool, JsError> {
 /// Prop keys `setProp` accepts. `components.json` must stay inside this set
 /// (plus the JSX alias `title`, which is rewritten to `name` before the host).
 pub const HOST_PROP_KEYS: &[&str] = &[
+    "disabled",
     "width",
     "height",
     "column",
@@ -245,6 +246,7 @@ fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), J
     }
     let mut patch = NodePatch::default();
     match key {
+        "disabled" => patch.disabled = Some(parse_bool(key, value)?),
         "text" => patch.text = Some(value.into()),
         "name" => patch.name = Some(value.into()),
         "fill" => patch.fill = Some(value.into()),
@@ -315,6 +317,21 @@ pub fn eval_module(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_host_prop_updates_control_and_focus() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let button = tree.add(NodeKind::Button, Some(root)).unwrap();
+        tree.set_focus(button).unwrap();
+        set_prop(&mut tree, button, "disabled", "true").unwrap();
+        assert!(tree.get(button).unwrap().disabled);
+        assert_eq!(tree.focus, Some(root));
+        assert!(tree.click(button).is_err());
+        set_prop(&mut tree, button, "disabled", "false").unwrap();
+        assert!(tree.click(button).is_ok());
+        assert!(set_prop(&mut tree, button, "disabled", "invalid").is_err());
+    }
 
     #[test]
     fn native_clipboard_op_errors_clearly_without_a_session() {

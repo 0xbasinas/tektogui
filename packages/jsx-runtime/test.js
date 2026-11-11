@@ -186,3 +186,10 @@ test("failed mount rolls back created nodes and reactive bindings", async () => 
   setValue(1);
   assert.deepEqual(writes, [[2, "0"]]);
 });
+
+test("disabled controls lower their state to host props", () => {
+  for (const kind of ["button", "text_field"]) {
+    const ops = renderToOps(jsx(kind, { disabled: true }));
+    assert.ok(ops.some((op) => op.op === "setProp" && op.key === "disabled" && op.value === "true"));
+  }
+});
