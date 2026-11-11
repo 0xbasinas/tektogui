@@ -1,6 +1,6 @@
 # Round 3 research roadmap
 
-Status: 2026-11-11. This is a research roadmap, not a release promise or a list of GitHub issues. The original research was checked against `nightly` at `89726d8`; the progress below describes the **current working tree**, including uncommitted changes. It does not imply that changes have been merged or released.
+Status: 2026-11-11. This is a research roadmap, not a release promise or a list of GitHub issues. The original research was checked against `nightly` before round 3 began. The progress below describes `nightly` after PR #189 was merged (`05e6c67`), with the nightly CI run on that commit passing all five jobs. The repository history was rewritten later the same day, so any old commit hashes in earlier notes no longer resolve.
 
 Tekto keeps its own scene tree and stable ids, first-class Rust and TSX APIs, agent-first tools, lean default builds, and a plain default look. Sizes are rough: **S** is a few days, **M** one to two weeks, and **L** larger or cross-platform.
 
@@ -8,15 +8,15 @@ Tekto keeps its own scene tree and stable ids, first-class Rust and TSX APIs, ag
 
 1. **Text selection and accessibility.** Multiline selection, composition, and text-run geometry are covered by headless tests, a real Windows window was exercised at 125% scale, and the Notes APK ran on an x86_64 emulator. What is still unproven is a real IME candidate window: the desktop route handles `WindowEvent::Ime`, but no test drives an actual IME layout. OS accessibility smoke tests remain opt-in.
 2. **Context menus, tabs, and typed agent actions.** WASM tests cover menu reopening, retained tab callbacks, and conditional panel lifecycles with their owners. `js_owner::tests::typed_agent_actions_reach_retained_tsx_and_reject_unrealized_nodes` now drives `SemanticAction` against a retained QuickJS app and checks that an unattached node is neither found nor actionable. Browser and Safari interaction is still manual.
-3. **Generated-app builds.** `scripts/test-generated-apps.js` scaffolds an app and runs install, typecheck, and both builds with npm, pnpm, and bun; all three pass on Windows, and the nightly/manual CI job runs it. It has not been run against a published package.
+3. **Generated-app builds.** `scripts/test-generated-apps.js` scaffolds an app and runs install, typecheck, and both builds with npm, pnpm, and bun; all three pass on Windows, and the nightly/manual CI job (`Generated app builds`) has run it successfully on the merge commit. It has not been run against a published package.
 
 Navigation, tokens, right-to-left support, lazy lists, tables, charts and native extras are later work.
 
 ## Implemented foundations
 
-The current tree has CPU and Vello rounded rectangles, borders and lines; an overlay layer; menus, select and dialogs; switch, radio, slider and progress controls; web callbacks; keyed reload; and initial image support. Headless tests cover these slices. See the entries below for remaining work and validation limits.
+The current tree has CPU and Vello rounded rectangles, borders and lines; an overlay layer; menus, select, dialogs and context menus; switch, radio, slider, progress and tabs with bound panels; multiline text selection with IME composition; images with a per-image cache; web callbacks and keyed reload; the `tekto-test` helper; and a shared bundler with generated-app checks. Headless tests cover these slices. `tekto-tree` keeps the scene and core actions in `lib.rs` and the overlay, tab, field, animation, store and scroll logic in their own modules; `lib.rs` is 2,543 lines after the split (it was 3,235 before). See the entries below for remaining work and validation limits.
 
-The final tree was checked on Windows with rustc 1.99.1: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo check -p tekto-wasm --target wasm32-unknown-unknown`, and `npm test` with esbuild (76 passed, 0 skipped) all passed. `cargo test -p tekto --features gpu --lib gpu_ -- --include-ignored` and the ignored GPU image test passed with a real adapter. The Notes window ran at 125% scale, the CLI tree, screenshot and live patch worked against it, the Windows clipboard and file probe passed, the Notes APK ran on an x86_64 emulator with `tekto tree` over `adb forward`, and the browser host painted Notes in headless Chrome. These are one-off manual checks, not PR CI. Node/WASM tests do not replace every browser, and a headless GPU check does not prove every driver or device.
+The final tree was checked on Windows with rustc 1.99.1: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo check -p tekto-wasm --target wasm32-unknown-unknown`, and `npm test` with esbuild (76 passed, 0 skipped) all passed. `cargo test -p tekto --features gpu --lib gpu_ -- --include-ignored` and the ignored GPU image test passed with a real adapter. The Notes window ran at 125% scale, the CLI tree, screenshot and live patch worked against it, the TSX showcase accepted typed text and a select interaction, the Windows clipboard and file probe passed, the Notes APK ran on an x86_64 emulator with `tekto tree` over `adb forward`, and the browser host painted Notes in headless Chrome. Nightly CI on the merge commit then passed Linux check, Windows compile, Android compile, WASM and QuickJS checks, and Generated app builds. The manual checks are one-off, not PR CI; Node/WASM tests do not replace every browser, and a headless GPU check does not prove every driver or device.
 
 ## New crates
 
@@ -91,7 +91,7 @@ These are real ideas, but they should wait.
 
 **Implemented:** The helper and `tekto-build` CLI generate a web ES module or desktop QuickJS IIFE from a TSX entry. Generated apps have `build:web` and `build:desktop` scripts plus `esbuild` as a dev dependency, so both formats build after one install. `scripts/test-generated-apps.js` scaffolds an app and runs install, typecheck and both builds for every available package manager; npm, pnpm and bun each passed on Windows. Generated apps carry a `pnpm-workspace.yaml` that lets pnpm 10+ run esbuild's build script, and Windows shim discovery now handles both global and local `.bin` layouts, including pnpm's nested store. The web dev server uses the helper; Node tests cover build, reload and watcher isolation.
 
-**Remaining:** Desktop dev and the JavaScript helper share wrapper templates and compiler flags; desktop still invokes esbuild directly (the shared flag list is already used by both). The generated-app script runs on the nightly/manual CI job, not on PRs, and it has not been run against a published package.
+**Remaining:** Desktop dev and the JavaScript helper share wrapper templates and compiler flags; desktop still invokes esbuild directly (the shared flag list is already used by both). The generated-app script runs on the nightly/manual CI job and passed there on the merge commit, but not on PRs, and it has not been run against a published package.
 
 ### Keyed JSX helpers (`<For>`, `<Show>`)
 
@@ -101,7 +101,7 @@ These are real ideas, but they should wait.
 
 ### Later packages
 
-- **`create-tektogui` typecheck template:** Generated apps now include `tsconfig.json`, local package links and a `typecheck` script. The generated template typechecked locally using npm, pnpm and bun. JSX intrinsic declarations are generated from `components.json` and checked for drift. The scaffold test typechecks a generated project when workspace TypeScript is installed. TypeScript is Apache-2.0.
+- **`create-tektogui` typecheck template:** Generated apps now include `tsconfig.json`, local package links and a `typecheck` script. `scripts/test-generated-apps.js` runs that typecheck with npm, pnpm and bun, and the nightly CI job does the same. JSX intrinsic declarations are generated from `components.json` and checked for drift. The scaffold test typechecks a generated project when workspace TypeScript is installed, and its full `cargo check` is opt-in with `TEKTO_SCAFFOLD_CHECK=1`. TypeScript is Apache-2.0.
 - **`@tektogui/solid`:** An experimental Solid renderer on HostOp, as a peer dependency, not a replacement for `@tektogui/core`. Low, M–L. Solid is MIT. Do not copy code from Wabou or similar projects until their licences are checked. Optional only.
 - **`@tektogui/mcp-apps` or `@tektogui/a2ui`:** Adapters for [MCP Apps](https://apps.extensions.modelcontextprotocol.io/api/) or [A2UI](https://github.com/a2ui-project/a2ui) (Apache-2.0), only if a real consumer exists. Low, M. Do not embed a browser in the native renderer. Check the MCP Apps SDK licence before adding it.
 
@@ -131,13 +131,13 @@ These are real ideas, but they should wait.
 
 **Implemented:** Single-line selection, replacement and grapheme-aware movement/deletion; desktop mouse and keyboard selection and native clipboard; browser mouse and keyboard selection and clipboard events. IME composition text has an underline and selected-subrange highlight. Single-line fields expose AccessKit text runs and grapheme-aware selection metadata when their text and IDs can be represented; multiline fields expose one run per line, cross-line selection, and per-line bounds with per-character positions and widths (right-to-left lines report their direction and offset from the right edge). Layout stores one box per grapheme for text up to 4000 graphemes; longer text falls back to the field bounds. This uses the existing MIT OR Apache-2.0 `unicode-segmentation` dependency. A plain multiline field supports wrapping, vertical movement and caret scrolling. Headless tests cover selection, graphemes, emoji, IME commit and cancellation, disabled fields and paint.
 
-**Remaining — high priority:** Browser touch selection. Browser IME has host wiring and needs verification in a real browser. Desktop IME, real clipboard and Android overlay behavior still need live device checks. Bidirectional lines are covered by a headless Hebrew test only; mixed-direction lines are reported as one run, so per-run direction for mixed text and visual (not logical) caret movement still need work. IME composition is now tested to cancel on focus change, field disable and tab-panel hide.
+**Remaining — high priority:** Browser touch selection. Browser IME has host wiring and needs verification in a real browser. Desktop IME composition has not been driven through a real IME layout: the Windows pass typed committed text through the dev server, and the clipboard/file probe covers the native API rather than field copy and paste. The Android `EditText` overlay has not been exercised because Notes has no text field. Bidirectional lines are covered by a headless Hebrew test only; mixed-direction lines are reported as one run, so per-run direction for mixed text and visual (not logical) caret movement still need work. IME composition is now tested to cancel on focus change, field disable and tab-panel hide.
 
 ### Web TSX callbacks and keyed reload
 
 **Implemented:** WASM host delivers button clicks and field input, removes stale callbacks, and supports keyed signal reload state with reset reporting. Node/WASM tests exercise the retained paths; QuickJS remains optional.
 
-**Remaining:** Verify these flows in a real browser and expand parity coverage for controls and reload edge cases. Unkeyed state still resets; this is not whole-heap preservation.
+**Remaining:** Headless Chrome painted the Notes host page, but clicks, field input and reload have not been exercised in a real browser. Unkeyed state still resets; this is not whole-heap preservation.
 
 ### Test helpers, snapshots, and inspect (related slices)
 
@@ -145,9 +145,9 @@ These three work well together, and can share the `tekto-test` crate above.
 
 **Semantic snapshots, actions and inspect**
 
-**Implemented:** Scene and AccessKit dumps expose ids and state; `tekto-test` finds by role/name or unique test key. CLI `inspect` and MCP `ui.inspect` report ancestry, bounds, clipping and semantics. An inspector page and headless diagnostics tests are present. A versioned semantic snapshot and exact role/name search use the realized AccessKit tree and return duplicate matches. Typed focus, activation, toggle-state and text/slider value actions use the shared tree and retained callback hooks; existing click, key, type and scroll actions remain available.
+**Implemented:** Scene and AccessKit dumps expose ids and state; `tekto-test` finds by role/name or unique test key. CLI `inspect` and MCP `ui.inspect` report ancestry, bounds, clipping and semantics. An inspector page and headless diagnostics tests are present. A versioned semantic snapshot and exact role/name search use the realized AccessKit tree and return duplicate matches. Typed focus, activation, toggle-state and text/slider value actions use the shared tree and retained callback hooks; existing click, key, type and scroll actions remain available. `js_owner::tests::typed_agent_actions_reach_retained_tsx_and_reject_unrealized_nodes` drives `SemanticAction` against a retained QuickJS app, checks that activation and text input reach its callbacks, and rejects a node that exists in JS but was never attached.
 
-**Remaining:** Verify typed actions against retained TSX apps and unrealized rows, including callback failures and overlay restrictions. A debug overlay is optional; the current inspector page is not evidence of an in-window overlay.
+**Remaining:** Callback failures during a typed action and overlay restrictions are covered by the MCP unit tests but not yet by a retained-TSX end-to-end test. A debug overlay is optional; the current inspector page is not evidence of an in-window overlay.
 
 **Linux AT-SPI smoke test**
 
