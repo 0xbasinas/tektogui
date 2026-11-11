@@ -168,15 +168,9 @@ These three work well together, and can share the `tekto-test` crate above.
 
 ### Keyed lazy lists
 
-- **Name:** Build only visible rows from application keys.
-- **What it does:** Today's list already skips layout and paint for off-screen rows, but the row nodes still exist. Add an opt-in path backed by item count, stable app keys, and a visible-range builder, so off-screen nodes can be dropped. An agent request for an off-screen key should scroll, materialize, and then return a fresh snapshot.
-- **Why:** Flutter and Compose lazy lists keep memory bounded on large data. This is separate from JSX `<For>` (which is about keeping ids when items move).
-- **Priority:** medium. **Size:** L.
-- **Crates it touches:** `tekto-layout`, `tekto-widgets`, `tekto-tree`, `tekto-a11y`, MCP scroll/realize.
-- **Design notes:** New materializations get new monotonic NodeIds. Keys are not NodeIds. Define focus rules when a focused row leaves the viewport. First slice: no variable-height estimate, no grid, no network paging, no fake accessibility tree for unrealized rows.
-- **DX fit:** Same agent tree, honest errors for unrealized rows. No new deps.
-- **Acceptance:** A large synthetic list keeps a bounded node count. Reorder, focus, and semantic inspection are tested. Scroll-then-materialize works for agents.
-- **Licence:** Own MIT code.
+**Implemented (first slice):** `KeyedList` in `tekto-widgets` owns a scroll viewport, a row column, and top/bottom spacers sized from the item count and row height. `sync(tree, keys, overscan, build)` removes rows whose keys left the window, creates rows for keys that entered it, keeps the node id of a key that stayed visible, and rejects duplicate keys. `scroll_to_key` jumps to a key's offset so a host can then `sync` and materialize it. Rows are inserted in key order with the new `Tree::insert_child_at`, and new materializations get fresh monotonic ids. Tests cover a 1000-key list keeping fewer than 20 row nodes, id retention across a small scroll, dropping and recreating rows after a far scroll, scroll-to-key materialization, duplicate keys, and bad geometry.
+
+**Remaining:** This is app-driven: the host must call `sync` after a scroll, and there is no automatic materialize on an agent scroll (an agent can call `scroll_to_key` through the app or set the slider-style scroll then re-sync). No variable-height estimate, no grid, no network paging, no TSX binding, and no special focus rule when a focused row leaves the window. The existing `list` widget still keeps detached row nodes, so `KeyedList` is the opt-in path.
 
 ### Responsive layout helpers
 
