@@ -51,6 +51,7 @@ pub fn classify_present_failure(message: &str) -> PresentFailure {
 /// Backend-agnostic draw API.
 pub trait Renderer {
     fn resize(&mut self, width: u32, height: u32) -> Result<(), RenderError>;
+    /// Start a fresh frame, clearing the surface and any active clips.
     fn begin_frame(&mut self, clear: Color);
     fn fill_rect(&mut self, rect: Rect, color: Color);
     fn draw_text(
@@ -620,6 +621,33 @@ pub fn render_tree_png_scaled(
 mod tests {
     use super::*;
     use tekto_tree::{Color, Rect};
+
+    #[test]
+    fn cpu_clips_rounded_borders_and_resets_clips_each_frame() {
+        let mut renderer = CpuRenderer::new(32, 24).unwrap();
+        renderer.begin_frame(Color::PAGE);
+        renderer.push_clip(Rect::new(0.0, 0.0, 16.0, 24.0));
+        renderer.stroke_rrect(Rect::new(2.0, 2.0, 28.0, 20.0), 4.0, 3.0, Color::INK);
+        let pixels = renderer.rgba8().unwrap();
+        let pixel = |x: usize, y: usize| &pixels[(y * 32 + x) * 4..(y * 32 + x + 1) * 4];
+        assert_eq!(
+            pixel(8, 3),
+            &[Color::INK.r, Color::INK.g, Color::INK.b, 255]
+        );
+        assert_eq!(
+            pixel(24, 3),
+            &[Color::PAGE.r, Color::PAGE.g, Color::PAGE.b, 255]
+        );
+
+        renderer.begin_frame(Color::PAGE);
+        renderer.fill_rect(Rect::new(0.0, 0.0, 32.0, 24.0), Color::INK);
+        let pixels = renderer.rgba8().unwrap();
+        let offset = (12 * 32 + 24) * 4;
+        assert_eq!(
+            &pixels[offset..offset + 4],
+            &[Color::INK.r, Color::INK.g, Color::INK.b, 255]
+        );
+    }
 
     #[test]
     fn tokens_drive_new_nodes_and_the_ink_fallback() {
