@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "JSX components an agent can mount. Kinds match NodeKind and tekto-widgets. Each kind lists every prop the host setProp accepts, because JSX forwards that set on every kind. title, font_size, and justify_center are aliases (see propAliases). Button onClick and text-node reactive text need a retained QuickJS host; desktop action delivery is not yet wired.",
+  "description": "JSX components an agent can mount. Kinds match NodeKind and tekto-widgets. Each kind lists every prop the host setProp accepts, because JSX forwards that set on every kind. title, font_size, and justify_center are aliases (see propAliases). Button onClick and text-node reactive text need a retained QuickJS host; desktop QuickJS delivers button actions from pointer, keyboard, and agent clicks; web parity is not supported.",
   "propAliases": {
     "title": "name",
     "font_size": "fontSize",
@@ -110,7 +110,7 @@
         {"name": "justifyCenter", "type": "boolean"}
       ],
       "events": [
-        {"name": "click", "description": "Agent click; desktop callback delivery is not yet wired."}
+        {"name": "click", "description": "Agent click delivers the button callback in desktop QuickJS; web parity is not supported."}
       ]
     },
     {

@@ -251,6 +251,82 @@ mod tests {
             .unwrap()
     }
     #[test]
+    fn execution_budget_lifecycle_with_outer_timeout() {
+        const CHILD: &str = "TEKTO_BUDGET_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "js_owner::tests::execution_budget_lifecycle_with_outer_timeout",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success());
+                    return;
+                }
+                if std::time::Instant::now() >= deadline {
+                    child.kill().unwrap();
+                    child.wait().unwrap();
+                    panic!("budget lifecycle subprocess timed out");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+        let handle = handle();
+        let owner =
+            crate::install_js_runtime(&handle, &Arc::new(Mutex::new(Viewport::new(640, 400))));
+        assert!(owner
+            .mount("for (;;) {} ")
+            .unwrap_err()
+            .contains("budget exceeded"));
+        let generation = owner.mount(r#"
+            const root = tekto.create('window');
+            const label = tekto.create('text');
+            const button = tekto.create('button');
+            tekto.append(root, label); tekto.append(root, button);
+            let first = true;
+            tekto.onClick(button, () => { if (first) { first = false; for (;;) {} } tekto.setText(label, 'recovered'); });
+            tekto.onDispose(button, () => { for (;;) {} });
+        "#).unwrap();
+        assert!(handle
+            .click(NodeId::from_raw(3))
+            .unwrap_err()
+            .to_string()
+            .contains("budget exceeded"));
+        assert!(handle
+            .logs()
+            .iter()
+            .any(|line| line.contains("budget exceeded")));
+        assert!(handle.tree().get(NodeId::from_raw(3)).is_some());
+        handle
+            .patch(NodeId::from_raw(2), tekto_tree::NodePatch::default())
+            .unwrap();
+        assert!(owner
+            .mount("for (;;) {} ")
+            .unwrap_err()
+            .contains("budget exceeded"));
+        assert_eq!(owner.generation().unwrap(), generation);
+        handle.click(NodeId::from_raw(3)).unwrap();
+        assert_eq!(text(&handle), "recovered");
+        owner.mount(COUNTER).unwrap();
+        assert!(handle
+            .logs()
+            .iter()
+            .any(|line| line.contains("js cleanup failed") && line.contains("budget exceeded")));
+        handle.click(NodeId::from_raw(3)).unwrap();
+        assert_eq!(text(&handle), "1");
+        owner
+            .mount("tekto.onDispose(1, () => { for (;;) {} });")
+            .unwrap();
+        assert!(owner.shutdown().unwrap_err().contains("budget exceeded"));
+        assert!(owner.generation().is_err());
+    }
+    #[test]
     fn owner_mount_click_reload_and_shutdown() {
         let handle = handle();
         let calls = Arc::new(AtomicUsize::new(0));

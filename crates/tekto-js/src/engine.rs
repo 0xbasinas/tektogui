@@ -4,7 +4,11 @@ use rquickjs::{
     function::{Func, Opt},
     Context, Ctx, Object, Runtime, Value,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+const EXECUTION_BUDGET: Duration = Duration::from_secs(1);
 
 use crate::{apply_native_host_op, Host, HostOp, JsError, NativeOp};
 
@@ -50,11 +54,26 @@ fn throw<'js, T>(ctx: &Ctx<'js>, err: JsError) -> rquickjs::Result<T> {
 pub struct JsSession {
     context: Context,
     _runtime: Runtime,
+    deadline: Rc<Cell<Option<Instant>>>,
+    interrupted: Rc<Cell<bool>>,
 }
 
 impl JsSession {
     pub fn new() -> Result<Self, JsError> {
         let runtime = Runtime::new().map_err(|e| JsError::Message(e.to_string()))?;
+        let deadline = Rc::new(Cell::new(None::<Instant>));
+        let interrupted = Rc::new(Cell::new(false));
+        let handler_deadline = Rc::clone(&deadline);
+        let handler_interrupted = Rc::clone(&interrupted);
+        runtime.set_interrupt_handler(Some(Box::new(move || {
+            let expired = handler_deadline
+                .get()
+                .is_some_and(|end| Instant::now() >= end);
+            if expired {
+                handler_interrupted.set(true);
+            }
+            expired
+        })));
         let context = Context::full(&runtime).map_err(|e| JsError::Message(e.to_string()))?;
         context
             .with(|ctx| -> rquickjs::Result<()> {
@@ -73,6 +92,8 @@ impl JsSession {
         Ok(Self {
             context,
             _runtime: runtime,
+            deadline,
+            interrupted,
         })
     }
 
@@ -118,7 +139,9 @@ impl JsSession {
             return Err(JsError::Message("reentrant JS host call".into()));
         }
         let _guard = unsafe { attach_host(host) };
-        self.context.with(|ctx| match f(ctx.clone()) {
+        self.interrupted.set(false);
+        self.deadline.set(Some(Instant::now() + EXECUTION_BUDGET));
+        let result = self.context.with(|ctx| match f(ctx.clone()) {
             Ok(value) => Ok(value),
             Err(rquickjs::Error::Exception) => {
                 let exception = ctx.catch();
@@ -129,7 +152,15 @@ impl JsSession {
                 Err(JsError::Message(format!("QuickJS exception: {detail}")))
             }
             Err(err) => Err(JsError::Message(format_quickjs_error(&err))),
-        })
+        });
+        self.deadline.set(None);
+        if self.interrupted.replace(false) {
+            Err(JsError::Message(
+                "QuickJS execution budget exceeded (1 second)".into(),
+            ))
+        } else {
+            result
+        }
     }
 }
 

@@ -20,8 +20,8 @@ updates the existing text node; it does not rebuild the tree. Use it only on a
 on `button`. Other dynamic props, function children, text-input callbacks and
 reconciliation are not supported. An effect is disposed when its node is
 removed through the session host. Retire a session by calling `JsSession::dispose` with its host before dropping it.
-It runs all registered cleanups, reports the first error after trying the rest,
-and clears registrations even if cleanup fails. Drop alone cannot run host-backed cleanup.
+For ordinary cleanup errors it tries the remaining cleanups, reports the first error,
+and clears their registrations. An execution interruption can stop cleanup early. Drop alone cannot run host-backed cleanup.
 
 Call `mount(element, tekto, { createEffect })`, importing `createEffect` from
 `@tektogui/core`. Reactive mounts require `tekto.remove` for rollback. When
@@ -50,6 +50,15 @@ This surface is desktop QuickJS only. A host without registration and disposal
 hooks throws when mounting it, including `renderToOps` and the current web
 host. Web parity is not claimed.
 
-Callbacks and native operations have no execution time limit or cancellation.
-A callback that never returns blocks the owner and callers waiting on it,
-including reload and shutdown. Run only trusted app code.
+Each evaluation, callback, node cleanup, and session disposal has a fresh one-second
+QuickJS execution budget. The engine periodically checks a monotonic deadline and
+interrupts JavaScript when it expires; the caller receives a budget error and click
+failures are logged. The budget is fixed in `crates/tekto-js/src/engine.rs`, with
+no runtime configuration. A failed reload retains the previous session. After an
+interrupted callback the session remains available, but changes already made by the
+callback are not rolled back. Interrupted cleanup may leave registrations or effects
+unfinished; retiring the session drops the remaining JavaScript state.
+
+The deadline is checked only while QuickJS executes. Native Rust host operations and
+lock waits cannot generally be preempted, so this is not a strict wall-clock limit.
+Run only trusted app code.
