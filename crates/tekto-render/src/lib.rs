@@ -109,6 +109,32 @@ fn paint_node_opacity<R: Renderer>(
     if let Some(fill) = node.fill {
         renderer.fill_rect(node.bounds, with_opacity(fill, opacity));
     }
+    if tree.focus == Some(id)
+        && matches!(
+            node.kind,
+            tekto_tree::NodeKind::Button | tekto_tree::NodeKind::TextField
+        )
+    {
+        let b = node.bounds;
+        let color = with_opacity(
+            Color {
+                r: 42,
+                g: 100,
+                b: 190,
+                a: 255,
+            },
+            opacity,
+        );
+        let thickness = 2.0_f32.min(b.width / 2.0).min(b.height / 2.0).max(0.0);
+        for rect in [
+            Rect::new(b.x, b.y, b.width, thickness),
+            Rect::new(b.x, b.y + b.height - thickness, b.width, thickness),
+            Rect::new(b.x, b.y, thickness, b.height),
+            Rect::new(b.x + b.width - thickness, b.y, thickness, b.height),
+        ] {
+            renderer.fill_rect(rect, color);
+        }
+    }
     let composed;
     let mut placeholder = false;
     let text_to_draw = if node.kind == tekto_tree::NodeKind::TextField {
@@ -323,6 +349,27 @@ mod tests {
             let _ = std::fs::write(shot_dir.join("i38-anim-start.png"), &frames[0]);
             let _ = std::fs::write(shot_dir.join("i38-anim-mid.png"), &frames[6]);
             let _ = std::fs::write(shot_dir.join("i38-anim-end.png"), &frames[11]);
+        }
+    }
+
+    #[test]
+    fn focused_controls_have_visible_outline() {
+        use tekto_tree::NodeKind;
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        for kind in [NodeKind::Button, NodeKind::TextField] {
+            let id = tree.add(kind, Some(root)).unwrap();
+            tree.get_mut(id).unwrap().bounds = Rect::new(5.0, 5.0, 40.0, 20.0);
+            let mut renderer = CpuRenderer::new(50, 30).unwrap();
+            paint_tree(&mut renderer, &tree, Color::PAGE);
+            let before = renderer.rgba8().unwrap();
+            tree.set_focus(id).unwrap();
+            paint_tree(&mut renderer, &tree, Color::PAGE);
+            let after = renderer.rgba8().unwrap();
+            let pixel = (5 * 50 + 5) * 4;
+            assert_ne!(&before[pixel..pixel + 4], &after[pixel..pixel + 4]);
+            tree.set_focus(root).unwrap();
+            tree.remove(id).unwrap();
         }
     }
 

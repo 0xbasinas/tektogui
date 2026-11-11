@@ -741,6 +741,33 @@ impl Tree {
         Ok(())
     }
 
+    /// Move focus among attached buttons and text fields in depth-first tree order.
+    /// From a non-eligible focus, start at the first (or last when reversed).
+    /// Returns false if there are no eligible nodes.
+    pub fn traverse_focus(&mut self, reverse: bool) -> bool {
+        let mut stack: Vec<_> = self.root.into_iter().collect();
+        let mut eligible = Vec::new();
+        while let Some(id) = stack.pop() {
+            if let Some(node) = self.get(id) {
+                if matches!(node.kind, NodeKind::Button | NodeKind::TextField) {
+                    eligible.push(id);
+                }
+                stack.extend(node.children.iter().rev().copied());
+            }
+        }
+        if eligible.is_empty() {
+            return false;
+        }
+        let index = eligible.iter().position(|id| Some(*id) == self.focus);
+        let next = match (index, reverse) {
+            (Some(i), false) => (i + 1) % eligible.len(),
+            (Some(i), true) => (i + eligible.len() - 1) % eligible.len(),
+            (None, false) => 0,
+            (None, true) => eligible.len() - 1,
+        };
+        self.set_focus(eligible[next]).is_ok()
+    }
+
     /// Set AccessKit / keyboard focus. The id must already be in the tree.
     ///
     /// Leaving a text field drops its preedit. The composition is not committed.

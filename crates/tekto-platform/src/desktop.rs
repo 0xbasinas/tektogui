@@ -26,14 +26,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tekto_mcp::{AppHandle, SharedTreeHandle};
 use tekto_render::{paint_tree, CpuRenderer, Renderer};
-use tekto_tree::{FieldKey, ImeEvent, Tree, SCROLL_WHEEL_LINE};
+use tekto_tree::{ImeEvent, Tree, SCROLL_WHEEL_LINE};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{
     ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, NamedKey};
 use winit::window::{ImePurpose, Window, WindowId};
 
 /// Wakes the window when the dev server patches the tree.
@@ -727,46 +726,18 @@ fn apply_ime(state: &mut State, ime: Ime) {
     }
 }
 
-/// Printable characters and Backspace on the focused text field.
-///
-/// Ctrl, Alt, and Super chords are left alone. While a preedit is active,
-/// printable text goes through [`Tree::type_keyboard_text`] and is ignored.
-/// A key string that repeats the latest IME commit is dropped only until
-/// the event queue goes idle (Windows can echo the commit in that burst).
 fn apply_field_key(state: &mut State, event: &KeyEvent) {
-    if event.state != ElementState::Pressed {
-        return;
-    }
-    let is_backspace = event.logical_key == Key::Named(NamedKey::Backspace);
-    let plain = if is_backspace {
-        state.last_ime_commit = None;
-        None
-    } else {
-        let mods = state.modifiers.state();
-        if mods.control_key() || mods.alt_key() || mods.super_key() {
-            None
-        } else {
-            event
-                .text
-                .as_deref()
-                .map(|text| text.chars().filter(|c| !c.is_control()).collect::<String>())
-        }
-    };
-    let plain = match plain {
-        Some(text) if !crate::accept_keyboard_text(&mut state.last_ime_commit, &text) => return,
-        other => other,
-    };
-    let changed = if let Ok(mut tree) = state.tree.lock() {
-        if is_backspace {
-            tree.apply_field_key(FieldKey::Backspace).unwrap_or(false)
-        } else if let Some(plain) = plain.as_deref() {
-            tree.type_keyboard_text(plain).unwrap_or(false)
-        } else {
-            false
-        }
-    } else {
-        false
-    };
+    let changed = state.tree.lock().ok().is_some_and(|mut tree| {
+        crate::key_route::route_key(
+            &mut tree,
+            &event.logical_key,
+            event.text.as_deref(),
+            event.state,
+            event.repeat,
+            state.modifiers.state(),
+            &mut state.last_ime_commit,
+        )
+    });
     if changed {
         state.window.request_redraw();
     }
