@@ -617,9 +617,19 @@ fn deliver_pointer(state: &mut State, op: PointerOp) {
     } else if let Ok(mut tree) = state.tree.lock() {
         let effect = apply_pointer_op(&mut state.pointer, &mut tree, op, now);
         effect.redraw
-            || effect
-                .click_at
-                .is_some_and(|(x, y)| tree.click_at(x, y).is_some())
+            || effect.click_at.is_some_and(|(x, y)| {
+                let Some(id) = tree.hit(x, y) else {
+                    return false;
+                };
+                let caret = tekto_layout::field_caret_at(&tree, id, x, y);
+                if tree.click(id).is_err() {
+                    return false;
+                }
+                if let (Some(caret), Some(node)) = (caret, tree.get_mut(id)) {
+                    node.caret = caret;
+                }
+                true
+            })
     } else {
         false
     };

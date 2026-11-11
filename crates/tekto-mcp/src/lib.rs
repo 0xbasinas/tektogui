@@ -144,15 +144,29 @@ impl SharedTreeHandle {
         &self,
         route: impl FnOnce(&mut Tree) -> (bool, Option<NodeId>),
     ) -> Result<bool, McpError> {
+        self.route_action_with_caret(|tree| {
+            let (changed, id) = route(tree);
+            (changed, id, None)
+        })
+    }
+
+    /// Route an action and apply a host-computed field caret after activation.
+    pub fn route_action_with_caret(
+        &self,
+        route: impl FnOnce(&mut Tree) -> (bool, Option<NodeId>, Option<usize>),
+    ) -> Result<bool, McpError> {
         let _gate = self
             .action_gate
             .lock()
             .map_err(|e| McpError::msg(e.to_string()))?;
         let (changed, id) = {
             let mut tree = self.tree.lock().map_err(|e| McpError::msg(e.to_string()))?;
-            let (changed, id) = route(&mut tree);
+            let (changed, id, caret) = route(&mut tree);
             if let Some(id) = id {
                 tree.click(id).map_err(|e| McpError::msg(e.to_string()))?;
+                if let (Some(caret), Some(node)) = (caret, tree.get_mut(id)) {
+                    node.caret = caret.min(node.text.as_deref().unwrap_or("").chars().count());
+                }
             }
             (changed, id)
         };
