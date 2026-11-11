@@ -551,6 +551,11 @@ impl Tree {
         }
     }
 
+    /// Keep the Rust event handler when replacing a tree.
+    pub fn inherit_event_handler(&mut self, other: &Tree) {
+        self.event_handler = other.event_handler.clone();
+    }
+
     /// Install a synchronous handler for clicks and committed field changes.
     pub fn set_event_handler(
         &mut self,
