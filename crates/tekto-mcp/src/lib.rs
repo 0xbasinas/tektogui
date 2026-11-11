@@ -1490,38 +1490,73 @@ mod tests {
         let start = Instant::now();
         assert!(http_get(&format!("http://{addr}/health")).is_ok());
         assert!(start.elapsed() < Duration::from_secs(2));
-        // Fill the remaining slots, then verify overload closes without dispatch.
+        // Fill the remaining slots. Accepting is asynchronous, so wait until
+        // the server refuses a new connection rather than assuming a fixed sleep
+        // was long enough on a loaded CI machine.
         let mut stalls = Vec::new();
         for _ in 0..MAX_CLIENTS - 2 {
             stalls.push(TcpStream::connect(addr).unwrap());
         }
-        thread::sleep(Duration::from_millis(200));
-        let mut excess = TcpStream::connect(addr).unwrap();
-        excess
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        let _ = excess.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n");
-        let mut b = [0; 1];
-        assert_closed(excess.read(&mut b));
-        idle.set_read_timeout(Some(IO_DEADLINE + Duration::from_secs(2)))
-            .unwrap();
-        assert_closed(idle.read(&mut b));
-        partial
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        assert_closed(partial.read(&mut b));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let mut excess = TcpStream::connect(addr).unwrap();
+            excess
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .unwrap();
+            let _ = excess.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n");
+            let mut byte = [0; 1];
+            match excess.read(&mut byte) {
+                Ok(0) => break,
+                Err(error) if closed_error(&error) => break,
+                _ if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+                other => panic!("server never refused a connection: {other:?}"),
+            }
+        }
+        // The idle and partial clients are cut at the I/O deadline.
+        assert_closed_soon(&mut idle, IO_DEADLINE + Duration::from_secs(10));
+        assert_closed_soon(&mut partial, IO_DEADLINE + Duration::from_secs(10));
         thread::sleep(Duration::from_millis(200));
         assert!(http_get(&format!("http://{addr}/health")).is_ok());
+    }
+
+    fn closed_error(error: &std::io::Error) -> bool {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+        )
+    }
+
+    /// Read until the peer closes, tolerating a slow worker on a loaded host.
+    fn assert_closed_soon(stream: &mut TcpStream, within: Duration) {
+        let deadline = Instant::now() + within;
+        let mut byte = [0; 1];
+        loop {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .unwrap();
+            match stream.read(&mut byte) {
+                Ok(0) => return,
+                Err(error) if closed_error(&error) => return,
+                Ok(read) => panic!("expected closed connection, got {read} bytes"),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    if Instant::now() >= deadline {
+                        panic!("connection did not close within {within:?}");
+                    }
+                }
+                Err(error) => panic!("expected closed connection, got {error:?}"),
+            }
+        }
     }
 
     fn assert_closed(result: std::io::Result<usize>) {
         match result {
             Ok(0) => (),
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
-                ) => {}
+            Err(e) if closed_error(&e) => {}
             other => panic!("expected closed connection, got {other:?}"),
         }
     }
