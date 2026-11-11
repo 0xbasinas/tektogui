@@ -70,7 +70,7 @@ cargo apk2 build -p notes-android --target x86_64-linux-android
 cargo run -p tekto-cli -- build --target android
 ```
 
-The APK is at `$CARGO_TARGET_DIR/debug/apk/notes.apk` (default `target/debug/apk/notes.apk`; `.../release/apk/` with `--release`). There is no `<triple>` folder, even with `--target`. This is the path in the recorded cargo-apk2 audit log; the emulator was not started for this doc fix.
+Observed: the recorded cargo-apk2 audit log (`/workspace/audit-logs/apk.log`) shows a debug APK at `<target dir>/debug/apk/notes.apk`, with no `<triple>` folder, and only an x86_64 library inside. The log does not record the command line, so it does not show whether `--target` was passed. Not verified: the path for a `--target` build, any `--release` path (`.../release/apk/` is a guess), and the `adb install` examples below for those builds. Check the path cargo-apk2 prints before you install. The emulator was not started for this doc fix.
 Package id: `com.tektogui.notes`. Activity: `android.app.NativeActivity`.
 The activity *must* declare `android.app.lib_name` = `notes_android` (cargo-apk2 does not insert this unless the key is already in the manifest; without it NativeActivity looks for `libmain.so` and crashes).
 
