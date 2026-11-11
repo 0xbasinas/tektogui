@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Tekto browser parity</title>
+<style>body{font:14px monospace}canvas{border:0;display:block}#log{white-space:pre-wrap}</style>
+<canvas id="view" width="320" height="240" tabindex="0"></canvas>
+<pre id="log">running…</pre>
+<script type="module">
+import { jsx, mount } from "../jsx-runtime/src/index.js";
+import { connectWasm } from "./src/index.js";
+import { paintCanvas, attachCanvasInput } from "./src/canvas.js";
+
+const results = [];
+const logEl = document.querySelector("#log");
+let seen = "";
+const note = (value) => { seen = value; };
+function record(name, ok, detail = "") {
+  results.push(`${ok ? "PASS" : "FAIL"} ${name}${detail ? ": " + detail : ""}`);
+  logEl.textContent = results.join("\n");
+}
+const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+const canvas = document.querySelector("#view");
+const rect = () => canvas.getBoundingClientRect();
+
+function pointer(x, y) {
+  const r = rect();
+  const base = { clientX: r.left + x, clientY: r.top + y, bubbles: true, cancelable: true, pointerId: 1, pointerType: "mouse", isPrimary: true };
+  canvas.dispatchEvent(new PointerEvent("pointerdown", { ...base, button: 0, buttons: 1 }));
+  canvas.dispatchEvent(new PointerEvent("pointerup", { ...base, button: 0, buttons: 0 }));
+  canvas.dispatchEvent(new MouseEvent("click", { clientX: base.clientX, clientY: base.clientY, bubbles: true, cancelable: true }));
+}
+function rightClick(x, y) {
+  const r = rect();
+  canvas.dispatchEvent(new MouseEvent("contextmenu", { clientX: r.left + x, clientY: r.top + y, button: 2, bubbles: true, cancelable: true }));
+}
+function key(name) {
+  const target = document.activeElement && document.activeElement !== document.body ? document.activeElement : canvas;
+  target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
+}
+
+try {
+  const host = await connectWasm("./tekto_wasm.wasm");
+  host.reset();
+  const app = jsx("window", { title: "Parity", width: 320, height: 240, padding: 0, gap: 0, fill: "#f4f3f0", children: [
+    jsx("tab_list", { name: "Tabs", children: [
+      jsx("tab", { width: 100, height: 36, checked: true, children: "One" }, null),
+      jsx("tab", { width: 100, height: 36, onClick: () => note("tab"), children: "Two" }, null),
+    ] }, null),
+    jsx("button", {
+      width: 120, height: 40, onClick: () => note("button"), children: "Target",
+      contextMenu: jsx("menu", { name: "Actions", children: [
+        jsx("menu_item", { onClick: () => note("menu"), children: "Open" }, null),
+      ] }, null),
+    }, null),
+    jsx("text_field", { name: "Name", width: 200, height: 36, onInput: (value) => note("input:" + value) }, null),
+  ] }, null);
+  mount(app, host);
+  await paintCanvas(host, canvas, 320, 240);
+  attachCanvasInput(host, canvas);
+  await frame();
+
+  note("");
+  pointer(60, 56);
+  await frame();
+  record("button click", seen === "button", seen);
+
+  note("");
+  rightClick(60, 56);
+  await frame();
+  pointer(80, 82);
+  await frame();
+  record("context menu item", seen === "menu", seen);
+
+  note("");
+  rightClick(60, 56);
+  await frame();
+  key("Escape");
+  await frame();
+  pointer(80, 82);
+  await frame();
+  record("Escape closes the overlay", seen === "", seen || "(no callback)");
+
+  note("");
+  pointer(150, 18);
+  await frame();
+  record("tab click", seen === "tab", seen);
+
+  note("");
+  pointer(100, 94);
+  await frame();
+  const textarea = document.querySelector("textarea");
+  if (!textarea) throw new Error("the field did not attach its browser input");
+  textarea.value = "Ada";
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  await frame();
+  record("field input", seen === "input:Ada", seen);
+
+  const failed = results.filter((line) => line.startsWith("FAIL"));
+  results.push(failed.length === 0 ? "ALL PASS" : `FAILED ${failed.length}`);
+  logEl.textContent = results.join("\n");
+  document.title = failed.length === 0 ? "PASS" : "FAIL";
+} catch (error) {
+  results.push(`FAIL threw: ${error && error.message ? error.message : error}`);
+  results.push("FAILED 1");
+  logEl.textContent = results.join("\n");
+  document.title = "FAIL";
+}
+</script>

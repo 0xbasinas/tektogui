@@ -217,6 +217,13 @@ Each of these is a separate slice in `tekto-native`, with `Unsupported` / `Unava
 - **Deep links and a share sheet.** Medium, S–M per platform. One host at a time, with injectable mocks so agents can observe the result. Native window menus, OS drag-and-drop, and multi-window are later and larger.
 - **Read-only rich text spans.** Medium, later, M. After the multi-line plain field works, a `Text` node may hold bold, colour, size, and links. Parley already supports spans. This is not a rich editor. An extra bold font file should be opt-in because of size.
 
+## Host parity checks (manual)
+
+- **Browser:** `packages/wasm/parity.html` builds a tab list, a button with a context menu, and a text field on the WASM canvas. `scripts/browser-parity.mjs` serves the page, launches headless Chrome, drives it over the DevTools protocol with real `PointerEvent`, `MouseEvent("contextmenu")`, `KeyboardEvent`, and a `textarea` input, and checks the callback log. On this machine all five steps pass: button click, context-menu item, Escape closing the overlay, tab selection, and field input. `npm run test:browser` runs it. It needs Chrome and a wasm build, so it is not in CI.
+- **GPU:** the CPU/Vello parity tests and the GPU image test pass on the one adapter this machine exposes. Other drivers, Android GPUs, and browser WebGPU are unverified.
+- **Android:** the Notes APK builds, installs, paints on the x86_64 AVD, and answers `tekto tree` over `adb forward`. The NativeActivity text field and IME overlay still need a live type-into-field check because the Notes screen has no field.
+- **Desktop IME:** the Windows route handles `WindowEvent::Ime`, but no test drives a real IME layout; the Windows pass typed committed text only.
+
 ## Not doing
 
 These were looked at and rejected, or deferred on purpose.
