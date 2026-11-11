@@ -25,6 +25,7 @@ tekto-layout = { workspace = true }
 tekto-render = { workspace = true }
 # HostOp protocol only. Do not enable `quickjs` on this crate.
 tekto-js = { workspace = true }
+tekto-text = { workspace = true }
 serde_json = { workspace = true }
 # Only linked with `--features gpu`. MIT OR Apache-2.0.
 wasm-bindgen = { version = "0.2.130", optional = true }
