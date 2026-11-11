@@ -1203,6 +1203,14 @@ impl Tree {
         let node = self.nodes.get_mut(&id).ok_or_else(|| TreeError {
             message: format!("unknown node {id}"),
         })?;
+        if patch.disabled.is_some() && !matches!(node.kind, NodeKind::Button | NodeKind::TextField)
+        {
+            return Err(TreeError {
+                message: format!(
+                    "disabled is only supported on buttons and text fields (node {id})"
+                ),
+            });
+        }
         if let Some(disabled) = patch.disabled {
             node.disabled = disabled;
         }

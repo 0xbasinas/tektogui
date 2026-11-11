@@ -11,7 +11,6 @@
       "name": "window",
       "description": "Root window. Defaults to page fill, padding, and gap, like tekto::window.",
       "props": [
-        {"name": "disabled", "type": "boolean"},
         {"name": "name", "type": "string", "description": "Accessible name. JSX title is an alias."},
         {"name": "title", "type": "string", "description": "Alias of name."},
         {"name": "text", "type": "string"},
@@ -33,7 +32,6 @@
       "name": "group",
       "description": "Layout box with no paint of its own.",
       "props": [
-        {"name": "disabled", "type": "boolean"},
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
         {"name": "text", "type": "string"},
@@ -55,7 +53,6 @@
       "name": "rect",
       "description": "Filled rectangle. The Rust banner() helper is a rect named banner, not a separate kind.",
       "props": [
-        {"name": "disabled", "type": "boolean"},
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
         {"name": "text", "type": "string"},
@@ -77,7 +74,6 @@
       "name": "text",
       "description": "Text leaf. A string child becomes the text. The text prop may be a function on a retained QuickJS host.",
       "props": [
-        {"name": "disabled", "type": "boolean"},
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
         {"name": "text", "type": "string"},
@@ -147,7 +143,6 @@
       "name": "scroll",
       "description": "Vertical viewport. Children keep their height. Paint is clipped. scroll_y shifts them.",
       "props": [
-        {"name": "disabled", "type": "boolean"},
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
         {"name": "text", "type": "string"},
@@ -170,7 +165,6 @@
       "name": "list",
       "description": "Column of list_item rows. JSX does not add a scroll parent; wrap the list in scroll when it should clip. The Rust list() helper may insert that scroll.",
       "props": [
-        {"name": "disabled", "type": "boolean"},
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
         {"name": "text", "type": "string"},
@@ -192,7 +186,6 @@
       "name": "list_item",
       "description": "One list row. name and text are the label.",
       "props": [
-        {"name": "disabled", "type": "boolean"},
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
         {"name": "text", "type": "string"},
