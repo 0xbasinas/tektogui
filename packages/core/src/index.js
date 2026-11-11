@@ -81,13 +81,19 @@ export function createSignal(value, options = {}) {
 /**
  * Host op for a quiet style tween. The Rust tree samples the current
  * value and the desktop loop advances time. `props` may set `opacity`,
- * `x`, `y`, `width`, `height`, and `durationMs` (default 180 in Rust).
+ * `x`, `y`, `width`, `height`, `fill`, `color` (hex strings),
+ * `easing` (`smoothstep`, `linear`, `ease-in`, `ease-out`), `repeat`,
+ * and `durationMs` (default 180 in Rust).
  */
 export function transitionOp(id, props = {}) {
   const op = { op: "transition", id };
   for (const key of ["opacity", "x", "y", "width", "height"]) {
     if (props[key] != null) op[key] = String(props[key]);
   }
+  for (const key of ["fill", "color", "easing"]) {
+    if (props[key] != null) op[key] = String(props[key]);
+  }
+  if (props.repeat != null) op.repeat = Boolean(props.repeat);
   if (props.durationMs != null) op.durationMs = props.durationMs;
   return op;
 }

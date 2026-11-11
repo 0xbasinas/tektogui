@@ -11,14 +11,44 @@
 //! size channel finishes (including a snap), the target is written into
 //! [`crate::LayoutStyle`] so the next layout keeps it.
 
-use crate::{NodeId, Rect, Tree, TreeError};
+use crate::{Color, NodeId, Rect, Tree, TreeError};
 
 /// Default length of a style transition, in milliseconds.
 pub const DEFAULT_TRANSITION_MS: f32 = 180.0;
 
+/// Curve applied to a transition's progress. Defaults to [`Easing::Smoothstep`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Easing {
+    #[default]
+    Smoothstep,
+    Linear,
+    EaseIn,
+    EaseOut,
+}
+
+impl Easing {
+    pub fn apply(self, t: f32) -> f32 {
+        match self {
+            Easing::Smoothstep => ease_smoothstep(t),
+            Easing::Linear => t.clamp(0.0, 1.0),
+            Easing::EaseIn => {
+                let t = t.clamp(0.0, 1.0);
+                t * t
+            }
+            Easing::EaseOut => {
+                let t = t.clamp(0.0, 1.0);
+                1.0 - (1.0 - t) * (1.0 - t)
+            }
+        }
+    }
+}
+
 /// Props a node can move. Unset fields stay put.
 ///
 /// `duration_ms: None` uses [`DEFAULT_TRANSITION_MS`]. Zero snaps to the end.
+/// `repeat` swaps the endpoints and runs again whenever the last channel
+/// finishes, which gives a quiet pulse or back-and-forth motion. Reduced
+/// motion still snaps once and does not repeat.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StyleTransition {
     pub opacity: Option<f32>,
@@ -26,6 +56,12 @@ pub struct StyleTransition {
     pub y: Option<f32>,
     pub width: Option<f32>,
     pub height: Option<f32>,
+    /// Fill colour, including alpha.
+    pub fill: Option<Color>,
+    /// Text and glyph colour.
+    pub color: Option<Color>,
+    pub easing: Option<Easing>,
+    pub repeat: bool,
     pub duration_ms: Option<f32>,
 }
 
@@ -36,6 +72,8 @@ impl StyleTransition {
             || self.y.is_some()
             || self.width.is_some()
             || self.height.is_some()
+            || self.fill.is_some()
+            || self.color.is_some()
     }
 }
 
@@ -45,6 +83,11 @@ pub fn ease_smoothstep(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Linear progress, for motion that should not ease at the ends.
+pub fn ease_linear(t: f32) -> f32 {
+    t.clamp(0.0, 1.0)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChannelKind {
     Opacity,
@@ -52,13 +95,54 @@ enum ChannelKind {
     Y,
     Width,
     Height,
+    Fill,
+    Color,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ChannelValue {
+    Number { from: f32, to: f32 },
+    Rgba { from: Color, to: Color },
+}
+
+impl ChannelValue {
+    fn number(self, eased: f32) -> Option<f32> {
+        match self {
+            ChannelValue::Number { from, to } => Some(from + (to - from) * eased),
+            ChannelValue::Rgba { .. } => None,
+        }
+    }
+
+    fn color(self, eased: f32) -> Option<Color> {
+        match self {
+            ChannelValue::Rgba { from, to } => Some(Color::rgba(
+                mix_channel(from.r, to.r, eased),
+                mix_channel(from.g, to.g, eased),
+                mix_channel(from.b, to.b, eased),
+                mix_channel(from.a, to.a, eased),
+            )),
+            ChannelValue::Number { .. } => None,
+        }
+    }
+
+    fn swap(self) -> Self {
+        match self {
+            ChannelValue::Number { from, to } => ChannelValue::Number { from: to, to: from },
+            ChannelValue::Rgba { from, to } => ChannelValue::Rgba { from: to, to: from },
+        }
+    }
+}
+
+fn mix_channel(from: u8, to: u8, eased: f32) -> u8 {
+    let value = f32::from(from) + (f32::from(to) - f32::from(from)) * eased;
+    value.round().clamp(0.0, 255.0) as u8
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Channel {
     kind: ChannelKind,
-    from: f32,
-    to: f32,
+    value: ChannelValue,
+    easing: Easing,
     /// `None` until the first [`Tree::advance`] after this channel was requested.
     start_ms: Option<f64>,
     duration_ms: f64,
@@ -68,6 +152,7 @@ struct Channel {
 pub(crate) struct ActiveTransition {
     node: NodeId,
     channels: Vec<Channel>,
+    repeat: bool,
 }
 
 /// `TEKTO_REDUCE_MOTION=1` (also `true`, `yes`, `on`) asks the app to snap.
@@ -114,7 +199,7 @@ impl Tree {
     pub fn transition(&mut self, id: NodeId, spec: StyleTransition) -> Result<(), TreeError> {
         if !spec.any_prop() {
             return Err(TreeError {
-                message: "transition needs opacity, x, y, width, or height".into(),
+                message: "transition needs opacity, x, y, width, height, fill, or color".into(),
             });
         }
         let node = self.nodes.get(&id).ok_or_else(|| TreeError {
@@ -122,27 +207,35 @@ impl Tree {
         })?;
         let bounds = node.bounds;
         let opacity = node.opacity;
+        let fill = node.fill;
+        let color = node.color;
+        let easing = spec.easing.unwrap_or_default();
         let mut channels = Vec::new();
-        push_channel(
+        push_number(
             &mut channels,
             ChannelKind::Opacity,
             spec.opacity.map(|v| v.clamp(0.0, 1.0)),
             opacity,
+            easing,
         );
-        push_channel(&mut channels, ChannelKind::X, spec.x, bounds.x);
-        push_channel(&mut channels, ChannelKind::Y, spec.y, bounds.y);
-        push_channel(
+        push_number(&mut channels, ChannelKind::X, spec.x, bounds.x, easing);
+        push_number(&mut channels, ChannelKind::Y, spec.y, bounds.y, easing);
+        push_number(
             &mut channels,
             ChannelKind::Width,
             spec.width.map(|v| v.max(0.0)),
             bounds.width,
+            easing,
         );
-        push_channel(
+        push_number(
             &mut channels,
             ChannelKind::Height,
             spec.height.map(|v| v.max(0.0)),
             bounds.height,
+            easing,
         );
+        push_color(&mut channels, ChannelKind::Fill, spec.fill, fill, easing);
+        push_color(&mut channels, ChannelKind::Color, spec.color, color, easing);
         let duration = spec.duration_ms.unwrap_or(DEFAULT_TRANSITION_MS);
         if self.reduced_motion || !duration.is_finite() || duration <= 0.0 {
             apply_channels(self, id, &channels, 1.0);
@@ -155,7 +248,7 @@ impl Tree {
             channel.duration_ms = duration_ms;
             channel.start_ms = None;
         }
-        self.merge_channels(id, channels);
+        self.merge_channels(id, channels, spec.repeat);
         Ok(())
     }
 
@@ -204,10 +297,17 @@ impl Tree {
                     self,
                     anim.node,
                     std::slice::from_ref(channel),
-                    ease_smoothstep(raw),
+                    channel.easing.apply(raw),
                 );
                 if done {
-                    done_channels.push(*channel);
+                    if anim.repeat {
+                        // Ping-pong: run the same span back, one cycle per advance.
+                        channel.value = channel.value.swap();
+                        channel.start_ms = Some(now);
+                        keep.push(*channel);
+                    } else {
+                        done_channels.push(*channel);
+                    }
                 } else {
                     keep.push(*channel);
                 }
@@ -238,7 +338,7 @@ impl Tree {
         }
     }
 
-    fn merge_channels(&mut self, id: NodeId, channels: Vec<Channel>) {
+    fn merge_channels(&mut self, id: NodeId, channels: Vec<Channel>, repeat: bool) {
         if channels.is_empty() {
             return;
         }
@@ -247,10 +347,14 @@ impl Tree {
                 existing.channels.retain(|old| old.kind != channel.kind);
                 existing.channels.push(channel);
             }
+            existing.repeat = repeat;
             return;
         }
-        self.transitions
-            .push(ActiveTransition { node: id, channels });
+        self.transitions.push(ActiveTransition {
+            node: id,
+            channels,
+            repeat,
+        });
     }
 
     fn drop_channel_kinds(&mut self, id: NodeId, channels: &[Channel]) {
@@ -263,7 +367,13 @@ impl Tree {
     }
 }
 
-fn push_channel(out: &mut Vec<Channel>, kind: ChannelKind, to: Option<f32>, from: f32) {
+fn push_number(
+    out: &mut Vec<Channel>,
+    kind: ChannelKind,
+    to: Option<f32>,
+    from: f32,
+    easing: Easing,
+) {
     let Some(to) = to else {
         return;
     };
@@ -273,8 +383,30 @@ fn push_channel(out: &mut Vec<Channel>, kind: ChannelKind, to: Option<f32>, from
     let from = if from.is_finite() { from } else { to };
     out.push(Channel {
         kind,
-        from,
-        to,
+        value: ChannelValue::Number { from, to },
+        easing,
+        start_ms: None,
+        duration_ms: DEFAULT_TRANSITION_MS as f64,
+    });
+}
+
+fn push_color(
+    out: &mut Vec<Channel>,
+    kind: ChannelKind,
+    to: Option<Color>,
+    from: Option<Color>,
+    easing: Easing,
+) {
+    let Some(to) = to else {
+        return;
+    };
+    // A node with no colour yet starts from the target, so the first frame
+    // does not flash an invented colour.
+    let from = from.unwrap_or(to);
+    out.push(Channel {
+        kind,
+        value: ChannelValue::Rgba { from, to },
+        easing,
         start_ms: None,
         duration_ms: DEFAULT_TRANSITION_MS as f64,
     });
@@ -292,18 +424,21 @@ fn commit_layout_targets(tree: &mut Tree, id: NodeId, channels: &[Channel]) {
     let mut dx = 0.0;
     let mut dy = 0.0;
     for channel in channels {
+        let ChannelValue::Number { from, to } = channel.value else {
+            continue;
+        };
         match channel.kind {
-            ChannelKind::Opacity => {}
+            ChannelKind::Opacity | ChannelKind::Fill | ChannelKind::Color => {}
             ChannelKind::X => {
-                node.layout.x = channel.to;
-                dx += channel.to - channel.from;
+                node.layout.x = to;
+                dx += to - from;
             }
             ChannelKind::Y => {
-                node.layout.y = channel.to;
-                dy += channel.to - channel.from;
+                node.layout.y = to;
+                dy += to - from;
             }
-            ChannelKind::Width => node.layout.width = channel.to,
-            ChannelKind::Height => node.layout.height = channel.to,
+            ChannelKind::Width => node.layout.width = to,
+            ChannelKind::Height => node.layout.height = to,
         }
     }
     if dx != 0.0 || dy != 0.0 {
@@ -315,17 +450,36 @@ fn apply_channels(tree: &mut Tree, id: NodeId, channels: &[Channel], eased: f32)
     let Some(node) = tree.nodes.get_mut(&id) else {
         return;
     };
-    let mix = |from: f32, to: f32| from + (to - from) * eased;
     let mut bounds: Rect = node.bounds;
     for channel in channels {
         match channel.kind {
             ChannelKind::Opacity => {
-                node.opacity = mix(channel.from, channel.to).clamp(0.0, 1.0);
+                if let Some(value) = channel.value.number(eased) {
+                    node.opacity = value.clamp(0.0, 1.0);
+                }
             }
-            ChannelKind::X => bounds.x = mix(channel.from, channel.to),
-            ChannelKind::Y => bounds.y = mix(channel.from, channel.to),
-            ChannelKind::Width => bounds.width = mix(channel.from, channel.to).max(0.0),
-            ChannelKind::Height => bounds.height = mix(channel.from, channel.to).max(0.0),
+            ChannelKind::X => {
+                if let Some(value) = channel.value.number(eased) {
+                    bounds.x = value;
+                }
+            }
+            ChannelKind::Y => {
+                if let Some(value) = channel.value.number(eased) {
+                    bounds.y = value;
+                }
+            }
+            ChannelKind::Width => {
+                if let Some(value) = channel.value.number(eased) {
+                    bounds.width = value.max(0.0);
+                }
+            }
+            ChannelKind::Height => {
+                if let Some(value) = channel.value.number(eased) {
+                    bounds.height = value.max(0.0);
+                }
+            }
+            ChannelKind::Fill => node.fill = channel.value.color(eased),
+            ChannelKind::Color => node.color = channel.value.color(eased),
         }
     }
     let dx = bounds.x - node.bounds.x;
@@ -477,6 +631,105 @@ mod tests {
             assert!((0.0..=1.0).contains(&e), "{e}");
         }
         assert!((ease_smoothstep(0.5) - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn fill_and_text_colour_mix_between_endpoints() {
+        let mut tree = Tree::new();
+        let id = box_node(&mut tree);
+        tree.get_mut(id).unwrap().fill = Some(Color::rgb(200, 0, 0));
+        tree.get_mut(id).unwrap().color = Some(Color::rgb(0, 0, 0));
+        tree.transition(
+            id,
+            StyleTransition {
+                fill: Some(Color::rgb(0, 0, 200)),
+                color: Some(Color::rgb(200, 200, 200)),
+                easing: Some(Easing::Linear),
+                duration_ms: Some(100.0),
+                ..StyleTransition::default()
+            },
+        )
+        .unwrap();
+        assert!(tree.advance(0.0));
+        assert!(tree.advance(50.0));
+        let mid = tree.get(id).unwrap();
+        let fill = mid.fill.unwrap();
+        assert!(
+            (95..=105).contains(&fill.r) && (95..=105).contains(&fill.b),
+            "{fill:?}"
+        );
+        assert_eq!(fill.a, 255);
+        let color = mid.color.unwrap();
+        assert!((95..=105).contains(&color.r), "{color:?}");
+        assert!(!tree.advance(100.0));
+        assert_eq!(tree.get(id).unwrap().fill, Some(Color::rgb(0, 0, 200)));
+        assert_eq!(tree.get(id).unwrap().color, Some(Color::rgb(200, 200, 200)));
+    }
+
+    #[test]
+    fn named_easings_are_distinct_and_stay_in_range() {
+        assert_eq!(ease_linear(0.25), 0.25);
+        assert!((Easing::EaseIn.apply(0.25) - 0.0625).abs() < 0.001);
+        assert!((Easing::EaseOut.apply(0.25) - 0.4375).abs() < 0.001);
+        for easing in [
+            Easing::Linear,
+            Easing::EaseIn,
+            Easing::EaseOut,
+            Easing::Smoothstep,
+        ] {
+            for step in 0..=10 {
+                let value = easing.apply(step as f32 / 10.0);
+                assert!((0.0..=1.0).contains(&value), "{value}");
+            }
+        }
+    }
+
+    #[test]
+    fn repeat_ping_pongs_and_keeps_running() {
+        let mut tree = Tree::new();
+        let id = box_node(&mut tree);
+        tree.transition(
+            id,
+            StyleTransition {
+                opacity: Some(0.0),
+                easing: Some(Easing::Linear),
+                repeat: true,
+                duration_ms: Some(100.0),
+                ..StyleTransition::default()
+            },
+        )
+        .unwrap();
+        assert!(tree.advance(0.0));
+        assert!(tree.advance(100.0));
+        assert!(tree.get(id).unwrap().opacity < 0.01);
+        // The endpoint swaps, so the next cycle goes back toward the start.
+        assert!(tree.advance(150.0));
+        let mid = tree.get(id).unwrap().opacity;
+        assert!(mid > 0.3 && mid < 0.7, "{mid}");
+        assert!(tree.advance(200.0));
+        assert!(tree.get(id).unwrap().opacity > 0.99);
+        assert!(tree.animations_running());
+    }
+
+    #[test]
+    fn repeat_snaps_once_when_motion_is_reduced() {
+        let mut tree = Tree::new();
+        let id = box_node(&mut tree);
+        tree.set_reduced_motion(true);
+        tree.transition(
+            id,
+            StyleTransition {
+                opacity: Some(0.2),
+                repeat: true,
+                duration_ms: Some(100.0),
+                ..StyleTransition::default()
+            },
+        )
+        .unwrap();
+        assert!((tree.get(id).unwrap().opacity - 0.2).abs() < 0.001);
+        assert!(!tree.animations_running());
+        assert!(!tree.advance(10_000.0));
+        assert!((tree.get(id).unwrap().opacity - 0.2).abs() < 0.001);
     }
 
     #[test]

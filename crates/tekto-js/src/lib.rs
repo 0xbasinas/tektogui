@@ -9,7 +9,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
-use tekto_tree::{NodeId, NodeKind, NodePatch, OverlaySide, StyleTransition, Tree, TreeError};
+use tekto_tree::{
+    Color, Easing, NodeId, NodeKind, NodePatch, OverlaySide, StyleTransition, Tree, TreeError,
+};
 use thiserror::Error;
 
 #[cfg(feature = "quickjs")]
@@ -97,6 +99,18 @@ pub enum HostOp {
         width: Option<String>,
         #[serde(default)]
         height: Option<String>,
+        /// Hex fill colour, for example `#3a424a`.
+        #[serde(default)]
+        fill: Option<String>,
+        /// Hex text colour.
+        #[serde(default)]
+        color: Option<String>,
+        /// `smoothstep` (default), `linear`, `ease-in`, or `ease-out`.
+        #[serde(default)]
+        easing: Option<String>,
+        /// Swap endpoints and run again when the last channel finishes.
+        #[serde(default)]
+        repeat: bool,
         #[serde(default)]
         duration_ms: Option<u32>,
     },
@@ -195,6 +209,10 @@ pub fn apply_ops(tree: &mut Tree, ops: &[HostOp]) -> Result<Vec<u64>, JsError> {
                 y,
                 width,
                 height,
+                fill,
+                color,
+                easing,
+                repeat,
                 duration_ms,
             } => {
                 let num = |key: &str, value: &Option<String>| -> Result<Option<f32>, JsError> {
@@ -211,6 +229,10 @@ pub fn apply_ops(tree: &mut Tree, ops: &[HostOp]) -> Result<Vec<u64>, JsError> {
                         y: num("y", y)?,
                         width: num("width", width)?,
                         height: num("height", height)?,
+                        fill: parse_color("fill", fill)?,
+                        color: parse_color("color", color)?,
+                        easing: parse_easing(easing)?,
+                        repeat: *repeat,
                         duration_ms: duration_ms.map(|ms| ms as f32),
                     },
                 )?;
@@ -224,6 +246,33 @@ fn parse_f32(key: &str, value: &str) -> Result<f32, JsError> {
     value
         .parse::<f32>()
         .map_err(|_| JsError::Message(format!("{key} must be a number, got `{value}`")))
+}
+
+fn parse_color(key: &str, value: &Option<String>) -> Result<Option<Color>, JsError> {
+    match value {
+        None => Ok(None),
+        Some(text) => Color::from_hex(text).map(Some).ok_or_else(|| {
+            JsError::Message(format!("{key} must be #rrggbb or #rrggbbaa, got `{text}`"))
+        }),
+    }
+}
+
+fn parse_easing(value: &Option<String>) -> Result<Option<Easing>, JsError> {
+    let Some(text) = value else {
+        return Ok(None);
+    };
+    let easing = match text.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "smoothstep" | "smooth" | "default" => Easing::Smoothstep,
+        "linear" => Easing::Linear,
+        "ease-in" | "easein" => Easing::EaseIn,
+        "ease-out" | "easeout" => Easing::EaseOut,
+        other => {
+            return Err(JsError::Message(format!(
+                "easing must be smoothstep, linear, ease-in, or ease-out, got `{other}`"
+            )))
+        }
+    };
+    Ok(Some(easing))
 }
 
 fn parse_dim(key: &str, value: &str) -> Result<f32, JsError> {
@@ -827,6 +876,10 @@ mod tests {
                 y: None,
                 width: None,
                 height: None,
+                fill: None,
+                color: None,
+                easing: None,
+                repeat: false,
                 duration_ms: Some(100),
             }],
         )
@@ -839,6 +892,87 @@ mod tests {
         assert!(!tree.advance(100.0));
         assert!(tree.get(id).unwrap().opacity < 0.01);
         assert!((tree.get(id).unwrap().bounds.x - 40.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn transition_op_accepts_colour_easing_and_repeat() {
+        let mut tree = Tree::new();
+        let id = tree.add(NodeKind::Rect, None).unwrap();
+        tree.get_mut(id).unwrap().fill = Some(tekto_tree::Color::rgb(200, 0, 0));
+        tree.get_mut(id).unwrap().color = Some(tekto_tree::Color::rgb(0, 0, 0));
+        apply_ops(
+            &mut tree,
+            &[HostOp::Transition {
+                id: id.raw(),
+                opacity: None,
+                x: None,
+                y: None,
+                width: None,
+                height: None,
+                fill: Some("#0000c8".into()),
+                color: Some("#c8c8c8".into()),
+                easing: Some("linear".into()),
+                repeat: true,
+                duration_ms: Some(100),
+            }],
+        )
+        .unwrap();
+        assert!(tree.advance(0.0));
+        assert!(tree.advance(50.0));
+        let mid = tree.get(id).unwrap();
+        let fill = mid.fill.unwrap();
+        assert!(
+            (95..=105).contains(&fill.r) && (95..=105).contains(&fill.b),
+            "{fill:?}"
+        );
+        assert_eq!(mid.color, Some(tekto_tree::Color::rgb(100, 100, 100)));
+        // Repeat swaps the endpoints, so the next cycle runs back from the target.
+        assert!(tree.advance(150.0));
+        assert!(tree.get(id).unwrap().fill.unwrap().r < 10);
+        assert!(tree.advance(200.0));
+        let back = tree.get(id).unwrap().fill.unwrap();
+        assert!((95..=105).contains(&back.r), "{back:?}");
+        assert!(tree.animations_running());
+    }
+
+    #[test]
+    fn transition_op_rejects_bad_colour_and_easing() {
+        let mut tree = Tree::new();
+        let id = tree.add(NodeKind::Rect, None).unwrap();
+        let bad_fill = apply_ops(
+            &mut tree,
+            &[HostOp::Transition {
+                id: id.raw(),
+                opacity: None,
+                x: None,
+                y: None,
+                width: None,
+                height: None,
+                fill: Some("teal".into()),
+                color: None,
+                easing: None,
+                repeat: false,
+                duration_ms: Some(100),
+            }],
+        );
+        assert!(bad_fill.is_err());
+        let bad_easing = apply_ops(
+            &mut tree,
+            &[HostOp::Transition {
+                id: id.raw(),
+                opacity: None,
+                x: None,
+                y: None,
+                width: None,
+                height: None,
+                fill: None,
+                color: None,
+                easing: Some("bounce".into()),
+                repeat: false,
+                duration_ms: Some(100),
+            }],
+        );
+        assert!(bad_easing.is_err());
     }
 
     #[test]
@@ -857,6 +991,10 @@ mod tests {
                     y: None,
                     width: None,
                     height: None,
+                    fill: None,
+                    color: None,
+                    easing: None,
+                    repeat: false,
                     duration_ms: Some(100),
                 },
                 HostOp::Transition {
@@ -866,6 +1004,10 @@ mod tests {
                     y: None,
                     width: None,
                     height: None,
+                    fill: None,
+                    color: None,
+                    easing: None,
+                    repeat: false,
                     duration_ms: Some(100),
                 },
             ],

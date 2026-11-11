@@ -6,6 +6,13 @@ export declare function transitionOp(
     y?: number;
     width?: number;
     height?: number;
+    /** Hex fill, for example `#3a424a`. */
+    fill?: string;
+    /** Hex text colour. */
+    color?: string;
+    easing?: "smoothstep" | "linear" | "ease-in" | "ease-out";
+    /** Swap endpoints and run again when the tween finishes. */
+    repeat?: boolean;
     durationMs?: number;
   },
 ): {
@@ -16,6 +23,10 @@ export declare function transitionOp(
   y?: string;
   width?: string;
   height?: string;
+  fill?: string;
+  color?: string;
+  easing?: string;
+  repeat?: boolean;
   durationMs?: number;
 };
 

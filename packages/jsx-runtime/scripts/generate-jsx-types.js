@@ -17,7 +17,11 @@ for (const component of schema.components) {
 lines.push("  }", "}", "");
 const output = lines.join("\n");
 if (process.argv.includes("--check")) {
-  if (readFileSync(target, "utf8") !== output) throw new Error("JSX types are stale; run node packages/jsx-runtime/scripts/generate-jsx-types.js");
+  // A Windows checkout may write CRLF; the schema does not depend on it.
+  const normalize = (text) => text.replace(/\r\n/g, "\n");
+  if (normalize(readFileSync(target, "utf8")) !== normalize(output)) {
+    throw new Error("JSX types are stale; run node packages/jsx-runtime/scripts/generate-jsx-types.js");
+  }
 } else {
   writeFileSync(target, output);
 }

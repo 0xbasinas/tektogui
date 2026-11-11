@@ -12,7 +12,8 @@ mod scroll_feel;
 mod store;
 mod tabs;
 pub use animate::{
-    ease_smoothstep, reduced_motion_requested, StyleTransition, DEFAULT_TRANSITION_MS,
+    ease_linear, ease_smoothstep, reduced_motion_requested, Easing, StyleTransition,
+    DEFAULT_TRANSITION_MS,
 };
 pub use recording::{Action, RecordedKey, Recording};
 pub use store::{StateInfo, Store, StoreError};
