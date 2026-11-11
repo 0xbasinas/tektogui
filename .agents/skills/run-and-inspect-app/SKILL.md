@@ -110,7 +110,7 @@ The Count text should read 0, then 1 after one click, then 2 after another. Its 
 
 Limits: desktop QuickJS only, not the web host; each JS call has the fixed one-second budget below; run trusted code only. See `docs/tsx-events.md`.
 
-In TSX, reactive text is `text={() => signal()}` and button callbacks are `onClick={() => ...}`. This is desktop QuickJS only. See `docs/tsx-events.md` for syntax and limits (no raw concurrent tree mutation, no reentry of gated handle actions).
+In TSX, reactive text is `text={() => signal()}` and callbacks are `onClick={() => ...}` and `onInput={value => ...}`. This is desktop QuickJS only. See `docs/tsx-events.md` for syntax and limits (no raw concurrent tree mutation, no reentry of gated handle actions).
 
 Each host-backed JS call (evaluation, click callback, forget, disposal) has a fixed one-second budget in `crates/tekto-js/src/engine.rs`. There is no setting to change it. QuickJS checks the deadline periodically and interrupts JS, so a runaway loop returns a budget error (`QuickJS execution budget exceeded (1 second)`); click failures are also logged (`GET /logs` / `app.logs`). Native Rust calls and lock waits are not generally preemptible, so this is not a strict wall-clock limit. A failed reload keeps the old session. An interrupted callback keeps the session, but changes it already made are not rolled back. Interrupted cleanup can leave cleanups unfinished, and a retired session drops the rest.
 

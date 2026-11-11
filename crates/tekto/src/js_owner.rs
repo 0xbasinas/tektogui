@@ -506,8 +506,9 @@ mod tests {
         let source = format!(
             r#"{core} {jsx}
             const [value, setValue] = createSignal('');
+            let calls = [];
             mount(jsxs('window', {{children: [jsx('text', {{text: () => value()}}),
-                jsx('text_field', {{name: 'Name', onInput: v => setValue(v)}})]}}), tekto, {{createEffect}});
+                jsx('text_field', {{name: 'Name', onInput: v => {{ calls.push(v); setValue(calls.join('|')); }}}})]}}), tekto, {{createEffect}});
         "#
         );
         let generation = owner.mount(&source).unwrap();
@@ -530,7 +531,7 @@ mod tests {
         handle
             .route_action(|tree| (tree.apply_ime(ImeEvent::Commit("é".into())).unwrap(), None))
             .unwrap();
-        assert_eq!(text(&handle), "abé");
+        assert_eq!(text(&handle), "ab|abé");
         deliver_key(
             &handle,
             &Key::Character("z".into()),
@@ -541,7 +542,50 @@ mod tests {
             &mut None,
         )
         .unwrap();
-        assert_eq!(text(&handle), "abéz");
+        assert_eq!(text(&handle), "ab|abé|abéz");
+        use tekto_tree::{FieldKey, NodePatch};
+        handle
+            .patch(
+                field,
+                NodePatch {
+                    text: Some("xy".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(text(&handle), "ab|abé|abéz");
+        handle
+            .route_action(|tree| (tree.apply_field_key(FieldKey::Backspace).unwrap(), None))
+            .unwrap();
+        assert_eq!(text(&handle), "ab|abé|abéz|x");
+        handle
+            .route_action(|tree| (tree.apply_field_key(FieldKey::Home).unwrap(), None))
+            .unwrap();
+        handle
+            .route_action(|tree| (tree.apply_field_key(FieldKey::Delete).unwrap(), None))
+            .unwrap();
+        assert_eq!(text(&handle), "ab|abé|abéz|x|");
+        handle
+            .route_action(|tree| (tree.apply_field_key(FieldKey::Backspace).unwrap(), None))
+            .unwrap();
+        assert_eq!(text(&handle), "ab|abé|abéz|x|");
+        handle
+            .patch(
+                field,
+                NodePatch {
+                    disabled: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let _ = handle.type_text(field, "ignored");
+        handle
+            .route_action(|tree| (tree.apply_field_key(FieldKey::Insert('q')).unwrap(), None))
+            .unwrap();
+        assert_eq!(text(&handle), "ab|abé|abéz|x|");
+        handle.tree.lock().unwrap().remove(field).unwrap();
+        assert!(handle.type_text(field, "stale").is_err());
+        assert_eq!(text(&handle), "ab|abé|abéz|x|");
         assert!(!owner
             .dispatch_input(generation, 999, "stale".into())
             .unwrap());
@@ -557,9 +601,8 @@ mod tests {
         let runtime = crate::AppRuntime::new(Tree::new(), "input");
         let (handle, viewport) = crate::create_handle(&runtime, 640, 400);
         let owner = crate::install_js_runtime(&handle, &viewport);
-        owner.mount(r#"const root = tekto.create('window'); const field = tekto.create('text_field'); tekto.append(root, field); let count = 0; tekto.onInput(field, () => { if (++count === 1) throw new Error('input failed'); if (count === 2) for (;;) {} });"#).unwrap();
+        owner.mount(r#"const root = tekto.create('window'); const field = tekto.create('text_field'); tekto.append(root, field); const label = tekto.create('text'); tekto.append(root, label); let count = 0; tekto.onInput(field, () => { tekto.setText(label, String(++count)); if (count === 1) throw new Error('input failed'); if (count === 2) for (;;) {} });"#).unwrap();
         let field = NodeId::from_raw(2);
-        handle.type_text(field, "\n").unwrap();
         handle
             .route_action(|tree| {
                 (
@@ -579,6 +622,15 @@ mod tests {
             .to_string()
             .contains("budget"));
         handle.type_text(field, "c").unwrap();
+        assert_eq!(
+            handle
+                .tree()
+                .get(NodeId::from_raw(3))
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("3")
+        );
         assert!(handle
             .logs
             .lock()
