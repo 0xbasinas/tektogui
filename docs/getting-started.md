@@ -73,10 +73,16 @@ Not supported: `npm create tektogui` or `npx create-tektogui` from the registry.
 To scaffold somewhere else, build the CLI once and call it with `TEKTO_ROOT`:
 
 ```bash
+cd /path/to/tektogui
 cargo build -p tekto-cli
+# Resolve the binary path here, before the next cd. A relative CARGO_TARGET_DIR is relative to this folder.
+TEKTO_BIN="$(realpath -m "${CARGO_TARGET_DIR:-target}")/debug/tekto"
+TEKTO_ROOT="$PWD"
 cd /some/other/folder
-TEKTO_ROOT=/path/to/tektogui /path/to/tektogui/target/debug/tekto new hello
+TEKTO_ROOT="$TEKTO_ROOT" "$TEKTO_BIN" new hello
 ```
+
+This assumes the default Cargo target layout. If you set `build.target-dir` in a Cargo config file instead of `CARGO_TARGET_DIR`, use the path Cargo uses for that setting. This was not run here.
 
 ## Write a tiny Rust app
 
