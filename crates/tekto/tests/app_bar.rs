@@ -57,6 +57,11 @@ fn app_bar_lays_out_leading_title_and_actions() {
 
     tree.click(save).unwrap();
     assert_eq!(tree.focus, Some(save));
+
+    // A click on a control records the request once for the desktop host.
+    tree.click(controls[2]).unwrap();
+    assert_eq!(tree.take_window_control(), Some(WindowControl::Close));
+    assert_eq!(tree.take_window_control(), None);
 }
 
 #[test]

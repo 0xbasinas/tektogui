@@ -1082,6 +1082,8 @@ pub struct Tree {
     pub(crate) layout_dirty: bool,
     /// Clock value when the caret was last moved or edited, for blink reset.
     pub(crate) caret_origin_ms: f64,
+    /// Set by a click on a node with a native window action; the host takes it.
+    pub(crate) pending_window_control: Option<WindowControl>,
 }
 
 impl Default for Tree {
@@ -1111,6 +1113,7 @@ impl Tree {
             tokens: Tokens::default(),
             layout_dirty: true,
             caret_origin_ms: 0.0,
+            pending_window_control: None,
         }
     }
 
@@ -1211,6 +1214,14 @@ impl Tree {
     /// Show the caret solid and restart the blink from now.
     pub fn reset_caret_blink(&mut self) {
         self.caret_origin_ms = self.time_ms;
+    }
+
+    /// Take the native window action requested by the last click, if any.
+    ///
+    /// The desktop host applies this after delivering a pointer or key event;
+    /// other hosts (web, CLI, MCP) can ignore it.
+    pub fn take_window_control(&mut self) -> Option<WindowControl> {
+        self.pending_window_control.take()
     }
 
     pub fn ids(&self) -> impl Iterator<Item = NodeId> + '_ {
@@ -1666,6 +1677,11 @@ impl Tree {
     pub fn click(&mut self, id: NodeId) -> Result<(), TreeError> {
         self.set_focus(id)?;
         self.last_click = Some(id);
+        if let Some(control) = self.get(id).map(|node| node.window_control) {
+            if control != WindowControl::None {
+                self.pending_window_control = Some(control);
+            }
+        }
         if let Some(node) = self.nodes.get_mut(&id) {
             if node.kind == NodeKind::TextField {
                 node.preedit.clear();

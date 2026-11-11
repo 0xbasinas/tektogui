@@ -699,43 +699,47 @@ fn deliver_pointer(state: &mut State, op: PointerOp) {
         return;
     }
     let now = pointer_ms(state);
-    let mut control = None;
     let changed = if let Some(handle) = &state.handle {
         crate::pointer_route::deliver_pointer(handle, &mut state.pointer, op, now).unwrap_or(true)
     } else if let Ok(mut tree) = state.tree.lock() {
         let had_overlay = tree.overlay().is_some();
         let effect = apply_pointer_op(&mut state.pointer, &mut tree, op, now);
-        if let Some((x, y)) = effect.click_at {
-            control = tree
-                .hit(x, y)
-                .and_then(|id| tree.get(id))
-                .map(|node| node.window_control)
-                .filter(|control| *control != tekto_tree::WindowControl::None);
-        }
-        let clicked = control.is_some()
-            || effect
-                .click_at
-                .and_then(|(x, y)| {
-                    crate::pointer_route::click_pointer(&mut tree, x, y)
-                        .ok()
-                        .flatten()
-                })
-                .is_some();
+        let clicked = effect
+            .click_at
+            .and_then(|(x, y)| {
+                crate::pointer_route::click_pointer(&mut tree, x, y)
+                    .ok()
+                    .flatten()
+            })
+            .is_some();
         effect.redraw || clicked || (had_overlay && tree.overlay().is_none())
     } else {
         false
     };
-    match control {
-        Some(tekto_tree::WindowControl::Minimize) => state.window.set_minimized(true),
-        Some(tekto_tree::WindowControl::Maximize) => {
-            let maximized = state.window.is_maximized();
-            state.window.set_maximized(!maximized);
-        }
-        Some(tekto_tree::WindowControl::Close) => state.close_requested = true,
-        _ => {}
+    let control = {
+        state
+            .tree
+            .lock()
+            .ok()
+            .and_then(|mut tree| tree.take_window_control())
+    };
+    if let Some(control) = control {
+        apply_window_control(state, control);
     }
     if changed {
         state.window.request_redraw();
+    }
+}
+
+fn apply_window_control(state: &mut State, control: tekto_tree::WindowControl) {
+    match control {
+        tekto_tree::WindowControl::Minimize => state.window.set_minimized(true),
+        tekto_tree::WindowControl::Maximize => {
+            let maximized = state.window.is_maximized();
+            state.window.set_maximized(!maximized);
+        }
+        tekto_tree::WindowControl::Close => state.close_requested = true,
+        tekto_tree::WindowControl::None => {}
     }
 }
 
@@ -830,7 +834,6 @@ fn apply_ime(state: &mut State, ime: Ime) {
 }
 
 fn apply_field_key(state: &mut State, event: &KeyEvent) {
-    let mut control = None;
     let changed = if let Some(handle) = &state.handle {
         crate::key_route::deliver_key(
             handle,
@@ -865,28 +868,21 @@ fn apply_field_key(state: &mut State, event: &KeyEvent) {
             &mut state.last_ime_commit,
         );
         if let Some(id) = click {
-            let target = tree.get(id).map(|node| node.window_control);
-            match target {
-                Some(control_value) if control_value != tekto_tree::WindowControl::None => {
-                    control = Some(control_value);
-                }
-                _ => {
-                    let _ = tree.click(id);
-                }
-            }
+            let _ = tree.click(id);
         }
         changed
     } else {
         false
     };
-    match control {
-        Some(tekto_tree::WindowControl::Minimize) => state.window.set_minimized(true),
-        Some(tekto_tree::WindowControl::Maximize) => {
-            let maximized = state.window.is_maximized();
-            state.window.set_maximized(!maximized);
-        }
-        Some(tekto_tree::WindowControl::Close) => state.close_requested = true,
-        _ => {}
+    let control = {
+        state
+            .tree
+            .lock()
+            .ok()
+            .and_then(|mut tree| tree.take_window_control())
+    };
+    if let Some(control) = control {
+        apply_window_control(state, control);
     }
     if changed {
         state.window.request_redraw();
