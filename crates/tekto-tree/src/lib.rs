@@ -437,6 +437,9 @@ impl Color {
 
     pub fn from_hex(s: &str) -> Option<Self> {
         let s = s.trim().trim_start_matches('#');
+        if !s.is_ascii() {
+            return None;
+        }
         let parse = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).ok();
         match s.len() {
             6 => Some(Color::rgb(parse(0)?, parse(2)?, parse(4)?)),
@@ -2075,10 +2078,10 @@ impl Tree {
 
     /// Disabling the focused control moves focus to the root and drops preedit.
     pub fn patch(&mut self, id: NodeId, patch: NodePatch) -> Result<(), TreeError> {
-        self.layout_dirty = true;
         let changed_text = patch.text.is_some();
         let disabling = patch.disabled == Some(true);
-        let node = self.nodes.get_mut(&id).ok_or_else(|| TreeError {
+        // Stage changes so a rejected property cannot leave a partial patch behind.
+        let mut node = self.nodes.get(&id).cloned().ok_or_else(|| TreeError {
             message: format!("unknown node {id}"),
         })?;
         if patch.disabled.is_some()
@@ -2208,8 +2211,12 @@ impl Tree {
         let select_radio = patch.checked == Some(true)
             && matches!(node.kind, NodeKind::Radio | NodeKind::Tab)
             && node.parent.is_some();
+        let original = self.nodes.insert(id, node).expect("node exists");
         if select_radio {
-            self.select_radio(id)?;
+            if let Err(error) = self.select_radio(id) {
+                self.nodes.insert(id, original);
+                return Err(error);
+            }
         }
         let select_parent = self
             .get(id)
@@ -2220,8 +2227,12 @@ impl Tree {
                     .is_some_and(|n| n.kind == NodeKind::Select)
             });
         if let Some(parent) = select_parent {
-            self.select_option(parent, id)?;
+            if let Err(error) = self.select_option(parent, id) {
+                self.nodes.insert(id, original);
+                return Err(error);
+            }
         }
+        self.layout_dirty = true;
         if disabling
             && self.overlay.is_some_and(|o| {
                 o.anchor == id && self.get(id).is_some_and(|n| n.kind == NodeKind::Select)
@@ -2660,6 +2671,51 @@ mod tests {
         )
         .unwrap();
         assert_eq!(tree.get(t).unwrap().text.as_deref(), Some("Hi"));
+    }
+
+    #[test]
+    fn invalid_patch_preserves_node_and_layout_state() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let node = tree.add(NodeKind::Text, Some(root)).unwrap();
+        tree.clear_layout_dirty();
+        assert!(tree
+            .patch(
+                node,
+                NodePatch {
+                    text: Some("changed".into()),
+                    color: Some("bad".into()),
+                    ..NodePatch::default()
+                }
+            )
+            .is_err());
+        assert_eq!(tree.get(node).unwrap().text, None);
+        assert!(!tree.layout_dirty());
+
+        let group = tree.add(NodeKind::RadioGroup, Some(root)).unwrap();
+        let radio = tree.add(NodeKind::Radio, Some(group)).unwrap();
+        tree.get_mut(group).unwrap().kind = NodeKind::Group;
+        tree.clear_layout_dirty();
+        assert!(tree
+            .patch(
+                radio,
+                NodePatch {
+                    checked: Some(true),
+                    ..NodePatch::default()
+                }
+            )
+            .is_err());
+        assert!(!tree.get(radio).unwrap().checked);
+        assert!(!tree.layout_dirty());
+    }
+
+    #[test]
+    fn hex_colors_reject_non_ascii_without_panicking() {
+        assert_eq!(Color::from_hex("#a€bc"), None);
+        assert_eq!(
+            Color::from_hex("#abcdef"),
+            Some(Color::rgb(0xab, 0xcd, 0xef))
+        );
     }
 
     #[test]
