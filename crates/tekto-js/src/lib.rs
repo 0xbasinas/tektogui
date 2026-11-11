@@ -15,6 +15,9 @@ use thiserror::Error;
 #[cfg(feature = "quickjs")]
 mod engine;
 
+#[cfg(feature = "quickjs")]
+pub use engine::JsSession;
+
 mod bundle;
 mod watch;
 
@@ -593,6 +596,98 @@ mod tests {
             "x {}",
             mid.bounds.x
         );
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn retained_session_dispatches_and_forgets_callbacks() {
+        let mut host = TreeHost::new();
+        let session = JsSession::new().unwrap();
+        session
+            .eval(
+                r#"
+            const root = tekto.create("window");
+            const label = tekto.create("text");
+            const button = tekto.create("button");
+            tekto.append(root, label); tekto.append(root, button);
+            let count = 0;
+            tekto.setText(label, "0");
+            tekto.onClick(button, () => tekto.setText(label, String(++count)));
+        "#,
+                &mut host,
+            )
+            .unwrap();
+        assert!(!session.dispatch_click(1, &mut host).unwrap());
+        for expected in ["1", "2"] {
+            assert!(session.dispatch_click(3, &mut host).unwrap());
+            assert_eq!(
+                host.tree
+                    .borrow()
+                    .get(NodeId::from_raw(2))
+                    .unwrap()
+                    .text
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        session.eval("tekto.remove(3)", &mut host).unwrap();
+        assert!(!session.dispatch_click(3, &mut host).unwrap());
+        assert!(host.tree.borrow().get(NodeId::from_raw(2)).is_some());
+        let replacement = JsSession::new().unwrap();
+        assert!(!replacement.dispatch_click(3, &mut host).unwrap());
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn session_cleanup_errors_do_not_skip_other_cleanups_or_registrations() {
+        let mut host = TreeHost::new();
+        let session = JsSession::new().unwrap();
+        session
+            .eval(
+                r#"
+            const label = tekto.create("text");
+            tekto.onClick(2, () => {});
+            tekto.onDispose(1, () => { throw new Error("cleanup failed"); });
+            globalThis.done = 0;
+            tekto.onDispose(1, () => { done++; });
+            tekto.onDispose(2, () => { done++; });
+        "#,
+                &mut host,
+            )
+            .unwrap();
+        assert!(session
+            .dispose(&mut host)
+            .unwrap_err()
+            .to_string()
+            .contains("cleanup failed"));
+        session
+            .eval(
+                "if (done !== 2) throw new Error('cleanup skipped')",
+                &mut host,
+            )
+            .unwrap();
+        assert!(!session.dispatch_click(2, &mut host).unwrap());
+        session.dispose(&mut host).unwrap();
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn retained_session_reports_callback_failure_and_remains_usable() {
+        let mut host = TreeHost::new();
+        let session = JsSession::new().unwrap();
+        session
+            .eval(
+                r#"tekto.onClick(1, () => { throw new Error("callback failed"); });"#,
+                &mut host,
+            )
+            .unwrap();
+        let error = session
+            .dispatch_click(1, &mut host)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("callback failed"), "{error}");
+        session.forget_node(1, &mut host).unwrap();
+        assert!(!session.dispatch_click(1, &mut host).unwrap());
     }
 
     #[cfg(feature = "quickjs")]

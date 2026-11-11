@@ -20,7 +20,7 @@ export declare function transitionOp(
 };
 
 export declare function createSignal<T>(value: T): [() => T, (value: T | ((prev: T) => T)) => void];
-export declare function createEffect(fn: () => void): () => void;
+export declare function createEffect(fn: () => void): (() => void) & { dispose(): void };
 
 /** Tagged native plugin call. The `op` names match Rust `NativeOp`. */
 export type NativeOp =

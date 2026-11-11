@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "JSX components an agent can mount. Kinds match NodeKind and tekto-widgets. Each kind lists every prop the host setProp accepts, because JSX forwards that set on every kind. title, font_size, and justify_center are aliases (see propAliases). There is no onClick prop; events are host actions (ui.click, ui.type, wheel, IME).",
+  "description": "JSX components an agent can mount. Kinds match NodeKind and tekto-widgets. Each kind lists every prop the host setProp accepts, because JSX forwards that set on every kind. title, font_size, and justify_center are aliases (see propAliases). Button onClick and text-node reactive text need a retained QuickJS host; desktop QuickJS delivers button actions from pointer, keyboard, and agent clicks; web parity is not supported.",
   "propAliases": {
     "title": "name",
     "font_size": "fontSize",
@@ -72,7 +72,7 @@
     },
     {
       "name": "text",
-      "description": "Text leaf. A string child becomes the text.",
+      "description": "Text leaf. A string child becomes the text. The text prop may be a function on a retained QuickJS host.",
       "props": [
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
@@ -93,6 +93,7 @@
     },
     {
       "name": "button",
+      "jsxProps": [{"name": "onClick", "type": "function", "description": "No-argument callback on a retained QuickJS host."}],
       "description": "Labeled button. Rust button() sets fill, color, font size, and padding. JSX does not, so set those props when the sketch should match.",
       "props": [
         {"name": "name", "type": "string", "description": "Accessible label. Defaults from the text child when unset."},
@@ -109,7 +110,7 @@
         {"name": "justifyCenter", "type": "boolean"}
       ],
       "events": [
-        {"name": "click", "description": "Pointer click on the node. Agents use ui.click with the stable id. No onClick prop."}
+        {"name": "click", "description": "Agent click delivers the button callback in desktop QuickJS; web parity is not supported."}
       ]
     },
     {

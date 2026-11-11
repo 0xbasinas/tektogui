@@ -21,12 +21,14 @@ pub use tekto_native::{
 pub use tekto_platform::lifecycle::{
     handle_lifecycle, on_resumed, on_suspended, surface_is_live, AppLifecycle,
 };
+#[cfg(all(feature = "desktop", not(target_os = "android")))]
+pub use tekto_platform::run_windowed_with_handle;
+pub use tekto_platform::{
+    create_handle, run_headless, run_windowed, run_windowed_with_session, start_handle, AppRuntime,
+    DevSession, PlatformError, Viewport, WindowOptions,
+};
 #[cfg(all(feature = "desktop", target_os = "android"))]
 pub use tekto_platform::{run_android, run_android_with_session, AndroidApp};
-pub use tekto_platform::{
-    run_headless, run_windowed, run_windowed_with_session, start_handle, AppRuntime, DevSession,
-    PlatformError, Viewport, WindowOptions,
-};
 pub use tekto_render::{
     paint_tree, render_tree_png, CpuRenderer, GpuRenderer, RenderError, Renderer,
 };
@@ -110,32 +112,25 @@ mod tests {
     }
 }
 
-/// Install a QuickJS applier on a dev-server handle so `POST /reload`
-/// can swap the live tree for a new JS bundle without a Rust rebuild.
+#[cfg(feature = "quickjs")]
+mod js_owner;
+#[cfg(feature = "quickjs")]
+pub use js_owner::JsAppOwner;
+
+/// Attach a retained QuickJS owner to reloads. The returned handle can mount
+/// the initial bundle and dispatch validated, generation-tagged clicks.
 #[cfg(feature = "quickjs")]
 pub fn install_js_runtime(
     handle: &std::sync::Arc<SharedTreeHandle>,
     viewport: &std::sync::Arc<std::sync::Mutex<Viewport>>,
-) {
-    use std::sync::Arc;
-    use std::time::Instant;
-    use tekto_js::eval_to_tree;
-
-    let tree = Arc::clone(&handle.tree);
-    let logs = Arc::clone(&handle.logs);
-    let vp = Arc::clone(viewport);
-    let apply: tekto_mcp::ApplyJsFn = Arc::new(move |js: &str| {
-        let t0 = Instant::now();
-        let mut next = eval_to_tree(js).map_err(|e| e.to_string())?;
-        let (w, h) = vp.lock().map(|g| (g.width, g.height)).unwrap_or((640, 400));
-        layout_tree(&mut next, w as f32, h as f32);
-        *tree.lock().map_err(|e| e.to_string())? = next;
-        let line = format!("js reload {}ms", t0.elapsed().as_millis());
-        eprintln!("{line}");
-        if let Ok(mut logs) = logs.lock() {
-            logs.push(line);
-        }
-        Ok(())
-    });
-    *handle.apply_js.lock().expect("apply_js") = Some(apply);
+) -> JsAppOwner {
+    let owner = JsAppOwner::new(handle, viewport);
+    let click_owner = owner.clone();
+    *handle.click_js.lock().expect("click_js") = Some(std::sync::Arc::new(move |id| {
+        click_owner.dispatch_click_locked(id.raw()).map(|_| ())
+    }));
+    let reload = owner.clone();
+    *handle.apply_js.lock().expect("apply_js") =
+        Some(std::sync::Arc::new(move |js| reload.mount(js).map(|_| ())));
+    owner
 }
