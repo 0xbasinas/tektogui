@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "test": "node --test packages/core/test.js packages/jsx-runtime/test.js packages/wasm/test.js packages/wasm/tsx-test.js",
+    "test:wasm:required": "node scripts/test-wasm-required.js",
     "dev:web": "node packages/wasm/dev.js"
   }
 }

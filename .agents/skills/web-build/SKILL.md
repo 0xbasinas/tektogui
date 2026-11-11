@@ -28,16 +28,24 @@ The optional wasm GPU build adds direct deps only when `--features gpu` is on: `
 rustup target add wasm32-unknown-unknown
 export CARGO_TARGET_DIR=/path/to/this/worktree/target
 
-# CI command (nightly push or workflow_dispatch, not every PR):
-cargo check -p tekto-wasm --target wasm32-unknown-unknown
+# CI commands (nightly push or workflow_dispatch, not every PR):
+cargo build -p tekto-wasm --target wasm32-unknown-unknown
 cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js
 
-# Module + Node smoke (skips pixel checks if the wasm file is missing):
-cargo build -p tekto-wasm --target wasm32-unknown-unknown
+# Node smoke (ordinary mode: skips if the wasm file or esbuild is missing):
 node --test packages/wasm/test.js
+
+# Required mode (what CI runs): missing module or esbuild fails, skips fail.
+# esbuild must be on PATH or set in ESBUILD.
+npm run test:wasm:required        # or: pnpm run test:wasm:required / bun run test:wasm:required
+TEKTO_REQUIRE_WASM=1 node --test packages/wasm/test.js   # direct Node run, module test only
 ```
 
-`node --test packages/wasm/test.js` mounts the Notes JSX tree, compares `renderPng(640, 400)` to `crates/tekto/tests/snapshots/notes-headless.png`, blits those pixels onto a fake canvas, and resizes to 393×240. `node --test packages/wasm/tsx-test.js` bundles `examples/notes/src/app.tsx` with esbuild (MIT binary on `PATH`) and mounts that same sketch on the wasm host. It also starts the web dev server and checks `POST /patch`. No display. Do not use displays :1 or :2. Both tests skip when the wasm file or esbuild is missing.
+The wasm file is found in this order: `TEKTO_WASM`, then `$CARGO_TARGET_DIR/wasm32-unknown-unknown/debug/tekto_wasm.wasm`, then `target/...`. A relative `CARGO_TARGET_DIR` resolves from the repo root.
+
+These are Node tests. They do not show that the wasm core or the host glue works in a browser. Browser runtime compatibility is not checked by CI.
+
+`node --test packages/wasm/test.js` mounts the Notes JSX tree, compares `renderPng(640, 400)` to `crates/tekto/tests/snapshots/notes-headless.png`, blits those pixels onto a fake canvas, and resizes to 393×240. `node --test packages/wasm/tsx-test.js` bundles `examples/notes/src/app.tsx` with esbuild (MIT binary on `PATH`) and mounts that same sketch on the wasm host. It also starts the web dev server and checks `POST /patch`. No display. Do not use displays :1 or :2. In ordinary mode both tests skip when the wasm file or esbuild is missing. With `TEKTO_REQUIRE_WASM=1` (set by `npm run test:wasm:required`) a missing module or esbuild fails instead, and the script also fails if any test skips.
 
 `RUSTFLAGS=-D warnings` is set in CI. Do not enable `quickjs` or `gpu` on these commands.
 
@@ -59,7 +67,7 @@ Without that module, `packages/wasm/gpu.html` (open with `?gpu=1`) still loads t
 node packages/wasm/dev.js
 ```
 
-That command builds `tekto-wasm` if `target/wasm32-unknown-unknown/debug/tekto_wasm.wasm` is missing, bundles `examples/notes/src/app.tsx`, and serves `http://127.0.0.1:8080/`. Saving the TSX rebuilds with esbuild and reloads the page. The browser JS engine runs the app. QuickJS stays off.
+That command builds `tekto-wasm` if the wasm file is missing (lookup: `TEKTO_WASM`, then `$CARGO_TARGET_DIR/wasm32-unknown-unknown/debug/tekto_wasm.wasm`, then `target/...`), bundles `examples/notes/src/app.tsx`, and serves `http://127.0.0.1:8080/`. Saving the TSX rebuilds with esbuild and reloads the page. The browser JS engine runs the app. QuickJS stays off.
 
 Another entry: `node packages/wasm/dev.js path/to/app.tsx`. `PORT` picks the listen port. `TEKTO_WASM` picks the wasm file.
 
