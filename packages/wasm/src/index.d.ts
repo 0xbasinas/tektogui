@@ -18,6 +18,8 @@ export type HostOpJson =
 
 export interface TektoWasmHost {
   applyOps(ops: HostOpJson[]): number[];
+  /** Set font or collection bytes before the module initializes text. */
+  setFallbackFont(bytes: Uint8Array): void;
   reset(): void;
   renderPng(width: number, height: number): Uint8Array;
   create(kind: string): number;
