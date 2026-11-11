@@ -208,6 +208,12 @@ impl ApplicationHandler<AppEvent> for App {
             state.adapter.process_event(&state.window, &event);
         }
         match event {
+            WindowEvent::Focused(false) => {
+                if let Some(state) = self.state.as_mut() {
+                    deliver_pointer(state, PointerOp::End { commit: false });
+                    state.pointer = PointerSession::default();
+                }
+            }
             WindowEvent::CloseRequested => event_loop.exit(), // run_windowed then clear_endpoint()
             WindowEvent::RedrawRequested => {
                 if let Some(state) = self.state.as_mut() {
@@ -237,6 +243,33 @@ impl ApplicationHandler<AppEvent> for App {
                     let pressed = button_state == ElementState::Pressed;
                     let op = state.pointer.on_left_button(pressed);
                     deliver_pointer(state, op);
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
+                ..
+            } => {
+                if let Some(state) = self.state.as_mut() {
+                    if let Some((x, y)) = state
+                        .pointer
+                        .cursor
+                        .filter(|_| !state.pointer.swallow_mouse)
+                    {
+                        let changed = if let Some(handle) = &state.handle {
+                            handle
+                                .route_action(|tree| (tree.context_menu_at(x, y).is_some(), None))
+                                .unwrap_or(false)
+                        } else {
+                            state.tree.lock().ok().is_some_and(|mut tree| {
+                                let had_overlay = tree.overlay().is_some();
+                                tree.context_menu_at(x, y).is_some() || had_overlay
+                            })
+                        };
+                        if changed {
+                            state.window.request_redraw();
+                        }
+                    }
                 }
             }
             WindowEvent::Touch(touch) => {
@@ -615,6 +648,7 @@ fn deliver_pointer(state: &mut State, op: PointerOp) {
     let changed = if let Some(handle) = &state.handle {
         crate::pointer_route::deliver_pointer(handle, &mut state.pointer, op, now).unwrap_or(true)
     } else if let Ok(mut tree) = state.tree.lock() {
+        let had_overlay = tree.overlay().is_some();
         let effect = apply_pointer_op(&mut state.pointer, &mut tree, op, now);
         let clicked = effect
             .click_at
@@ -624,7 +658,7 @@ fn deliver_pointer(state: &mut State, op: PointerOp) {
                     .flatten()
             })
             .is_some();
-        effect.redraw || clicked
+        effect.redraw || clicked || (had_overlay && tree.overlay().is_none())
     } else {
         false
     };
@@ -736,6 +770,18 @@ fn apply_field_key(state: &mut State, event: &KeyEvent) {
         )
         .unwrap_or(true)
     } else if let Ok(mut tree) = state.tree.lock() {
+        if let Ok(Some(changed)) = crate::key_route::route_clipboard(
+            &mut tree,
+            &tekto_native::native(),
+            &event.logical_key,
+            event.state,
+            state.modifiers.state(),
+        ) {
+            if changed {
+                state.window.request_redraw();
+            }
+            return;
+        }
         let (changed, click) = crate::key_route::route_key(
             &mut tree,
             &event.logical_key,

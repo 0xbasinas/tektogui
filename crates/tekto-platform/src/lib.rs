@@ -179,6 +179,7 @@ pub fn create_handle(
         action_gate: Arc::new(Mutex::new(())),
         click_js: Mutex::new(None),
         input_js: Mutex::new(None),
+        forget_js: Mutex::new(None),
         history: Mutex::new(None),
     });
     (handle, viewport)
