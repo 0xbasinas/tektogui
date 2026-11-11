@@ -9,9 +9,11 @@ Prefer tests that do not need a window. Use the CPU renderer, a fixed size (Note
 
 ## Files to touch
 
+- Semantic test: `crates/tekto/tests/<widget>.rs` using `tekto-test` (see below)
 - Integration snapshot: `crates/tekto/tests/headless_snapshot.rs`
 - Record/replay script: `crates/tekto/tests/record_replay.rs` and `crates/tekto/tests/fixtures/session.json`
 - Or a unit test next to the code (`crates/tekto-widgets`, `tekto-layout`, `tekto-text`, `tekto-a11y`, `tekto/src/lib.rs`)
+- `crates/tekto-test` when the helper itself needs a new lookup or assertion
 - This skill, if the snapshot command, `TEKTO_SHOT_DIR`, or the recording helper changes
 
 ## Pattern
@@ -37,6 +39,48 @@ assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
 ```
 
 The existing snapshot test writes a copy to `$TEKTO_SHOT_DIR` if set, otherwise `target/tektogui-shots/notes-headless.png`, and compares PNG bytes to the blessed file `crates/tekto/tests/snapshots/notes-headless.png`. Linux PR CI runs this inside `cargo test --workspace --all-targets` (workflow step "Test (replay + headless PNG compare)"). There is no separate screenshot job. CI fails if the pixels change.
+
+## Semantic tests with `tekto-test`
+
+`crates/tekto-test` is a dev-only helper (`publish = false`) that talks to the
+real scene and the real AccessKit mapping, never a second tree. Add it as a dev
+dependency and assert by role and name instead of by id:
+
+```rust
+use tekto_test::TestApp;
+use tekto_widgets::{button, text, text_field, window};
+
+let mut tree = Tree::new();
+let root = window(&mut tree, "Form", 320.0, 240.0).unwrap();
+let field = text_field(&mut tree, root, "Name", "").unwrap();
+let save = button(&mut tree, root, "Save").unwrap();
+let mut app = TestApp::new(tree, 320, 240).unwrap();
+
+app.type_text(app.find("TextInput", "Name")?, "Ada")?;
+app.click(app.find("Button", "Save")?)?;
+assert!(app.is_focused(save)?);
+assert!(app.png()?.starts_with(b"\x89PNG\r\n\x1a\n"));
+```
+
+- `find(role, name)` needs one exact, unique match. `find_key(key)` is the same
+  for a unique `test_key` / `testKey`, which is separate from the accessible
+  name and must be unique among attached nodes.
+- `node` rejects ids that are not in the attached AccessKit tree, so a stale or
+  unrealized row fails instead of silently passing.
+- `click`, `type_text`, and `focus` call the normal `Tree` actions, so a disabled
+  control or an overlay that blocks the background still fails.
+- `value`, `checked`, and `disabled` read semantic state.
+- `wait_until(step_ms, steps, condition)` advances a deterministic clock; it
+  does not sleep.
+- `compare_png(reference, artifacts, update)` decodes both PNGs. Pass `true`
+  only to bless a new reference; a mismatch writes `actual.png`, `expected.png`,
+  and `diff.png` into `artifacts`.
+- With the `quickjs` feature, `JsTestApp` runs a bundled app, keeps its
+  callbacks, and delivers click and input. Call `dispose` when finished.
+
+`docs/headless-tests.md` is the user-facing version. `crates/tekto/tests/`
+has one file per widget (`menu.rs`, `tabs.rs`, `text_selection.rs`, …) that
+shows the expected shape.
 
 ## Commands
 

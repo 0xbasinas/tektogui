@@ -119,3 +119,29 @@ jobs:
           cargo test -p tekto --features quickjs --lib js_owner
       - name: Check CLI with QuickJS
         run: cargo check -p tekto-cli --features quickjs
+
+  generated:
+    name: Generated app builds
+    # Same schedule as the WASM job: nightly or a manual run, not every PR.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/nightly')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: generated-apps
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      # Each manager scaffolds an app, installs it, typechecks it, and builds
+      # the web and desktop bundles. A missing manager fails because it is
+      # named in TEKTO_REQUIRE_PMS.
+      - name: Build a generated app with npm, pnpm, and bun
+        env:
+          TEKTO_REQUIRE_PMS: npm,pnpm,bun
+        run: node scripts/test-generated-apps.js

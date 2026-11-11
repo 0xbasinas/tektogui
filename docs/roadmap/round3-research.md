@@ -16,7 +16,7 @@ Navigation, tokens, right-to-left support, lazy lists, tables, charts and native
 
 The current tree has CPU and Vello rounded rectangles, borders and lines; an overlay layer; menus, select and dialogs; switch, radio, slider and progress controls; web callbacks; keyed reload; and initial image support. Headless tests cover these slices. See the entries below for remaining work and validation limits.
 
-The latest local `cargo test --workspace` passed with an isolated `ESBUILD` override. Workspace Clippy and the JavaScript suite also passed in earlier runs. Later image changes passed targeted CPU, WASM, QuickJS, PNG and GPU checks. These are separate runs, not a claim that every check was rerun on the final tree. Node/WASM tests do not replace browser testing, and a headless GPU check does not prove every driver or device.
+The final tree was checked on Windows with rustc 1.99.1: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo check -p tekto-wasm --target wasm32-unknown-unknown`, and `npm test` with esbuild (76 passed, 0 skipped) all passed. `cargo test -p tekto --features gpu --lib gpu_ -- --include-ignored` and the ignored GPU image test passed with a real adapter. The Notes window ran at 125% scale, the CLI tree, screenshot and live patch worked against it, the Windows clipboard and file probe passed, the Notes APK ran on an x86_64 emulator with `tekto tree` over `adb forward`, and the browser host painted Notes in headless Chrome. These are one-off manual checks, not PR CI. Node/WASM tests do not replace every browser, and a headless GPU check does not prove every driver or device.
 
 ## New crates
 
@@ -89,9 +89,9 @@ These are real ideas, but they should wait.
 
 ### `@tektogui/build`
 
-**Implemented:** The helper and `tekto-build` CLI generate a web ES module or desktop QuickJS IIFE from a TSX entry. Generated apps have `build:web` and `build:desktop` scripts. Fresh npm, pnpm and bun installs each typechecked a generated app and produced both formats; each generated output was exercised in WASM and QuickJS. The web dev server uses the helper; Node tests cover build, reload and watcher isolation.
+**Implemented:** The helper and `tekto-build` CLI generate a web ES module or desktop QuickJS IIFE from a TSX entry. Generated apps have `build:web` and `build:desktop` scripts plus `esbuild` as a dev dependency, so both formats build after one install. `scripts/test-generated-apps.js` scaffolds an app and runs install, typecheck and both builds for every available package manager; npm, pnpm and bun each passed on Windows. Generated apps carry a `pnpm-workspace.yaml` that lets pnpm 10+ run esbuild's build script, and Windows shim discovery now handles both global and local `.bin` layouts, including pnpm's nested store. The web dev server uses the helper; Node tests cover build, reload and watcher isolation.
 
-**Remaining:** Desktop dev and the JavaScript helper share wrapper templates and compiler flags; desktop still invokes esbuild directly (the shared flag list is already used by both). The desktop esbuild lookup now skips a broken package-manager shim and uses the next one on `PATH`. Automate generated-project builds and host checks under all three managers. The local check used an isolated esbuild binary and did not test a published package.
+**Remaining:** Desktop dev and the JavaScript helper share wrapper templates and compiler flags; desktop still invokes esbuild directly (the shared flag list is already used by both). The generated-app script runs on the nightly/manual CI job, not on PRs, and it has not been run against a published package.
 
 ### Keyed JSX helpers (`<For>`, `<Show>`)
 
