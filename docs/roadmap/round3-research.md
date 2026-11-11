@@ -4,13 +4,13 @@ Status: 2026-11-11. This is a research roadmap, not a release promise or a list 
 
 Tekto keeps its own scene tree and stable ids, first-class Rust and TSX APIs, agent-first tools, lean default builds, and a plain default look. Sizes are rough: **S** is a few days, **M** one to two weeks, and **L** larger or cross-platform.
 
-## Suggested next work
+## Status of the last three items
 
-1. Finish remaining text selection and accessibility gaps. The multiline field has a first implementation; desktop IME and Android device checks are deferred.
-2. Verify context-menu and tab behavior across hosts, including dynamic panel lifecycles, and exercise typed agent actions with retained TSX apps and unrealized rows.
-3. Automate generated-app builds and host checks for npm, pnpm and bun. Shared build settings and template typing are in place and have been checked locally.
+1. **Text selection and accessibility.** Multiline selection, composition, and text-run geometry are covered by headless tests, a real Windows window was exercised at 125% scale, and the Notes APK ran on an x86_64 emulator. What is still unproven is a real IME candidate window: the desktop route handles `WindowEvent::Ime`, but no test drives an actual IME layout. OS accessibility smoke tests remain opt-in.
+2. **Context menus, tabs, and typed agent actions.** WASM tests cover menu reopening, retained tab callbacks, and conditional panel lifecycles with their owners. `js_owner::tests::typed_agent_actions_reach_retained_tsx_and_reject_unrealized_nodes` now drives `SemanticAction` against a retained QuickJS app and checks that an unattached node is neither found nor actionable. Browser and Safari interaction is still manual.
+3. **Generated-app builds.** `scripts/test-generated-apps.js` scaffolds an app and runs install, typecheck, and both builds with npm, pnpm, and bun; all three pass on Windows, and the nightly/manual CI job runs it. It has not been run against a published package.
 
-Navigation, tokens, right-to-left support, lazy lists, tables, charts and native extras are later work. OS accessibility smoke tests remain opt-in.
+Navigation, tokens, right-to-left support, lazy lists, tables, charts and native extras are later work.
 
 ## Implemented foundations
 

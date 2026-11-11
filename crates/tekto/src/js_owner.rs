@@ -1174,4 +1174,66 @@ mod tests {
             .any(|line| line.contains("click exploded")));
         assert_eq!(calls.load(Ordering::SeqCst), 4);
     }
+
+    #[test]
+    fn typed_agent_actions_reach_retained_tsx_and_reject_unrealized_nodes() {
+        use tekto_mcp::{SemanticAction, SemanticValue};
+        let handle = handle();
+        let viewport = Arc::new(Mutex::new(Viewport::new(320, 240)));
+        let owner = crate::install_js_runtime(&handle, &viewport);
+        owner
+            .mount(
+                r#"
+            const root = tekto.create('window');
+            const save = tekto.create('button'); tekto.setProp(save, 'name', 'Save'); tekto.append(root, save);
+            const label = tekto.create('text'); tekto.setText(label, 'waiting'); tekto.append(root, label);
+            const ghost = tekto.create('button'); tekto.setProp(ghost, 'name', 'Ghost');
+            const field = tekto.create('text_field'); tekto.setProp(field, 'name', 'Name'); tekto.append(root, field);
+            tekto.onClick(save, () => tekto.setText(label, 'saved'));
+            tekto.onInput(field, value => tekto.setText(label, value));
+        "#,
+            )
+            .unwrap();
+        let find = |role: &str, name: &str| {
+            tekto_a11y::dump(&handle.tree())
+                .unwrap()
+                .nodes
+                .into_iter()
+                .find(|node| node.role == role && node.label.as_deref() == Some(name))
+                .map(|node| node.id)
+        };
+        let label_text = || {
+            handle
+                .tree()
+                .get(NodeId::from_raw(3))
+                .and_then(|node| node.text.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(find("Button", "Save"), Some(2));
+        // The ghost button was created in JS but never attached, so it is not
+        // in the AccessKit tree an agent searches.
+        assert_eq!(find("Button", "Ghost"), None);
+        assert_eq!(label_text(), "waiting");
+
+        handle
+            .semantic_action(SemanticAction::Activate { id: 2 })
+            .unwrap();
+        assert_eq!(label_text(), "saved");
+
+        handle
+            .semantic_action(SemanticAction::SetValue {
+                id: 5,
+                value: SemanticValue::Text("Ada".into()),
+            })
+            .unwrap();
+        assert_eq!(label_text(), "Ada");
+
+        let error = handle
+            .semantic_action(SemanticAction::Activate { id: 4 })
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("stale or not realized"),
+            "{error}"
+        );
+    }
 }
