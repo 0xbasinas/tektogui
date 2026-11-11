@@ -37,6 +37,7 @@ Try the demo: `cargo run -p round3-demo --features gpu`. Undecorated window, dra
 - Field copy/paste lives in the clipboard probe, not an end-to-end field test.
 
 **Window chrome**
+- A thin black strip can still appear on the newly exposed edge during a resize. #214 forced the frame size, reconfigured the surface at present time, and added a final redraw on mouse-up, which made it much smaller but did not remove it. Likely causes: a one-frame DWM/swapchain lag, or a physical/logical size rounding mismatch between the window and the surface. Needs a trace of surface config size versus `inner_size` on the affected frames before changing the path again.
 - TSX props for `dragWindow` and `windowControl` are not exposed, so TSX apps cannot opt into undecorated chrome by themselves.
 - Snapping uses the monitor rectangle; quarter heights are not taskbar-aware.
 - The Windows 11 snap-layouts flyout is not reproduced.
