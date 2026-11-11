@@ -10,6 +10,8 @@ Research snapshot: 2026-11-11. These are proposed experiments informed by [frame
 
 **Acceptance.** Headless tests cover reorder, deletion, scrolling away and back, duplicate keys, focus, callbacks and bounded realized-node count for 1,000 rows. Exercise a screen reader announcement separately. Variable heights need measurement, an offset index and anchoring when estimates change; treat them as a later slice, not a hidden requirement of the fixed-height version.
 
+**Identity contract to decide.** An application key can survive reordering; the currently realized node id survives only while that row remains materialized; row-local state must either live in the application or have an explicit bounded retention policy. This differs from JSX `For`, which reconciles children by key but does not itself make them virtual. [Compose's item-key documentation](https://developer.android.com/develop/ui/compose/lists#item-keys) motivates stable item identity, not a guarantee that Tekto should retain every off-screen widget. For `scroll_to_key`, define whether completion means offset requested, row realized, layout complete or focus moved. Deletion while focused and an empty result need deterministic outcomes. Do not expose logical total/range to an OS adapter until the pinned AccessKit schema and that adapter are checked.
+
 ## 2. Navigation with observable state (M)
 
 **Why.** The [Flutter navigator source](https://github.com/flutter/flutter/blob/master/packages/flutter/lib/src/widgets/navigator.dart) distinguishes route operations and restoration. Tekto's roadmap already lists `tekto-navigation`; an agent should be able to know which route is active without reading pixels.
@@ -37,6 +39,41 @@ Research snapshot: 2026-11-11. These are proposed experiments informed by [frame
 ## 5. Complete input before expanding text (M–L)
 
 The [Parley overview](https://github.com/linebender/parley/blob/main/README.md) distinguishes shaping, bidi, segmentation, layout and selection; these are distinct failure modes. Round 3 already identifies mixed-direction movement and real IME/clipboard testing. First create repeatable examples for a Windows IME, Android field overlay, browser composition and clipboard, including cancellation, focus change and surrogate/grapheme boundaries. Then tackle per-run bidi and visual caret movement with headless geometry tests plus real input-method checks. Read-only styled spans can follow once selection and accessibility behavior are specified.
+
+**Offset and behavior matrix.** [Unicode UAX #29](https://www.unicode.org/reports/tr29/) defines grapheme segmentation; [UAX #9](https://www.unicode.org/reports/tr9/) describes bidi logical and display order. Neither makes UTF-8 bytes, Unicode scalar indices, UTF-16 code units, grapheme clusters, glyphs and visual positions interchangeable. Document the unit and conversion at each Rust tree, Android overlay, browser input and AccessKit boundary. Exercise combining marks, emoji sequences, Arabic/Hebrew mixed with digits and Latin, wraps, selection replacement and IME preedit cancellation. Test copy/paste without putting actual user clipboard content into logs. Platform IME and screen-reader checks remain manual until a suitable controlled harness exists.
+
+## 6. Drag, reorder and gestures (M–L)
+
+**Evidence and current state.** Tekto already captures a pointer for sliders, cancels touch without clicking, and suppresses synthetic mouse events in `crates/tekto-platform/src/pointer_route.rs`; round 3 says there is no generic drag callback or agent `ui.drag`. The [Pointer Events specification](https://www.w3.org/TR/pointerevents3/#pointer-capture) distinguishes capture and cancellation, while the [APG slider pattern](https://www.w3.org/WAI/ARIA/apg/patterns/slider/) documents keyboard behavior and warns about touch assistive-technology differences.
+
+**First slice.** Define begin/move/end/cancel with a pointer identity, logical coordinates, capture ownership and cancellation on node removal, focus loss or host suspend. Choose a movement threshold and whether scrolling or dragging wins before adding reorder. Deliver callbacks on the UI owner and bound queued moves; do not synthesize a click after a completed drag or cancellation. Add an agent action that drives the same routing, with explicit start/end and intermediate timing, rather than directly rewriting list state. Make keyboard move-up/move-down an equivalent accessible operation for reorder.
+
+**Acceptance.** Headless tests cover crossing bounds, second pointer, capture removal, cancel, touch-to-mouse suppression, scroll conflict and a target disappearing mid-drag. Test mouse, touch and screen reader on real target devices; do not call external drag-and-drop, files, pinch or multi-touch complete based on a single-pointer prototype.
+
+## 7. Focus, selection and motion consistency (S–M per control)
+
+The [APG listbox](https://www.w3.org/WAI/ARIA/apg/patterns/listbox/) distinguishes focus from selection and recommends type-ahead; the [tree view pattern](https://www.w3.org/WAI/ARIA/apg/patterns/treeview/) describes expansion and directional navigation; the [grid pattern](https://www.w3.org/WAI/ARIA/apg/patterns/grid/) distinguishes a navigable grid from a static table. These are web guidance to adapt and validate against native conventions, not automatic proof of AccessKit support.
+
+Audit existing select, tabs, menu, slider and dialog with a table of initial focus, arrows, Home/End, activation, Escape, disabled behavior, removal and focus restoration. Add new tree/grid controls only after choosing whether focus and selection follow one another and whether a static table is sufficient. Round 3 already has reduced motion for tweens; the [WCAG animation guidance](https://www.w3.org/WAI/WCAG22/Understanding/animation-from-interactions.html) describes a Level AAA criterion for disabling nonessential interaction-triggered motion. Investigate OS preference observation and per-app override, test changes while animation is active, and state any platform limitations; do not claim WCAG conformance from a single setting.
+
+## 8. Localization and native documents (M–L, independent tracks)
+
+**Localization.** Round 3 defers `tekto-i18n`. [ICU4X](https://github.com/unicode-org/icu4x/blob/main/README.md) describes modular internationalization components and pluggable locale data; Tekto already has ICU transitive dependencies through the text stack, but this does not make a public localization API or all locale data available. Begin with an app-supplied locale, named messages, a documented fallback chain and a small plural example. Define how Rust and TSX receive the same resolved strings and how locale changes invalidate layout and accessible names. Test missing keys, plural categories beyond English, long translations and right-to-left layouts. Measure data and binary cost and review direct dependency licenses before selecting a library; do not implement plural rules with an English-only `count == 1` shortcut. Text bidi correctness and layout direction are related but separate.
+
+**Native documents.** Existing Android file operations are app-private; round 3 separately lists shared documents and SAF. The [Android Storage Access Framework guide](https://developer.android.com/training/data-storage/shared/documents-files) describes user-selected documents and URI-based access. Prototype a user-initiated open/save operation that returns an opaque, scoped handle with explicit lifetime and permissions, rather than pretending a document URI is a normal filesystem path. Define unsupported, user-cancelled, permission-revoked and I/O errors across Rust and TSX. Test with fake host results first, then a real device including process restart if persistent access is offered. Do not imply that app-private paths already provide shared-document access.
+
+## Sequencing and dependencies
+
+| Candidate | Prerequisite | Small reviewable outcome | Evidence still needed |
+| --- | --- | --- | --- |
+| Virtual list contract | Existing `KeyedList`, focus/semantics audit | Fixed-height list with documented ownership and focus | AT announcement and TSX host parity |
+| Drag/reorder | Pointer cancel/capture rules, virtual-list identity | One keyboard-accessible reorder example | Real touch and screen-reader test |
+| Navigation | Focus restoration and disposal contract | Push/pop/replace with a named route root | Android back and host lifecycle |
+| Async work | UI-owner dispatch and cancellation contract | One cancellable request with ignored late completion | Native/web lifecycle and binary cost |
+| Read-only data view | Semantic roles, focus and list realization | Static labeled table, then virtual rows | Platform adapter support and AT behavior |
+| Input and bidi | Explicit offset conversions and fixtures | Mixed-script caret/selection correctness | Real Windows, Android and browser IME |
+| Localization | Message and locale ownership; text invalidation | Two locales, plural and fallback example | Data size, translated content and RTL device checks |
+| Shared documents | Capability/permission and error contract | User-selected opaque document handle | Android SAF and desktop dialog tests on devices |
 
 ## Decision gates
 
