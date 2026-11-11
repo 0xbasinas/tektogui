@@ -7,8 +7,11 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "node --test packages/core/test.js packages/jsx-runtime/test.js packages/wasm/test.js packages/wasm/tsx-test.js packages/create-tektogui/test/index.test.js",
+    "test": "node --test packages/core/test.js packages/jsx-runtime/test.js packages/jsx-runtime/input-types.test.js packages/wasm/test.js packages/wasm/tsx-test.js packages/create-tektogui/test/index.test.js",
     "test:wasm:required": "node scripts/test-wasm-required.js",
     "dev:web": "node packages/wasm/dev.js"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
   }
 }

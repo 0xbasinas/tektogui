@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "JSX components an agent can mount. Kinds match NodeKind and tekto-widgets. Each kind lists every prop the host setProp accepts, because JSX forwards that set on every kind. title, font_size, and justify_center are aliases (see propAliases). Button onClick and text-node reactive text need a retained QuickJS host; desktop QuickJS delivers button actions from pointer, keyboard, and agent clicks; web parity is not supported.",
+  "description": "JSX components an agent can mount. Kinds match NodeKind and tekto-widgets. Each kind lists every prop the host setProp accepts, because JSX forwards that set on every kind. title, font_size, and justify_center are aliases (see propAliases). Button onClick, text_field onInput and text-node reactive text need a retained QuickJS host; desktop QuickJS delivers button actions and committed field input; web parity is not supported.",
   "propAliases": {
     "title": "name",
     "font_size": "fontSize",
@@ -116,6 +116,7 @@
     },
     {
       "name": "text_field",
+      "jsxProps": [{"name": "onInput", "type": "function", "description": "Receives the committed value on a retained QuickJS host."}],
       "description": "Single-line field with the same style defaults as Rust text_field(). name is the label. text is the committed value.",
       "props": [
         {"name": "disabled", "type": "boolean"},

@@ -83,6 +83,13 @@ function walk(node, parentId, tekto, options, created) {
   created.push(id);
   for (const [key, value] of Object.entries(node.props ?? {})) {
     if (key === "children" || value == null) continue;
+    if (key === "onInput") {
+      if (kind !== "text_field" || typeof value !== "function") throw new TypeError("onInput requires a text_field and a function");
+      if (typeof tekto.onInput !== "function") throw new Error("onInput requires a retained QuickJS host");
+      if (typeof tekto.remove !== "function") throw new Error("onInput requires host remove for rollback");
+      tekto.onInput(id, value);
+      continue;
+    }
     if (key === "onClick") {
       if (kind !== "button" || typeof value !== "function") throw new TypeError("onClick requires a button and a function");
       if (typeof tekto.onClick !== "function") throw new Error("onClick requires a retained QuickJS host");

@@ -41,8 +41,10 @@ jobs:
       # Do not add a second test job for them.
       - name: Test (replay + headless PNG compare)
         run: cargo test --workspace --all-targets
+      - name: Install TypeScript for declaration tests
+        run: npm install --no-save --no-package-lock --ignore-scripts typescript@6.0.3
       - name: JS package tests
-        run: node --test packages/core/test.js packages/jsx-runtime/test.js packages/create-tektogui/test/index.test.js
+        run: node --test packages/core/test.js packages/jsx-runtime/test.js packages/jsx-runtime/input-types.test.js packages/create-tektogui/test/index.test.js
 
   windows:
     name: Windows compile

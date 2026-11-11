@@ -35,6 +35,7 @@ export function jsxDEV(type: TektoElement["type"], props: Record<string, unknown
 export function isElement(value: unknown): value is TektoElement;
 
 export type HostApi = {
+  onInput?(id: number, callback: (value: string) => void): void;
   onClick?(id: number, callback: () => void): void;
   onDispose?(id: number, cleanup: () => void): void;
   create(kind: string): number;
@@ -66,6 +67,6 @@ export namespace JSX {
     text: CommonProps & { text?: string | number | (() => string | number) };
     button: StaticProps & { disabled?: boolean; onClick?: () => void };
     window: StaticProps; group: StaticProps; rect: StaticProps;
-    text_field: StaticProps & { disabled?: boolean }; scroll: StaticProps; list: StaticProps; list_item: StaticProps;
+    text_field: StaticProps & { disabled?: boolean; onInput?: (value: string) => void }; scroll: StaticProps; list: StaticProps; list_item: StaticProps;
   }
 }

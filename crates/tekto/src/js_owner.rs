@@ -10,6 +10,7 @@ type Reply<T> = mpsc::Sender<Result<T, String>>;
 enum Command {
     Mount(String, Reply<u64>),
     Click(u64, u64, Reply<bool>),
+    Input(u64, u64, String, Reply<bool>),
     Generation(Reply<u64>),
     Shutdown(Reply<()>),
 }
@@ -50,6 +51,62 @@ impl Host for SharedHost {
 struct Session {
     js: JsSession,
     host: SharedHost,
+}
+fn dispatch(
+    current: &mut Option<Session>,
+    generation: u64,
+    expected: u64,
+    id: u64,
+    value: Option<&str>,
+    tree: &Arc<Mutex<Tree>>,
+) -> Result<bool, String> {
+    match current.as_mut() {
+        Some(session) if expected == generation => {
+            let live = tree.lock().map_err(|e| e.to_string())?;
+            if live.get(NodeId::from_raw(id)).is_none() {
+                return Ok(false);
+            }
+            drop(live);
+            match value {
+                Some(value) => session.js.dispatch_input(id, value, &mut session.host),
+                None => session.js.dispatch_click(id, &mut session.host),
+            }
+            .map_err(|e| e.to_string())
+        }
+        _ => Err("stale JS generation".into()),
+    }
+}
+fn finish_event(
+    result: Result<bool, String>,
+    kind: &str,
+    reply: Reply<bool>,
+    logs: &Arc<Mutex<Vec<String>>>,
+    viewport: &Arc<Mutex<Viewport>>,
+    tree: &Arc<Mutex<Tree>>,
+    notify: &std::sync::Weak<SharedTreeHandle>,
+) {
+    if let Err(error) = &result {
+        if let Ok(mut logs) = logs.lock() {
+            logs.push(format!("js {kind} failed: {error}"));
+        }
+    }
+    if matches!(result, Ok(true) | Err(_)) {
+        let (w, h) = viewport
+            .lock()
+            .map(|v| (v.width, v.height))
+            .unwrap_or((640, 400));
+        if let Ok(mut tree) = tree.lock() {
+            layout_tree(&mut tree, w as f32, h as f32);
+        }
+        if let Some(handle) = notify.upgrade() {
+            if let Ok(callback) = handle.on_change.lock() {
+                if let Some(callback) = callback.as_ref() {
+                    callback();
+                }
+            }
+        }
+    }
+    let _ = reply.send(result);
 }
 impl JsAppOwner {
     pub fn new(handle: &Arc<SharedTreeHandle>, viewport: &Arc<Mutex<Viewport>>) -> Self {
@@ -102,43 +159,13 @@ impl JsAppOwner {
                         let _ = reply.send(result);
                     }
                     Command::Click(expected, id, reply) => {
-                        let result = match current.as_mut() {
-                            Some(session) if expected == generation => match tree.lock() {
-                                Ok(tree) if tree.get(NodeId::from_raw(id)).is_none() => Ok(false),
-                                Ok(tree) => {
-                                    drop(tree);
-                                    session
-                                        .js
-                                        .dispatch_click(id, &mut session.host)
-                                        .map_err(|e| e.to_string())
-                                }
-                                Err(e) => Err(e.to_string()),
-                            },
-                            _ => Err("stale JS generation".into()),
-                        };
-                        if let Err(error) = &result {
-                            if let Ok(mut logs) = logs.lock() {
-                                logs.push(format!("js click failed: {error}"));
-                            }
-                        }
-                        // A callback may have changed the tree even when it throws.
-                        if matches!(result, Ok(true) | Err(_)) {
-                            let (w, h) = viewport
-                                .lock()
-                                .map(|v| (v.width, v.height))
-                                .unwrap_or((640, 400));
-                            if let Ok(mut tree) = tree.lock() {
-                                layout_tree(&mut tree, w as f32, h as f32);
-                            }
-                            if let Some(handle) = notify.upgrade() {
-                                if let Ok(callback) = handle.on_change.lock() {
-                                    if let Some(callback) = callback.as_ref() {
-                                        callback();
-                                    }
-                                }
-                            }
-                        }
-                        let _ = reply.send(result);
+                        let result = dispatch(&mut current, generation, expected, id, None, &tree);
+                        finish_event(result, "click", reply, &logs, &viewport, &tree, &notify);
+                    }
+                    Command::Input(expected, id, value, reply) => {
+                        let result =
+                            dispatch(&mut current, generation, expected, id, Some(&value), &tree);
+                        finish_event(result, "input", reply, &logs, &viewport, &tree, &notify);
                     }
                     Command::Generation(reply) => {
                         let _ = reply.send(if current.is_some() {
@@ -188,6 +215,16 @@ impl JsAppOwner {
         let generation = self.generation()?;
         self.request(|reply| Command::Click(generation, id, reply))
     }
+    pub(crate) fn dispatch_input_locked(&self, id: u64, value: String) -> Result<bool, String> {
+        let generation = self.generation()?;
+        self.request(|reply| Command::Input(generation, id, value, reply))
+    }
+    /// Deliver input to an existing node in the specified generation.
+    pub fn dispatch_input(&self, generation: u64, id: u64, value: String) -> Result<bool, String> {
+        self.check_thread()?;
+        let _gate = self.0.gate.lock().map_err(|e| e.to_string())?;
+        self.request(|reply| Command::Input(generation, id, value, reply))
+    }
     /// Mount a candidate; on failure the current session and tree remain live.
     pub fn mount(&self, source: &str) -> Result<u64, String> {
         self.check_thread()?;
@@ -229,6 +266,7 @@ mod tests {
             last_writeback: Mutex::new(None),
             action_gate: Arc::new(Mutex::new(())),
             click_js: Mutex::new(None),
+            input_js: Mutex::new(None),
             history: Mutex::new(None),
         })
     }
@@ -443,6 +481,162 @@ mod tests {
                 Some(expected)
             );
         }
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn input_updates_signal_for_committed_actions() {
+        use tekto_platform::key_route::{deliver_key, ElementState, Key, ModifiersState};
+        use tekto_tree::ImeEvent;
+        let runtime = crate::AppRuntime::new(Tree::new(), "input");
+        let (handle, viewport) = crate::create_handle(&runtime, 640, 400);
+        let owner = crate::install_js_runtime(&handle, &viewport);
+        let core = include_str!("../../../packages/core/src/index.js")
+            .replace("export function ", "function ");
+        let jsx = include_str!("../../../packages/jsx-runtime/src/index.js")
+            .replace(
+                "import schema from \"./components.json\" with { type: \"json\" };",
+                &format!(
+                    "const schema = {};",
+                    include_str!("../../../packages/jsx-runtime/src/components.json")
+                ),
+            )
+            .replace("export function ", "function ")
+            .replace("export const ", "const ");
+        let source = format!(
+            r#"{core} {jsx}
+            const [value, setValue] = createSignal('');
+            let calls = [];
+            mount(jsxs('window', {{children: [jsx('text', {{text: () => value()}}),
+                jsx('text_field', {{name: 'Name', onInput: v => {{ calls.push(v); setValue(calls.join('|')); }}}})]}}), tekto, {{createEffect}});
+        "#
+        );
+        let generation = owner.mount(&source).unwrap();
+        let field = NodeId::from_raw(3);
+        handle.type_text(field, "ab").unwrap();
+        assert_eq!(text(&handle), "ab");
+        handle
+            .route_action(|tree| {
+                (
+                    tree.apply_ime(ImeEvent::Preedit {
+                        text: "x".into(),
+                        cursor: None,
+                    })
+                    .unwrap(),
+                    None,
+                )
+            })
+            .unwrap();
+        assert_eq!(text(&handle), "ab");
+        handle
+            .route_action(|tree| (tree.apply_ime(ImeEvent::Commit("é".into())).unwrap(), None))
+            .unwrap();
+        assert_eq!(text(&handle), "ab|abé");
+        deliver_key(
+            &handle,
+            &Key::Character("z".into()),
+            Some("z"),
+            ElementState::Pressed,
+            false,
+            ModifiersState::empty(),
+            &mut None,
+        )
+        .unwrap();
+        assert_eq!(text(&handle), "ab|abé|abéz");
+        use tekto_tree::{FieldKey, NodePatch};
+        handle
+            .patch(
+                field,
+                NodePatch {
+                    text: Some("xy".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(text(&handle), "ab|abé|abéz");
+        handle
+            .route_action(|tree| (tree.apply_field_key(FieldKey::Backspace).unwrap(), None))
+            .unwrap();
+        assert_eq!(text(&handle), "ab|abé|abéz|x");
+        handle
+            .route_action(|tree| (tree.apply_field_key(FieldKey::Home).unwrap(), None))
+            .unwrap();
+        handle
+            .route_action(|tree| (tree.apply_field_key(FieldKey::Delete).unwrap(), None))
+            .unwrap();
+        assert_eq!(text(&handle), "ab|abé|abéz|x|");
+        handle
+            .route_action(|tree| (tree.apply_field_key(FieldKey::Backspace).unwrap(), None))
+            .unwrap();
+        assert_eq!(text(&handle), "ab|abé|abéz|x|");
+        handle
+            .patch(
+                field,
+                NodePatch {
+                    disabled: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let _ = handle.type_text(field, "ignored");
+        handle
+            .route_action(|tree| (tree.apply_field_key(FieldKey::Insert('q')).unwrap(), None))
+            .unwrap();
+        assert_eq!(text(&handle), "ab|abé|abéz|x|");
+        handle.tree.lock().unwrap().remove(field).unwrap();
+        assert!(handle.type_text(field, "stale").is_err());
+        assert_eq!(text(&handle), "ab|abé|abéz|x|");
+        assert!(!owner
+            .dispatch_input(generation, 999, "stale".into())
+            .unwrap());
+        let next = owner.mount(&source).unwrap();
+        assert!(owner.dispatch_input(generation, 3, "stale".into()).is_err());
+        assert!(owner.dispatch_input(next, 3, "new".into()).unwrap());
+        assert_eq!(text(&handle), "new");
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn input_errors_and_budget_are_reported_and_session_recovers() {
+        let runtime = crate::AppRuntime::new(Tree::new(), "input");
+        let (handle, viewport) = crate::create_handle(&runtime, 640, 400);
+        let owner = crate::install_js_runtime(&handle, &viewport);
+        owner.mount(r#"const root = tekto.create('window'); const field = tekto.create('text_field'); tekto.append(root, field); const label = tekto.create('text'); tekto.append(root, label); let count = 0; tekto.onInput(field, () => { tekto.setText(label, String(++count)); if (count === 1) throw new Error('input failed'); if (count === 2) for (;;) {} });"#).unwrap();
+        let field = NodeId::from_raw(2);
+        handle
+            .route_action(|tree| {
+                (
+                    tree.apply_field_key(tekto_tree::FieldKey::Left).unwrap(),
+                    None,
+                )
+            })
+            .unwrap();
+        assert!(handle
+            .type_text(field, "a")
+            .unwrap_err()
+            .to_string()
+            .contains("input failed"));
+        assert!(handle
+            .type_text(field, "b")
+            .unwrap_err()
+            .to_string()
+            .contains("budget"));
+        handle.type_text(field, "c").unwrap();
+        assert_eq!(
+            handle
+                .tree()
+                .get(NodeId::from_raw(3))
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("3")
+        );
+        assert!(handle
+            .logs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("js input failed")));
         owner.shutdown().unwrap();
     }
 
