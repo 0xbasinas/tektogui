@@ -3,7 +3,7 @@
 //! This is the same tree agents get from MCP `ui.tree` and `GET /accesskit`.
 //! Screen readers and coding agents share one source of truth.
 
-use accesskit::{Node, NodeId, Rect, Role, Tree, TreeUpdate};
+use accesskit::{Node, NodeId, Rect, Role, Toggled, Tree, TreeUpdate};
 use serde::Serialize;
 use tekto_tree::{NodeKind, Tree as SceneTree};
 
@@ -41,6 +41,8 @@ pub struct AccessKitDump {
 pub struct AccessKitNodeDump {
     pub id: u64,
     pub role: String,
+    pub disabled: bool,
+    pub toggled: Option<bool>,
     pub label: Option<String>,
     pub value: Option<String>,
     pub bounds: [f64; 4],
@@ -56,6 +58,8 @@ pub fn dump(scene: &SceneTree) -> Option<AccessKitDump> {
         .map(|(id, node)| AccessKitNodeDump {
             id: id.0,
             role: format!("{:?}", node.role()),
+            disabled: node.is_disabled(),
+            toggled: node.toggled().map(|value| value == Toggled::True),
             label: node.label().map(|s| s.to_string()),
             value: node.value().map(|s| s.to_string()),
             bounds: node.bounds().map_or([0.0; 4], |r| [r.x0, r.y0, r.x1, r.y1]),
@@ -73,6 +77,16 @@ fn collect(scene: &SceneTree, id: tekto_tree::NodeId, out: &mut Vec<(NodeId, Nod
         return;
     };
     let mut node = Node::new(role_for(src.kind));
+    if src.kind == NodeKind::Checkbox {
+        node.set_toggled(if src.checked {
+            Toggled::True
+        } else {
+            Toggled::False
+        });
+    }
+    if src.disabled {
+        node.set_disabled();
+    }
     if src.kind == NodeKind::TextField {
         if let Some(name) = src.name.as_ref().filter(|s| !s.is_empty()) {
             node.set_label(name.clone());
@@ -113,6 +127,7 @@ fn role_for(kind: NodeKind) -> Role {
         NodeKind::Rect => Role::GenericContainer,
         NodeKind::Text => Role::Label,
         NodeKind::Button => Role::Button,
+        NodeKind::Checkbox => Role::CheckBox,
         NodeKind::TextField => Role::TextInput,
         NodeKind::Scroll => Role::ScrollView,
         NodeKind::List => Role::List,
@@ -194,5 +209,21 @@ mod tests {
         let node = dump.nodes.iter().find(|n| n.id == field.raw()).unwrap();
         assert_eq!(node.value.as_deref(), Some("Hi你"));
         assert_eq!(scene.get(field).unwrap().text.as_deref(), Some("Hi你"));
+    }
+
+    #[test]
+    fn android_overlay_value_is_the_accesskit_value() {
+        let mut scene = SceneTree::new();
+        let w = scene.add(K::Window, None).unwrap();
+        let field = scene.add(K::TextField, Some(w)).unwrap();
+        scene.get_mut(field).unwrap().name = Some("Title".into());
+        scene.get_mut(field).unwrap().text = Some("".into());
+        scene.set_focus(field).unwrap();
+        assert!(scene.set_focused_field_value("Milk", 4).unwrap());
+        let dump = dump(&scene).expect("dump");
+        let node = dump.nodes.iter().find(|n| n.id == field.raw()).unwrap();
+        assert_eq!(node.role, "TextInput");
+        assert_eq!(node.label.as_deref(), Some("Title"));
+        assert_eq!(node.value.as_deref(), Some("Milk"));
     }
 }

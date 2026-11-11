@@ -5,5 +5,10 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+default = []
+# `cargo run -p notes --features gpu` paints with wgpu / Vello.
+gpu = ["tekto/gpu"]
+
 [dependencies]
 tekto = { workspace = true }

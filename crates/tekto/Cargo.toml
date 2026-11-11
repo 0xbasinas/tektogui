@@ -12,11 +12,15 @@ publish = false
 default = ["cpu", "desktop"]
 cpu = ["tekto-render/cpu", "tekto-platform/cpu"]
 desktop = ["tekto-platform/desktop", "cpu"]
-gpu = ["tekto-render/gpu"]
+gpu = ["tekto-render/gpu", "tekto-platform/gpu"]
 a11y-os = ["tekto-platform/a11y-os"]
 js = ["dep:tekto-js"]
 # Embeds QuickJS-ng. Off by default; do not enable on PR CI.
 quickjs = ["js", "tekto-js/quickjs"]
+# System tray (Linux StatusNotifierItem, Windows Shell_NotifyIconW). Off by default.
+tray = ["tekto-native/tray"]
+# Global shortcuts (Linux X11 grab, Windows RegisterHotKey). Off by default.
+shortcuts = ["tekto-native/shortcuts", "tekto-js?/shortcuts"]
 
 [dependencies]
 tekto-tree = { workspace = true }

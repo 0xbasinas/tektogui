@@ -36,10 +36,15 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Test (includes headless snapshot)
+      # Replay (`record_replay`) and the Notes PNG byte compare
+      # (`headless_snapshot`) are integration tests. They run here.
+      # Do not add a second test job for them.
+      - name: Test (replay + headless PNG compare)
         run: cargo test --workspace --all-targets
+      - name: Install TypeScript for declaration tests
+        run: npm install --no-save --no-package-lock --ignore-scripts typescript@6.0.3
       - name: JS package tests
-        run: node --test packages/core/test.js packages/jsx-runtime/test.js
+        run: node --test packages/core/test.js packages/jsx-runtime/test.js packages/jsx-runtime/input-types.test.js packages/create-tektogui/test/index.test.js
 
   windows:
     name: Windows compile
@@ -72,3 +77,43 @@ jobs:
         run: cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu
       - name: Check Notes Android skeleton
         run: cargo check -p notes-android --target aarch64-linux-android
+
+  wasm:
+    name: WASM and QuickJS checks
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/nightly')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm-check
+      - name: Install esbuild
+        run: |
+          npm install --prefix "$RUNNER_TEMP/tekto-ci" --no-save --no-package-lock esbuild@0.25.12
+          echo "$RUNNER_TEMP/tekto-ci/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Build WASM core and op bridge
+        run: cargo build -p tekto-wasm --target wasm32-unknown-unknown
+      - name: Check tekto CPU + HostOp (no desktop shell, no quickjs, no gpu)
+        run: cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js
+      - name: Test WASM in Node (required)
+        run: npm run test:wasm:required
+      - name: Test QuickJS
+        env:
+          TEKTO_REQUIRE_ESBUILD: "1"
+        run: cargo test -p tekto-js --features quickjs
+      - name: Test retained QuickJS owner and actions
+        env:
+          TEKTO_REQUIRE_ESBUILD: "1"
+        run: |
+          set -euo pipefail
+          cargo test -p tekto --features quickjs --lib js_owner -- --list > "$RUNNER_TEMP/owner-tests.txt"
+          for test in execution_budget_lifecycle_with_outer_timeout owner_mount_click_reload_and_shutdown callback_error_and_removed_node_do_not_break_owner desktop_routes_deliver_counter_once_and_order_lifecycle http_and_handle_click_deliver_signal_and_errors; do
+            grep -Fx "js_owner::tests::$test: test" "$RUNNER_TEMP/owner-tests.txt"
+          done
+          cargo test -p tekto --features quickjs --lib js_owner
+      - name: Check CLI with QuickJS
+        run: cargo check -p tekto-cli --features quickjs

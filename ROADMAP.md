@@ -49,29 +49,35 @@ Still in Month 1:
 
 ## Month 4 — web and more native
 
-- WASM build of the core
-- Web paint: CPU renderer to canvas, then WebGPU if the GPU backend is ready
-- TypeScript apps on the browser engine, same JSX API
-- File open/save dialogs on Windows and Linux
-- System tray and global shortcuts on desktop
+- WASM build of the core (landed: `tekto-wasm` + `@tektogui/wasm` HostOp bridge)
+- Web paint: CPU renderer to canvas (landed: `@tektogui/wasm/canvas`). WebGPU is optional (`tekto-wasm` feature `gpu`, `@tektogui/wasm/gpu`) and falls back to that blit. WebGL2 stays on the blit.
+- TypeScript apps on the browser engine, same JSX API (landed: `node packages/wasm/dev.js` runs the Notes TSX sketch on the wasm core)
+- File open/save dialogs on Windows (`GetOpenFileNameW` / `GetSaveFileNameW`, compile-checked; a live dialog is still issue #45). Linux uses zenity; see `docs/architecture.md`
+- Global shortcuts on desktop (Linux and Windows shortcuts are the optional `shortcuts` feature; a live Windows hotkey check is still open. Tray is the optional `tray` feature on Linux and Windows; a live Windows tray check is still open)
 - Better list virtualization and scroll feel
 
 ## Month 5 — mobile polish and plugins
 
-- Android IME or a native text-field overlay
-- Safe areas and keyboard insets
-- GPU path on Android if drivers allow
-- Notifications, clipboard, and files on Android
-- Animation and scroll feel on touch
-- macOS catch-up if we have a Mac
+- Android text input uses a native `EditText` overlay (`FieldOverlay`), not winit IME. A live type-into-field check still needs a free emulator or device
+- Safe areas and keyboard insets: layout pads recorded safe-area insets and scrolls a focused field above the IME (host tests; a live portrait check is still open)
+- Android GPU paint compiles behind `notes-android` feature `gpu`, but the default stays CPU (`TEKTO_ANDROID_GPU=1` to try it). Drivers were not proven here. A lost surface skips present.
+- Android notifications post through `NotificationManager` (`notificationsShow`). A live post still needs a device. Android clipboard get/set uses `ClipboardManager` (`clipboardGetText` / `clipboardSetText`). A read while the activity is in the background is `Unavailable` on API 29+. A live device clipboard check is still open.
+- [x] Android app-private file reads and writes ([#56](https://github.com/0xbasinas/tektogui/issues/56)); shared-document picking and the Storage Access Framework remain unsupported.
+- Animation and scroll feel on touch (1:1 tracking, fling, finger cancels the coast; no bounce)
+- [ ] macOS catch-up if we have a Mac ([#58](https://github.com/0xbasinas/tektogui/issues/58); runtime checks and other plugins remain open)
 
 ## Month 6 — a real side app
 
-- Time-travel for opted-in stores
-- `app.components` schemas for agents
-- iOS hello (needs a Mac)
-- One real example app people can use
-- CI: headless replay + screenshots; documented store signing
-- Honest list of what is still weaker than Flutter or a native toolkit
+- Time-travel for opted-in stores (landed: `Store::recording`, `examples/time-travel`, MCP `app.states` / `app.restore`. Off unless the app opts in)
+- `app.components` schemas for agents (shipped: `components.json` + MCP tool)
+- [ ] iOS hello (needs a Mac)
+- [x] One real example app people can use: the Rust Notebook ([#63](https://github.com/0xbasinas/tektogui/issues/63))
+- CI: headless replay + screenshots; documented store signing (replay and PNG compare run in the Linux test step; signing requirements are in `docs/signing.md`; we still do not sign)
+- [x] Honest list of what is still weaker than Flutter or a native toolkit ([#65](https://github.com/0xbasinas/tektogui/issues/65); see [toolkit gaps](docs/toolkit-gaps.md))
 
 Web, GPU, iOS, and perfect IME may slip. If they do, we cut scope rather than rush a wrapper around someone else's engine.
+
+## After Month 6 — research list
+
+A later research pass (November 2026) lists possible new crates, packages, and extensions. See the [Round 3 research roadmap](docs/roadmap/round3-research.md). That list is not a promise, and it has not been opened as GitHub issues.
+

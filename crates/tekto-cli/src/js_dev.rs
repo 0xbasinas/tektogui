@@ -8,18 +8,16 @@ use std::io;
 #[cfg(feature = "quickjs")]
 use std::path::Path;
 #[cfg(feature = "quickjs")]
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 #[cfg(feature = "quickjs")]
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "quickjs")]
-use tekto::{
-    run_windowed_with_session, start_handle, AppHandle, AppRuntime, Viewport, WindowOptions,
-};
+use tekto::{run_windowed_with_session, start_handle, AppHandle, AppRuntime, WindowOptions};
 #[cfg(feature = "quickjs")]
-use tekto_js::{bundle, eval_to_tree, spawn_watcher};
+use tekto_js::{bundle, spawn_watcher};
 #[cfg(feature = "quickjs")]
-use tekto_mcp::{ApplyJsFn, SharedTreeHandle};
+use tekto_mcp::SharedTreeHandle;
 
 #[cfg(feature = "quickjs")]
 const WIDTH: u32 = 640;
@@ -60,27 +58,13 @@ pub fn run_js_dev(
 }
 
 #[cfg(feature = "quickjs")]
-fn install_applier(handle: &Arc<SharedTreeHandle>, viewport: &Arc<Mutex<Viewport>>) {
-    let tree = Arc::clone(&handle.tree);
-    let logs = Arc::clone(&handle.logs);
-    let vp = Arc::clone(viewport);
-    let apply: ApplyJsFn = Arc::new(move |js: &str| {
-        let t0 = Instant::now();
-        let mut next = eval_to_tree(js).map_err(|e| e.to_string())?;
-        let (w, h) = vp
-            .lock()
-            .map(|g| (g.width, g.height))
-            .unwrap_or((WIDTH, HEIGHT));
-        tekto::layout_tree(&mut next, w as f32, h as f32);
-        *tree.lock().map_err(|e| e.to_string())? = next;
-        let line = format!("js reload {}ms", t0.elapsed().as_millis());
-        eprintln!("{line}");
-        if let Ok(mut logs) = logs.lock() {
-            logs.push(line);
-        }
-        Ok(())
-    });
-    *handle.apply_js.lock().expect("apply_js") = Some(apply);
+struct ShutdownOwner(tekto::JsAppOwner);
+
+#[cfg(feature = "quickjs")]
+impl Drop for ShutdownOwner {
+    fn drop(&mut self) {
+        let _ = self.0.shutdown();
+    }
 }
 
 #[cfg(feature = "quickjs")]
@@ -103,10 +87,11 @@ fn run_js_dev_inner(
     watch: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let js = bundle_logged(&entry)?;
-    let tree = eval_to_tree(&js)?;
-    let runtime = AppRuntime::new(tree, "Notes");
+    let runtime = AppRuntime::new(tekto::Tree::new(), "Notes");
     let (handle, ep, viewport) = start_handle(&runtime, WIDTH, HEIGHT)?;
-    install_applier(&handle, &viewport);
+    let owner = tekto::install_js_runtime(&handle, &viewport);
+    let _shutdown = ShutdownOwner(owner.clone());
+    owner.mount(&js)?;
     println!("dev server {}", ep.base_url());
     println!("JS entry {}", entry.display());
     println!("saving a .tsx / .ts / .js file reloads the JS side; the Rust core stays up.");
@@ -176,6 +161,7 @@ fn run_js_dev_inner(
             Some((handle, ep, viewport)),
         )?;
     }
+    owner.shutdown().map_err(io::Error::other)?;
     Ok(())
 }
 

@@ -9,11 +9,14 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
-use tekto_tree::{NodeId, NodeKind, NodePatch, Tree, TreeError};
+use tekto_tree::{NodeId, NodeKind, NodePatch, StyleTransition, Tree, TreeError};
 use thiserror::Error;
 
 #[cfg(feature = "quickjs")]
 mod engine;
+
+#[cfg(feature = "quickjs")]
+pub use engine::JsSession;
 
 mod bundle;
 mod watch;
@@ -43,11 +46,43 @@ impl From<TreeError> for JsError {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum HostOp {
-    Create { kind: String },
-    SetText { id: u64, text: String },
-    SetProp { id: u64, key: String, value: String },
-    Append { parent: u64, child: u64 },
-    Remove { id: u64 },
+    Create {
+        kind: String,
+    },
+    SetText {
+        id: u64,
+        text: String,
+    },
+    SetProp {
+        id: u64,
+        key: String,
+        value: String,
+    },
+    Append {
+        parent: u64,
+        child: u64,
+    },
+    Remove {
+        id: u64,
+    },
+    /// Start a quiet style tween. The window loop calls [`Tree::advance`].
+    /// Headless callers advance time themselves. Numbers are decimal strings
+    /// so this op stays `Eq`.
+    Transition {
+        id: u64,
+        #[serde(default)]
+        opacity: Option<String>,
+        #[serde(default)]
+        x: Option<String>,
+        #[serde(default)]
+        y: Option<String>,
+        #[serde(default)]
+        width: Option<String>,
+        #[serde(default)]
+        height: Option<String>,
+        #[serde(default)]
+        duration_ms: Option<u32>,
+    },
 }
 
 /// Host that applies ops. The desktop QuickJS runtime and the web WASM
@@ -93,6 +128,9 @@ pub fn apply_ops(tree: &mut Tree, ops: &[HostOp]) -> Result<Vec<u64>, JsError> {
                 let kind = NodeKind::from_name(kind)
                     .ok_or_else(|| JsError::Message(format!("unknown node kind `{kind}`")))?;
                 let id = tree.add(kind, None)?;
+                if let Some(node) = tree.get_mut(id) {
+                    node.apply_widget_defaults();
+                }
                 created.push(id.raw());
             }
             HostOp::SetText { id, text } => {
@@ -112,6 +150,33 @@ pub fn apply_ops(tree: &mut Tree, ops: &[HostOp]) -> Result<Vec<u64>, JsError> {
             }
             HostOp::Remove { id } => {
                 tree.remove(NodeId::from_raw(*id))?;
+            }
+            HostOp::Transition {
+                id,
+                opacity,
+                x,
+                y,
+                width,
+                height,
+                duration_ms,
+            } => {
+                let num = |key: &str, value: &Option<String>| -> Result<Option<f32>, JsError> {
+                    match value {
+                        Some(text) => Ok(Some(parse_f32(key, text)?)),
+                        None => Ok(None),
+                    }
+                };
+                tree.transition(
+                    NodeId::from_raw(*id),
+                    StyleTransition {
+                        opacity: num("opacity", opacity)?,
+                        x: num("x", x)?,
+                        y: num("y", y)?,
+                        width: num("width", width)?,
+                        height: num("height", height)?,
+                        duration_ms: duration_ms.map(|ms| ms as f32),
+                    },
+                )?;
             }
         }
     }
@@ -141,6 +206,26 @@ fn parse_bool(key: &str, value: &str) -> Result<bool, JsError> {
     }
 }
 
+/// Prop keys `setProp` accepts. `components.json` must stay inside this set
+/// (plus the JSX alias `title`, which is rewritten to `name` before the host).
+pub const HOST_PROP_KEYS: &[&str] = &[
+    "disabled",
+    "checked",
+    "width",
+    "height",
+    "column",
+    "justifyCenter",
+    "justify_center",
+    "text",
+    "name",
+    "fill",
+    "color",
+    "fontSize",
+    "font_size",
+    "padding",
+    "gap",
+];
+
 fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), JsError> {
     match key {
         "width" | "height" | "column" | "justifyCenter" | "justify_center" => {
@@ -162,6 +247,8 @@ fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), J
     }
     let mut patch = NodePatch::default();
     match key {
+        "checked" => patch.checked = Some(parse_bool(key, value)?),
+        "disabled" => patch.disabled = Some(parse_bool(key, value)?),
         "text" => patch.text = Some(value.into()),
         "name" => patch.name = Some(value.into()),
         "fill" => patch.fill = Some(value.into()),
@@ -180,8 +267,15 @@ fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), J
 /// Run a JS script against `host`.
 ///
 /// When the `quickjs` feature is on, the script sees a global `tekto`
-/// object: `create`, `setText`, `setProp`, `append`, `remove`. Those
-/// call the same [`HostOp`] protocol the web target will use.
+/// object: `create`, `setText`, `setProp`, `append`, `remove`,
+/// `transition(id, key, value, durationMs)` for one of `opacity`, `x`,
+/// `y`, `width`, `height`, or `transition(id, { opacity, x, y, width,
+/// height, durationMs })` for several at once, and
+/// `applyNativeOp(json)` for one [`NativeOp`] (clipboard, files,
+/// notifications, tray, shortcuts). A later transition call merges.
+/// Tree calls use the same [`HostOp`] protocol the web target will use.
+/// `transition` starts a tween; the host loop advances time with
+/// [`tekto_tree::Tree::advance`].
 ///
 /// Without the feature this returns [`JsError::EngineDisabled`].
 pub fn eval_to_tree(source: &str) -> Result<Tree, JsError> {
@@ -191,14 +285,20 @@ pub fn eval_to_tree(source: &str) -> Result<Tree, JsError> {
     Ok(tree)
 }
 
-/// Apply a native plugin op (clipboard, files, and Linux notifications).
+/// Apply a native plugin op (clipboard, files, notifications, tray, shortcuts).
 ///
 /// This is the JS-facing hook beside [`HostOp`]. Tree ops stay on [`Host`];
 /// these calls return text or nothing, so they do not go through [`Host::apply`].
 /// The JSON shape is [`NativeOp`] (`clipboardGetText`, `clipboardSetText`,
-/// `notificationsShow`, and the `files*` ops).
-/// A missing Linux clipboard session or notification daemon is a
-/// [`JsError::Message`] whose text contains `not available`.
+/// `notificationsShow`, `trayShow`, `trayHide`, `traySetLabel`, `trayTakeClick`,
+/// `shortcutsRegister`, `shortcutsUnregister`, `shortcutsTakeActivation`,
+/// and the `files*` ops).
+/// A missing Linux clipboard session, notification daemon, tray watcher, or
+/// shortcut display is a [`JsError::Message`] whose text contains `not available`.
+/// Android notification permission denial uses that same `not available` text.
+/// A Windows tray whose shell rejects the icon does the same.
+/// Tray ops need the `tray` feature. Shortcut ops need the `shortcuts` feature.
+/// Without the feature the error says `not implemented`.
 pub fn apply_native_host_op(op: &NativeOp) -> Result<Option<String>, JsError> {
     apply_native_op(op).map_err(|err| JsError::Message(err.to_string()))
 }
@@ -221,6 +321,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn disabled_host_prop_updates_control_and_focus() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let button = tree.add(NodeKind::Button, Some(root)).unwrap();
+        tree.set_focus(button).unwrap();
+        assert!(set_prop(&mut tree, root, "disabled", "true").is_err());
+        set_prop(&mut tree, button, "disabled", "true").unwrap();
+        assert!(tree.get(button).unwrap().disabled);
+        assert_eq!(tree.focus, Some(root));
+        assert!(tree.click(button).is_err());
+        set_prop(&mut tree, button, "disabled", "false").unwrap();
+        assert!(tree.click(button).is_ok());
+        assert!(set_prop(&mut tree, button, "disabled", "invalid").is_err());
+    }
+
+    #[test]
+    #[cfg(not(windows))]
     fn native_clipboard_op_errors_clearly_without_a_session() {
         let op: NativeOp = serde_json::from_str(r#"{"op":"clipboardGetText"}"#).unwrap();
         let display = std::env::var("DISPLAY").unwrap_or_default();
@@ -244,6 +361,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn native_notification_op_errors_clearly_without_a_daemon() {
         let op: NativeOp = serde_json::from_str(
             r#"{"op":"notificationsShow","title":"Saved","body":"Note stored"}"#,
@@ -269,6 +387,61 @@ mod tests {
             msg.contains("not available") || msg.contains("not implemented"),
             "{msg}"
         );
+    }
+
+    #[test]
+    fn native_shortcut_op_errors_clearly() {
+        #[cfg(not(all(target_os = "windows", feature = "shortcuts")))]
+        let op: NativeOp = serde_json::from_str(
+            r#"{"op":"shortcutsRegister","accelerator":"Ctrl+K","id":"search"}"#,
+        )
+        .unwrap();
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let reserved = matches!(display.as_str(), ":1" | ":2" | ":1.0" | ":2.0");
+        assert!(
+            !reserved,
+            "refusing shortcuts on reserved display {display}"
+        );
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "shortcuts"),
+            all(target_os = "windows", feature = "shortcuts")
+        )))]
+        {
+            let err = apply_native_host_op(&op).expect_err("shortcuts off");
+            let msg = err.to_string();
+            assert!(msg.contains("not implemented"), "{msg}");
+        }
+        #[cfg(all(target_os = "windows", feature = "shortcuts"))]
+        {
+            // Do not call RegisterHotKey from this host. A bad chord is a
+            // message and does not start the hotkey thread.
+            let bad: NativeOp = serde_json::from_str(
+                r#"{"op":"shortcutsRegister","accelerator":"Nope","id":"search"}"#,
+            )
+            .unwrap();
+            let err = apply_native_host_op(&bad).expect_err("bad chord");
+            let msg = err.to_string();
+            assert!(msg.contains("accelerator"), "{msg}");
+            let err = apply_native_host_op(&NativeOp::ShortcutsUnregister {
+                id: "search".into(),
+            })
+            .expect("unregister with nothing bound");
+            assert!(err.is_none(), "{err:?}");
+        }
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        {
+            // Do not grab a key from the default process when a display is set.
+            if !display.is_empty() {
+                let err = JsError::Message(
+                    "shortcuts.register is not available on linux: no X11 display".into(),
+                );
+                assert!(err.to_string().contains("not available"));
+                return;
+            }
+            let err = apply_native_host_op(&op).expect_err("headless shortcuts");
+            let msg = err.to_string();
+            assert!(msg.contains("not available"), "{msg}");
+        }
     }
 
     #[test]
@@ -377,6 +550,202 @@ mod tests {
         assert_eq!(banner.layout.padding, 20.0);
     }
 
+    #[test]
+    fn transition_op_reaches_the_end_when_time_advances() {
+        let mut tree = Tree::new();
+        let id = tree.add(NodeKind::Rect, None).unwrap();
+        tree.get_mut(id).unwrap().bounds = tekto_tree::Rect::new(0.0, 0.0, 20.0, 10.0);
+        apply_ops(
+            &mut tree,
+            &[HostOp::Transition {
+                id: id.raw(),
+                opacity: Some("0".into()),
+                x: Some("40".into()),
+                y: None,
+                width: None,
+                height: None,
+                duration_ms: Some(100),
+            }],
+        )
+        .unwrap();
+        assert!(tree.advance(0.0));
+        assert!(tree.advance(50.0));
+        let mid = tree.get(id).unwrap();
+        assert!(mid.opacity > 0.2 && mid.opacity < 0.8);
+        assert!(mid.bounds.x > 10.0 && mid.bounds.x < 30.0);
+        assert!(!tree.advance(100.0));
+        assert!(tree.get(id).unwrap().opacity < 0.01);
+        assert!((tree.get(id).unwrap().bounds.x - 40.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn consecutive_transition_ops_keep_both_properties() {
+        let mut tree = Tree::new();
+        let id = tree.add(NodeKind::Rect, None).unwrap();
+        tree.get_mut(id).unwrap().bounds = tekto_tree::Rect::new(0.0, 0.0, 20.0, 10.0);
+        tree.get_mut(id).unwrap().opacity = 1.0;
+        apply_ops(
+            &mut tree,
+            &[
+                HostOp::Transition {
+                    id: id.raw(),
+                    opacity: Some("0".into()),
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
+                    duration_ms: Some(100),
+                },
+                HostOp::Transition {
+                    id: id.raw(),
+                    opacity: None,
+                    x: Some("40".into()),
+                    y: None,
+                    width: None,
+                    height: None,
+                    duration_ms: Some(100),
+                },
+            ],
+        )
+        .unwrap();
+        assert!(tree.advance(0.0));
+        assert!(tree.advance(50.0));
+        let mid = tree.get(id).unwrap();
+        assert!(
+            mid.opacity > 0.2 && mid.opacity < 0.8,
+            "opacity {}",
+            mid.opacity
+        );
+        assert!(
+            mid.bounds.x > 10.0 && mid.bounds.x < 30.0,
+            "x {}",
+            mid.bounds.x
+        );
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn retained_session_dispatches_and_forgets_callbacks() {
+        let mut host = TreeHost::new();
+        let session = JsSession::new().unwrap();
+        session
+            .eval(
+                r#"
+            const root = tekto.create("window");
+            const label = tekto.create("text");
+            const button = tekto.create("button");
+            tekto.append(root, label); tekto.append(root, button);
+            let count = 0;
+            tekto.setText(label, "0");
+            tekto.onClick(button, () => tekto.setText(label, String(++count)));
+        "#,
+                &mut host,
+            )
+            .unwrap();
+        assert!(!session.dispatch_click(1, &mut host).unwrap());
+        for expected in ["1", "2"] {
+            assert!(session.dispatch_click(3, &mut host).unwrap());
+            assert_eq!(
+                host.tree
+                    .borrow()
+                    .get(NodeId::from_raw(2))
+                    .unwrap()
+                    .text
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        session.eval("tekto.remove(3)", &mut host).unwrap();
+        assert!(!session.dispatch_click(3, &mut host).unwrap());
+        assert!(host.tree.borrow().get(NodeId::from_raw(2)).is_some());
+        let replacement = JsSession::new().unwrap();
+        assert!(!replacement.dispatch_click(3, &mut host).unwrap());
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn session_cleanup_errors_do_not_skip_other_cleanups_or_registrations() {
+        let mut host = TreeHost::new();
+        let session = JsSession::new().unwrap();
+        session
+            .eval(
+                r#"
+            const label = tekto.create("text");
+            tekto.onClick(2, () => {});
+            tekto.onDispose(1, () => { throw new Error("cleanup failed"); });
+            globalThis.done = 0;
+            tekto.onDispose(1, () => { done++; });
+            tekto.onDispose(2, () => { done++; });
+        "#,
+                &mut host,
+            )
+            .unwrap();
+        assert!(session
+            .dispose(&mut host)
+            .unwrap_err()
+            .to_string()
+            .contains("cleanup failed"));
+        session
+            .eval(
+                "if (done !== 2) throw new Error('cleanup skipped')",
+                &mut host,
+            )
+            .unwrap();
+        assert!(!session.dispatch_click(2, &mut host).unwrap());
+        session.dispose(&mut host).unwrap();
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn retained_session_reports_callback_failure_and_remains_usable() {
+        let mut host = TreeHost::new();
+        let session = JsSession::new().unwrap();
+        session
+            .eval(
+                r#"tekto.onClick(1, () => { throw new Error("callback failed"); });"#,
+                &mut host,
+            )
+            .unwrap();
+        let error = session
+            .dispatch_click(1, &mut host)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("callback failed"), "{error}");
+        session.forget_node(1, &mut host).unwrap();
+        assert!(!session.dispatch_click(1, &mut host).unwrap());
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn js_transition_object_and_follow_up_call_both_run() {
+        let mut host = TreeHost::new();
+        eval_module(
+            r#"
+            const box = tekto.create("rect");
+            tekto.transition(box, { opacity: 0, x: 40, durationMs: 100 });
+            tekto.transition(box, "y", 16, 100);
+            "#,
+            &mut host,
+        )
+        .expect("eval");
+        let mut tree = host.tree.borrow().clone();
+        let id = NodeId::from_raw(1);
+        assert!(tree.advance(0.0));
+        assert!(tree.advance(50.0));
+        let mid = tree.get(id).unwrap();
+        assert!(mid.opacity > 0.2 && mid.opacity < 0.8, "{}", mid.opacity);
+        assert!(
+            mid.bounds.x > 10.0 && mid.bounds.x < 30.0,
+            "{}",
+            mid.bounds.x
+        );
+        assert!(
+            mid.bounds.y > 4.0 && mid.bounds.y < 12.0,
+            "{}",
+            mid.bounds.y
+        );
+    }
+
     #[cfg(feature = "quickjs")]
     #[test]
     fn js_script_creates_a_text_node_through_ops() {
@@ -423,5 +792,128 @@ mod tests {
         // New tree, same starting ids (ids are never reused inside one Tree,
         // but a remount starts a fresh Tree at 1).
         assert_eq!(second.root().map(|id| id.raw()), Some(1));
+    }
+
+    /// JS can register, unregister, and poll shortcut activations.
+    ///
+    /// With `shortcuts` on Linux this runs in a child with no display, so
+    /// register is `Unavailable` and nothing is grabbed. With `shortcuts` on
+    /// Windows only a bad chord is checked, so `RegisterHotKey` is not called.
+    /// Other builds get `Unsupported` (`not implemented`). Neither path panics.
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn js_apply_native_op_reaches_shortcut_ops() {
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        if std::env::var_os("TEKTO_JS_SHORTCUTS_CHILD").is_none() {
+            let exe = std::env::current_exe().expect("test exe");
+            let child = std::process::Command::new(&exe)
+                .args(["tests::js_apply_native_op_reaches_shortcut_ops", "--exact"])
+                .env_remove("DISPLAY")
+                .env_remove("WAYLAND_DISPLAY")
+                .env("TEKTO_JS_SHORTCUTS_CHILD", "1")
+                .output()
+                .expect("spawn headless js shortcut test");
+            let stdout = String::from_utf8_lossy(&child.stdout);
+            let stderr = String::from_utf8_lossy(&child.stderr);
+            assert!(
+                child.status.success() && stdout.contains("1 passed"),
+                "js shortcut child failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+            return;
+        }
+
+        let mut host = TreeHost::new();
+        eval_module(
+            r#"
+            function detail(err) {
+              if (err && typeof err.message === "string" && err.message.length > 0) {
+                return err.message;
+              }
+              return String(err);
+            }
+            function call(json) {
+              try {
+                const value = tekto.applyNativeOp(json);
+                return "ok:" + value;
+              } catch (err) {
+                return "err:" + detail(err);
+              }
+            }
+            const text = tekto.create("text");
+            tekto.setText(text, [
+              call('{"op":"shortcutsRegister","accelerator":"Ctrl+K","id":"search"}'),
+              call('{"op":"shortcutsUnregister","id":"search"}'),
+              call('{"op":"shortcutsTakeActivation"}'),
+              call("{")
+            ].join("|"));
+            "#,
+            &mut host,
+        )
+        .expect("shortcut ops from JS");
+        let pretty = host.tree.borrow().to_pretty_text();
+        let report = pretty
+            .lines()
+            .find(|line| line.contains("err:") || line.contains("ok:"))
+            .unwrap_or(&pretty)
+            .to_string();
+        assert!(
+            report.contains("not available") || report.contains("not implemented"),
+            "{pretty}"
+        );
+        if report.contains("not implemented") {
+            assert!(report.matches("not implemented").count() >= 3, "{pretty}");
+        } else {
+            assert!(
+                report.contains("ok:null") && report.matches("ok:null").count() >= 2,
+                "{pretty}"
+            );
+        }
+        assert!(report.contains("native op JSON"), "{pretty}");
+    }
+
+    #[test]
+    fn component_schema_lists_every_host_prop() {
+        let raw = include_str!("../../../packages/jsx-runtime/src/components.json");
+        let schema: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let aliases = schema["propAliases"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        // Snake_case spellings are aliases. JSX rewrites `title` before setProp.
+        // Disabled is limited to buttons and text fields.
+        let mut required: Vec<&str> = HOST_PROP_KEYS
+            .iter()
+            .copied()
+            .filter(|key| *key != "disabled" && !aliases.contains_key(*key))
+            .collect();
+        required.push("title");
+        let components = schema["components"].as_array().unwrap();
+        assert!(!components.is_empty(), "components.json lists no widgets");
+        for comp in components {
+            let kind = comp["name"].as_str().unwrap();
+            let listed: Vec<&str> = comp["props"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                listed.contains(&"disabled"),
+                matches!(kind, "button" | "text_field" | "checkbox")
+            );
+            for name in &listed {
+                let host = aliases.get(*name).and_then(|v| v.as_str()).unwrap_or(name);
+                assert!(
+                    HOST_PROP_KEYS.contains(&host),
+                    "{kind} prop {name} is not a host prop"
+                );
+            }
+            for key in &required {
+                assert!(
+                    listed.contains(key),
+                    "{kind} schema omits host prop {key} (setProp accepts it on every node)"
+                );
+            }
+        }
     }
 }

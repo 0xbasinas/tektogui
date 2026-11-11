@@ -14,11 +14,14 @@ use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tekto_tree::{NodeId, NodePatch, Tree};
+use std::time::{Duration, Instant};
+use tekto_tree::{route_named_key, NamedActionKey, NodeId, NodePatch, Store, Tree};
 
+mod http_policy;
+mod stdio;
 mod writeback;
 pub use writeback::{
     app_root, apply, apply_in, find_app_root, prefer_from_env, Prefer, Snapshot, WritebackReport,
@@ -40,6 +43,11 @@ impl McpError {
     }
 }
 
+/// Check whether a key name is supported by agent input.
+pub fn validate_key_name(name: &str) -> Result<(), String> {
+    name.parse::<NamedActionKey>().map(|_| ())
+}
+
 /// What the running app can do for agents.
 pub trait AppHandle: Send + Sync {
     fn tree(&self) -> Tree;
@@ -49,6 +57,12 @@ pub trait AppHandle: Send + Sync {
         let _ = id;
         Err(McpError::msg("click is not wired up yet"))
     }
+    fn key(&self, _key: NamedActionKey) -> Result<(), McpError> {
+        Err(McpError::msg("key is not wired up yet"))
+    }
+    fn scroll(&self, _id: NodeId, _delta: f32) -> Result<f32, McpError> {
+        Err(McpError::msg("scroll is not wired up yet"))
+    }
     fn type_text(&self, id: NodeId, text: &str) -> Result<(), McpError> {
         let _ = (id, text);
         Err(McpError::msg(
@@ -57,6 +71,17 @@ pub trait AppHandle: Send + Sync {
     }
     fn state_json(&self) -> Value {
         json!({})
+    }
+    /// Recorded store frames. Default is history off and an empty list.
+    fn states_json(&self) -> Value {
+        json!({ "enabled": false, "cursor": 0, "states": [] })
+    }
+    /// Jump the opted-in store to `index`. Default reports that history is off.
+    fn restore_state(&self, index: u64) -> Result<Value, McpError> {
+        let _ = index;
+        Err(McpError::msg(
+            "time travel is off — opt in with Store::recording and attach it to the dev handle",
+        ))
     }
     fn logs(&self) -> Vec<String> {
         Vec::new()
@@ -87,11 +112,22 @@ pub type OnChangeFn = Arc<dyn Fn() + Send + Sync>;
 /// Evaluates a JS bundle and swaps the tree. Installed by `tekto dev --js`.
 pub type ApplyJsFn = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
+/// Delivers a committed field value to the retained JS session.
+pub type InputJsFn = Arc<dyn Fn(NodeId, String) -> Result<(), String> + Send + Sync>;
+
+pub type ClickJsFn = Arc<dyn Fn(NodeId) -> Result<(), String> + Send + Sync>;
+
 pub struct SharedTreeHandle {
+    /// Serializes supported handle actions with retained session reloads.
+    pub action_gate: Arc<Mutex<()>>,
+    pub click_js: Mutex<Option<ClickJsFn>>,
+    pub input_js: Mutex<Option<InputJsFn>>,
+    /// Direct concurrent mutation is unsupported while a JS session is active.
+    /// Use handle operations so they are ordered with clicks and reloads.
     pub tree: Arc<Mutex<Tree>>,
     pub render: RenderFn,
     pub logs: Arc<Mutex<Vec<String>>>,
-    /// Called after a live patch (and later, clicks) so a window can redraw
+    /// Called after a live patch or click so a window can redraw
     /// and refresh AccessKit. Also used to wake the loop for a JS reload.
     pub on_change: Mutex<Option<OnChangeFn>>,
     /// A bundled JS IIFE waiting to be evaluated on the app thread
@@ -101,9 +137,103 @@ pub struct SharedTreeHandle {
     pub apply_js: Mutex<Option<ApplyJsFn>>,
     /// Result of the last source write-back attempted after a patch.
     pub last_writeback: Mutex<Option<writeback::WritebackReport>>,
+    /// Opt-in JSON store. `None` means the app is not recording history.
+    pub history: Mutex<Option<Arc<Mutex<Store<Value>>>>>,
+}
+
+fn field_value(tree: &Tree, id: Option<NodeId>) -> Option<(NodeId, String)> {
+    let id = id?;
+    let node = tree.get(id)?;
+    (node.kind == tekto_tree::NodeKind::TextField)
+        .then(|| (id, node.text.clone().unwrap_or_default()))
 }
 
 impl SharedTreeHandle {
+    /// Run a routed action under the same gate as reload and patch. The router
+    /// may update non-click state and returns the node to activate, if any.
+    pub fn route_action(
+        &self,
+        route: impl FnOnce(&mut Tree) -> (bool, Option<NodeId>),
+    ) -> Result<bool, McpError> {
+        self.route_action_with_caret(|tree| {
+            let (changed, id) = route(tree);
+            (changed, id, None)
+        })
+    }
+
+    /// Route an action and apply a host-computed field caret after activation.
+    pub fn route_action_with_caret(
+        &self,
+        route: impl FnOnce(&mut Tree) -> (bool, Option<NodeId>, Option<usize>),
+    ) -> Result<bool, McpError> {
+        self.route_activated_action(|tree| {
+            let (changed, id, caret) = route(tree);
+            if let Some(id) = id {
+                tree.click(id).map_err(|e| McpError::msg(e.to_string()))?;
+                if let (Some(caret), Some(node)) = (caret, tree.get_mut(id)) {
+                    node.caret = caret.min(node.text.as_deref().unwrap_or("").chars().count());
+                }
+            }
+            Ok((changed, id))
+        })
+    }
+
+    /// Run a route that performs its own activation under the action gate.
+    pub fn route_activated_action(
+        &self,
+        route: impl FnOnce(&mut Tree) -> Result<(bool, Option<NodeId>), McpError>,
+    ) -> Result<bool, McpError> {
+        let _gate = self
+            .action_gate
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?;
+        let (changed, id, input) = {
+            let mut tree = self.tree.lock().map_err(|e| McpError::msg(e.to_string()))?;
+            let before = field_value(&tree, tree.focus);
+            let (changed, id) = route(&mut tree)?;
+            let after = field_value(&tree, tree.focus);
+            let input = match (before, after) {
+                (Some((old_id, old)), Some((id, value))) if old_id == id && old != value => {
+                    Some((id, value))
+                }
+                _ => None,
+            };
+            (changed, id, input)
+        };
+        if let Some(id) = id {
+            self.log(format!("clicked #{id}"));
+        }
+        if changed || id.is_some() {
+            self.notify_change();
+        }
+        if let Some(id) = id {
+            let hook = self
+                .click_js
+                .lock()
+                .map_err(|e| McpError::msg(e.to_string()))?
+                .clone();
+            if let Some(hook) = hook {
+                hook(id).map_err(McpError::msg)?;
+            }
+        }
+        self.deliver_input(input)?;
+        Ok(changed || id.is_some())
+    }
+
+    fn deliver_input(&self, input: Option<(NodeId, String)>) -> Result<(), McpError> {
+        if let Some((id, value)) = input {
+            let hook = self
+                .input_js
+                .lock()
+                .map_err(|e| McpError::msg(e.to_string()))?
+                .clone();
+            if let Some(hook) = hook {
+                hook(id, value).map_err(McpError::msg)?;
+            }
+        }
+        Ok(())
+    }
+
     fn notify_change(&self) {
         if let Ok(cb) = self.on_change.lock() {
             if let Some(f) = cb.as_ref() {
@@ -181,6 +311,10 @@ impl AppHandle for SharedTreeHandle {
     }
 
     fn patch(&self, id: NodeId, patch: NodePatch) -> Result<(), McpError> {
+        let _gate = self
+            .action_gate
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?;
         let mut tree = self.tree.lock().expect("tree lock");
         let snapshot = tree
             .get(id)
@@ -199,25 +333,56 @@ impl AppHandle for SharedTreeHandle {
     }
 
     fn click(&self, id: NodeId) -> Result<(), McpError> {
-        let mut tree = self.tree.lock().expect("tree lock");
-        tree.click(id).map_err(|e| McpError::msg(e.to_string()))?;
-        drop(tree);
-        if let Ok(mut logs) = self.logs.lock() {
-            logs.push(format!("clicked #{id}"));
+        self.route_action(|_| (false, Some(id))).map(|_| ())
+    }
+
+    fn key(&self, key: NamedActionKey) -> Result<(), McpError> {
+        self.route_action(|tree| {
+            let result = route_named_key(tree, key, false);
+            if key == NamedActionKey::Space && result.1.is_none() {
+                (tree.type_keyboard_text(" ").unwrap_or(false), None)
+            } else {
+                result
+            }
+        })
+        .map(|_| ())
+    }
+
+    fn scroll(&self, id: NodeId, delta: f32) -> Result<f32, McpError> {
+        if !delta.is_finite() {
+            return Err(McpError::msg("delta must be finite"));
         }
+        let _gate = self
+            .action_gate
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?;
+        let offset = self
+            .tree
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?
+            .scroll_by(id, delta)
+            .map_err(|e| McpError::msg(e.to_string()))?;
         self.notify_change();
-        Ok(())
+        Ok(offset)
     }
 
     fn type_text(&self, id: NodeId, text: &str) -> Result<(), McpError> {
+        let _gate = self
+            .action_gate
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?;
         let mut tree = self.tree.lock().expect("tree lock");
+        let before = field_value(&tree, Some(id));
         tree.insert_text(id, text)
             .map_err(|e| McpError::msg(e.to_string()))?;
+        let after = field_value(&tree, Some(id));
+        let input = if before != after { after } else { None };
         drop(tree);
         if let Ok(mut logs) = self.logs.lock() {
             logs.push(format!("typed into #{id}"));
         }
         self.notify_change();
+        self.deliver_input(input)?;
         Ok(())
     }
 
@@ -227,6 +392,31 @@ impl AppHandle for SharedTreeHandle {
             "focus": tree.focus.map(|id| id.raw()),
             "last_click": tree.last_click.map(|id| id.raw()),
         })
+    }
+
+    fn states_json(&self) -> Value {
+        states_value(&self.history)
+    }
+
+    fn restore_state(&self, index: u64) -> Result<Value, McpError> {
+        let slot = self
+            .history
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?;
+        let Some(store) = slot.as_ref() else {
+            return Err(McpError::msg(
+                "time travel is off — opt in with Store::recording and attach it to the dev handle",
+            ));
+        };
+        let mut store = store.lock().map_err(|e| McpError::msg(e.to_string()))?;
+        let value = store
+            .jump(index)
+            .map_err(|e| McpError::msg(e.to_string()))?
+            .clone();
+        drop(store);
+        drop(slot);
+        self.notify_change();
+        Ok(value)
     }
 
     fn logs(&self) -> Vec<String> {
@@ -257,7 +447,12 @@ pub struct DevEndpoint {
 
 impl DevEndpoint {
     pub fn base_url(&self) -> String {
-        format!("http://{}:{}", self.host, self.port)
+        let host = if self.host.contains(':') && !self.host.starts_with('[') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        format!("http://{}:{}", host, self.port)
     }
 }
 
@@ -327,20 +522,93 @@ pub fn start_dev_server(handle: Arc<dyn AppHandle>) -> Result<DevEndpoint, McpEr
     thread::Builder::new()
         .name("tekto-dev".into())
         .spawn(move || {
-            for stream in listener.incoming() {
-                if !running.load(Ordering::Relaxed) {
-                    break;
-                }
-                if let Ok(stream) = stream {
-                    let handle = Arc::clone(&handle);
-                    let _ = handle_client(stream, handle);
-                }
-            }
+            serve(listener, handle, running);
         })?;
     Ok(ep)
 }
 
-fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, String), McpError> {
+// Absolute deadlines stop clients that send one byte just before each timeout.
+// At most eight requests (and their buffers) may be in flight; excess sockets close.
+const MAX_CLIENTS: usize = 8;
+const IO_DEADLINE: Duration = Duration::from_secs(5);
+
+fn serve(listener: TcpListener, handle: Arc<dyn AppHandle>, running: Arc<AtomicBool>) {
+    let active = Arc::new(AtomicUsize::new(0));
+    // Keep multi-step HTTP operations, including patch and writeback, in order.
+    // Clicks use the handle action gate instead, so callbacks run outside this lock.
+    let dispatch_lock = Arc::new(Mutex::new(()));
+    for stream in listener.incoming() {
+        if !running.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Ok(stream) = stream {
+            // Only this accept loop increments; workers only decrement.
+            if active.load(Ordering::Acquire) >= MAX_CLIENTS {
+                continue;
+            }
+            active.fetch_add(1, Ordering::AcqRel);
+            let handle = Arc::clone(&handle);
+            let count = Arc::clone(&active);
+            let lock = Arc::clone(&dispatch_lock);
+            if thread::Builder::new()
+                .name("tekto-dev-client".into())
+                .spawn(move || {
+                    struct Slot(Arc<AtomicUsize>);
+                    impl Drop for Slot {
+                        fn drop(&mut self) {
+                            self.0.fetch_sub(1, Ordering::Release);
+                        }
+                    }
+                    let _slot = Slot(count);
+                    let _ = handle_client_locked(stream, handle, &lock);
+                })
+                .is_err()
+            {
+                active.fetch_sub(1, Ordering::Release);
+            }
+        }
+    }
+}
+
+struct DeadlineReader<'a> {
+    stream: &'a mut TcpStream,
+    deadline: Instant,
+}
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self
+            .deadline
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "request deadline"))?;
+        self.stream.set_read_timeout(Some(left))?;
+        self.stream.read(buf)
+    }
+}
+
+fn write_before(
+    stream: &mut TcpStream,
+    mut bytes: &[u8],
+    deadline: Instant,
+) -> std::io::Result<()> {
+    while !bytes.is_empty() {
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "response deadline")
+            })?;
+        stream.set_write_timeout(Some(left))?;
+        let n = stream.write(bytes)?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::WriteZero.into());
+        }
+        bytes = &bytes[n..];
+    }
+    Ok(())
+}
+
+fn read_http_request(stream: &mut impl Read) -> Result<Option<(String, String, String)>, McpError> {
     let mut data = Vec::new();
     let mut tmp = [0u8; 2048];
     let header_end = loop {
@@ -350,6 +618,9 @@ fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, String),
         }
         data.extend_from_slice(&tmp[..n]);
         if let Some(pos) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+            if pos > 64 * 1024 {
+                return Err(McpError::msg("request headers too large"));
+            }
             break pos;
         }
         if data.len() > 64 * 1024 {
@@ -357,6 +628,9 @@ fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, String),
         }
     };
     let headers = String::from_utf8_lossy(&data[..header_end]).into_owned();
+    if !http_policy::trusted(&headers) {
+        return Ok(None);
+    }
     let mut content_len = 0usize;
     for line in headers.lines() {
         let lower = line.to_ascii_lowercase();
@@ -365,10 +639,13 @@ fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, String),
         }
     }
     let body_start = header_end + 4;
+    if content_len > 2 * 1024 * 1024 - body_start {
+        return Err(McpError::msg("request body too large"));
+    }
     while data.len() < body_start + content_len {
         let n = stream.read(&mut tmp)?;
         if n == 0 {
-            break;
+            return Err(McpError::msg("incomplete HTTP request body"));
         }
         data.extend_from_slice(&tmp[..n]);
         if data.len() > 2 * 1024 * 1024 {
@@ -381,23 +658,80 @@ fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, String),
     let path = parts.next().unwrap_or("/").to_string();
     let end = (body_start + content_len).min(data.len());
     let body = String::from_utf8_lossy(&data[body_start..end]).into_owned();
-    Ok((method, path, body))
+    Ok(Some((method, path, body)))
 }
 
-fn handle_client(mut stream: TcpStream, handle: Arc<dyn AppHandle>) -> Result<(), McpError> {
-    let (method, path, body) = read_http_request(&mut stream)?;
-    let (status, content_type, body_bytes) = match dispatch(handle.as_ref(), &method, &path, &body)
+#[cfg(test)]
+fn handle_client(stream: TcpStream, handle: Arc<dyn AppHandle>) -> Result<(), McpError> {
+    handle_client_locked(stream, handle, &Mutex::new(()))
+}
+
+fn handle_client_locked(
+    mut stream: TcpStream,
+    handle: Arc<dyn AppHandle>,
+    lock: &Mutex<()>,
+) -> Result<(), McpError> {
+    let request = read_http_request(&mut DeadlineReader {
+        stream: &mut stream,
+        deadline: Instant::now() + IO_DEADLINE,
+    })?;
+    let (status, content_type, body_bytes) = if matches!(&request, Some((method, path, _)) if method == "POST" && (path == "/click" || path == "/key" || path == "/scroll"))
     {
-        Ok(v) => v,
-        Err(e) => error_response(e),
+        process_http_request(handle.as_ref(), request)
+    } else {
+        let _guard = lock.lock().map_err(|e| McpError::msg(e.to_string()))?;
+        process_http_request(handle.as_ref(), request)
     };
     let header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body_bytes.len()
     );
-    stream.write_all(header.as_bytes())?;
-    stream.write_all(&body_bytes)?;
+    let deadline = Instant::now() + IO_DEADLINE;
+    write_before(&mut stream, header.as_bytes(), deadline)?;
+    write_before(&mut stream, &body_bytes, deadline)?;
     Ok(())
+}
+
+fn process_http_request(
+    handle: &dyn AppHandle,
+    request: Option<(String, String, String)>,
+) -> (&'static str, &'static str, Vec<u8>) {
+    let Some((method, path, body)) = request else {
+        return (
+            "403 Forbidden",
+            "application/json",
+            br#"{"error":"untrusted host or origin"}"#.to_vec(),
+        );
+    };
+    dispatch(handle, &method, &path, &body).unwrap_or_else(error_response)
+}
+
+fn states_value(history: &Mutex<Option<Arc<Mutex<Store<Value>>>>>) -> Value {
+    let Ok(slot) = history.lock() else {
+        return json!({ "enabled": false, "cursor": 0, "states": [] });
+    };
+    let Some(store) = slot.as_ref() else {
+        return json!({ "enabled": false, "cursor": 0, "states": [] });
+    };
+    let Ok(store) = store.lock() else {
+        return json!({ "enabled": false, "cursor": 0, "states": [] });
+    };
+    let states: Vec<Value> = store
+        .list()
+        .into_iter()
+        .map(|info| {
+            json!({
+                "index": info.index,
+                "label": info.label,
+                "current": info.current,
+            })
+        })
+        .collect();
+    json!({
+        "enabled": store.is_recording(),
+        "cursor": store.cursor(),
+        "states": states,
+    })
 }
 
 fn error_response(e: McpError) -> (&'static str, &'static str, Vec<u8>) {
@@ -446,7 +780,23 @@ fn dispatch(
             ok_json(serde_json::to_value(dump)?)
         }
         ("GET", "/state") => ok_json(handle.state_json()),
+        ("GET", "/states") => ok_json(handle.states_json()),
+        ("POST", "/states/restore") => {
+            let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
+            let index = v
+                .get("index")
+                .and_then(|x| x.as_u64())
+                .ok_or_else(|| McpError::msg("missing index"))?;
+            let value = handle.restore_state(index)?;
+            ok_json(json!({
+                "ok": true,
+                "index": index,
+                "value": value,
+                "states": handle.states_json(),
+            }))
+        }
         ("GET", "/logs") => ok_json(json!({ "logs": handle.logs() })),
+        ("GET", "/components") => ok_json(components_value()?),
         ("POST", "/patch") => {
             let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
             let id = v
@@ -473,6 +823,33 @@ fn dispatch(
                 .ok_or_else(|| McpError::msg("missing id"))?;
             handle.click(NodeId::from_raw(id))?;
             ok_json(json!({"ok": true}))
+        }
+        ("POST", "/key") => {
+            let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
+            let name = v
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| McpError::msg("missing key name"))?;
+            let key = name.parse().map_err(McpError::msg)?;
+            handle.key(key)?;
+            ok_json(json!({"ok": true}))
+        }
+        ("POST", "/scroll") => {
+            let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
+            let id = v
+                .get("id")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| McpError::msg("missing or invalid id"))?;
+            let delta = v
+                .get("delta")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| McpError::msg("missing or invalid delta"))?
+                as f32;
+            if !delta.is_finite() {
+                return Err(McpError::msg("delta must be finite"));
+            }
+            let offset = handle.scroll(NodeId::from_raw(id), delta)?;
+            ok_json(json!({"ok": true, "offset": offset}))
         }
         ("POST", "/type") => {
             let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
@@ -561,7 +938,20 @@ fn http_request_bytes(
         .ok_or_else(|| McpError::msg("only http:// is supported"))?;
     let (host, path) = url.split_once('/').unwrap_or((url, ""));
     let path = format!("/{path}");
-    let (host_only, port) = if let Some((h, p)) = host.split_once(':') {
+    let (host_only, port) = if let Some(rest) = host.strip_prefix('[') {
+        let (ip, suffix) = rest
+            .split_once(']')
+            .ok_or_else(|| McpError::msg("invalid IPv6 URL"))?;
+        let port = if suffix.is_empty() {
+            80
+        } else {
+            suffix
+                .strip_prefix(':')
+                .and_then(|p| p.parse().ok())
+                .ok_or_else(|| McpError::msg("invalid port"))?
+        };
+        (ip, port)
+    } else if let Some((h, p)) = host.split_once(':') {
         (h, p.parse().unwrap_or(80))
     } else {
         (host, 80u16)
@@ -602,48 +992,7 @@ fn http_request_bytes(
 
 /// Run a stdio MCP server that proxies to the dev HTTP server.
 pub fn run_stdio_mcp() -> Result<(), McpError> {
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
-    let mut in_lock = stdin.lock();
-    while let Some(msg) = read_lsp_message(&mut in_lock)? {
-        let v: Value = serde_json::from_slice(&msg)?;
-        if v.get("method").and_then(|m| m.as_str()) == Some("notifications/initialized") {
-            continue;
-        }
-        let id = v.get("id").cloned().unwrap_or(Value::Null);
-        let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
-        let result = match method {
-            "initialize" => json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": { "tools": {} },
-                "serverInfo": { "name": "tekto", "version": "0.1.0" }
-            }),
-            "tools/list" => json!({ "tools": tool_list() }),
-            "tools/call" => {
-                let params = v.get("params").cloned().unwrap_or(json!({}));
-                match call_tool(&params) {
-                    Ok(r) => r,
-                    Err(e) => json!({
-                        "content": [{ "type": "text", "text": e.to_string() }],
-                        "isError": true
-                    }),
-                }
-            }
-            "ping" => json!({}),
-            _ => {
-                write_lsp_message(
-                    &mut stdout,
-                    &json!({"jsonrpc":"2.0","id": id, "error": {"code": -32601, "message": "method not found"}}),
-                )?;
-                continue;
-            }
-        };
-        write_lsp_message(
-            &mut stdout,
-            &json!({"jsonrpc":"2.0","id": id, "result": result}),
-        )?;
-    }
-    Ok(())
+    stdio::run(std::io::stdin().lock(), std::io::stdout().lock())
 }
 
 fn tool_list() -> Value {
@@ -652,16 +1001,33 @@ fn tool_list() -> Value {
         {"name": "ui.accesskit", "description": "Dump the AccessKit tree (roles, labels, bounds, focus) with the same stable ids.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.screenshot", "description": "Take a PNG screenshot using the CPU renderer.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.click", "description": "Click a node by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}}, "required": ["id"]}},
-        {"name": "ui.type", "description": "Insert plain characters at the caret of a text field (by stable id) and focus it. Not an IME: no composition or candidate window. Backspace is a desktop key, not this tool.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
-        {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, fontSize, padding, or gap. Returns the updated node and a writeback report. Applies immediately (no reload). Unique literals in the app project are written back to source; ambiguous edits stay in the runtime tree.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}, "padding": {"type": "number"}, "gap": {"type": "number"}}, "required": ["id"]}},
+        {"name": "ui.scroll", "description": "Scroll a container by logical pixels and return the clamped offset.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}, "delta": {"type": "number"}}, "required": ["id", "delta"]}},
+        {"name": "ui.key", "description": "Press a named key on the focused node.", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "enum": ["Tab", "Shift+Tab", "Enter", "Space", "Backspace"]}}, "required": ["name"]}},
+        {"name": "ui.type", "description": "Insert plain characters at the caret of a text field (by stable id) and focus it. Not an IME: no composition or candidate window. Use ui.key for Backspace.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
+        {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, fontSize, padding, gap, or disabled (buttons and text fields). Returns the updated node and a writeback report. Applies immediately (no reload). Unique literals in the app project are written back to source; ambiguous edits stay in the runtime tree.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "disabled": {"type": "boolean"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}, "padding": {"type": "number"}, "gap": {"type": "number"}}, "required": ["id"]}},
         {"name": "app.state", "description": "Read opted-in app state as JSON.", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "app.logs", "description": "Read structured logs.", "inputSchema": {"type": "object", "properties": {}}}
+        {"name": "app.states", "description": "List time-travel frames for an opted-in store. enabled is false when the app did not record history.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "app.restore", "description": "Jump an opted-in store to a recorded index from app.states. Returns the restored JSON value.", "inputSchema": {"type": "object", "properties": {"index": {"type": "number"}}, "required": ["index"]}},
+        {"name": "app.logs", "description": "Read structured logs.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "app.components", "description": "JSON schema of JSX components: kinds, props, and events. Same file the JSX runtime mounts. Does not need a running app.", "inputSchema": {"type": "object", "properties": {}}}
     ])
+}
+
+/// Shared component catalog (`packages/jsx-runtime/src/components.json`).
+/// The JSX runtime imports this file. `app.components` returns it.
+pub const COMPONENTS_SCHEMA: &str =
+    include_str!("../../../packages/jsx-runtime/src/components.json");
+
+fn components_value() -> Result<Value, McpError> {
+    Ok(serde_json::from_str(COMPONENTS_SCHEMA)?)
 }
 
 fn call_tool(params: &Value) -> Result<Value, McpError> {
     let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
+    if name == "app.components" {
+        return Ok(json!({"content": [{"type": "text", "text": COMPONENTS_SCHEMA}]}));
+    }
     let ep = read_endpoint()?;
     let base = ep.base_url();
     match name {
@@ -688,12 +1054,28 @@ fn call_tool(params: &Value) -> Result<Value, McpError> {
             let (_, body) = http_post(&format!("{base}/click"), &args)?;
             Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
         }
+        "ui.scroll" => {
+            let (_, body) = http_post(&format!("{base}/scroll"), &args)?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
+        "ui.key" => {
+            let (_, body) = http_post(&format!("{base}/key"), &args)?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
         "ui.type" => {
             let (_, body) = http_post(&format!("{base}/type"), &args)?;
             Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
         }
         "app.state" => {
             let (_, body) = http_get(&format!("{base}/state"))?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
+        "app.states" => {
+            let (_, body) = http_get(&format!("{base}/states"))?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
+        "app.restore" => {
+            let (_, body) = http_post(&format!("{base}/states/restore"), &args)?;
             Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
         }
         "app.logs" => {
@@ -728,51 +1110,392 @@ fn b64(data: &[u8]) -> String {
     out
 }
 
-fn read_lsp_message(r: &mut impl Read) -> Result<Option<Vec<u8>>, McpError> {
-    let mut header = Vec::new();
-    loop {
-        let mut b = [0u8; 1];
-        let n = r.read(&mut b)?;
-        if n == 0 {
-            return if header.is_empty() {
-                Ok(None)
-            } else {
-                Err(McpError::msg("eof in header"))
-            };
-        }
-        header.push(b[0]);
-        if header.ends_with(b"\r\n\r\n") {
-            break;
-        }
-        if header.len() > 4096 {
-            return Err(McpError::msg("header too large"));
-        }
-    }
-    let header = String::from_utf8_lossy(&header);
-    let mut len = 0usize;
-    for line in header.lines() {
-        let line = line.trim();
-        if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-            len = v.trim().parse().unwrap_or(0);
-        }
-    }
-    let mut body = vec![0u8; len];
-    r.read_exact(&mut body)?;
-    Ok(Some(body))
-}
-
-fn write_lsp_message(w: &mut impl Write, v: &Value) -> Result<(), McpError> {
-    let body = serde_json::to_vec(v)?;
-    write!(w, "Content-Length: {}\r\n\r\n", body.len())?;
-    w.write_all(&body)?;
-    w.flush()?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tekto_tree::{NodeKind, NodePatch};
+
+    #[test]
+    fn endpoint_urls_bracket_ipv6() {
+        for (host, expected) in [
+            ("127.0.0.1", "http://127.0.0.1:42"),
+            ("localhost", "http://localhost:42"),
+            ("::1", "http://[::1]:42"),
+            ("[::1]", "http://[::1]:42"),
+        ] {
+            assert_eq!(
+                DevEndpoint {
+                    host: host.into(),
+                    port: 42
+                }
+                .base_url(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn request_limits_and_incomplete_body_are_enforced() {
+        let large_header = format!(
+            "GET / HTTP/1.1\r\nHost: localhost\r\nX: {}\r\n\r\n",
+            "a".repeat(64 * 1024)
+        );
+        assert!(read_http_request(&mut large_header.as_bytes()).is_err());
+        let large_body =
+            "POST /reload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2097152\r\n\r\n";
+        assert!(read_http_request(&mut large_body.as_bytes()).is_err());
+        let incomplete = "POST /reload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\na";
+        assert!(read_http_request(&mut incomplete.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn stalled_clients_timeout_and_capacity_recovers() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            serve(
+                listener,
+                Arc::new(http_test_handle()),
+                Arc::new(AtomicBool::new(true)),
+            )
+        });
+        let mut idle = TcpStream::connect(addr).unwrap();
+        let mut partial = TcpStream::connect(addr).unwrap();
+        write!(
+            partial,
+            "POST /reload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\na"
+        )
+        .unwrap();
+        let start = Instant::now();
+        assert!(http_get(&format!("http://{addr}/health")).is_ok());
+        assert!(start.elapsed() < Duration::from_secs(2));
+        // Fill the remaining slots, then verify overload closes without dispatch.
+        let mut stalls = Vec::new();
+        for _ in 0..MAX_CLIENTS - 2 {
+            stalls.push(TcpStream::connect(addr).unwrap());
+        }
+        thread::sleep(Duration::from_millis(200));
+        let mut excess = TcpStream::connect(addr).unwrap();
+        excess
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let _ = excess.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        let mut b = [0; 1];
+        assert_closed(excess.read(&mut b));
+        idle.set_read_timeout(Some(IO_DEADLINE + Duration::from_secs(2)))
+            .unwrap();
+        assert_closed(idle.read(&mut b));
+        partial
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        assert_closed(partial.read(&mut b));
+        thread::sleep(Duration::from_millis(200));
+        assert!(http_get(&format!("http://{addr}/health")).is_ok());
+    }
+
+    fn assert_closed(result: std::io::Result<usize>) {
+        match result {
+            Ok(0) => (),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                ) => {}
+            other => panic!("expected closed connection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trickling_headers_hit_absolute_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            serve(
+                listener,
+                Arc::new(http_test_handle()),
+                Arc::new(AtomicBool::new(true)),
+            )
+        });
+        let mut slow = TcpStream::connect(addr).unwrap();
+        for _ in 0..6 {
+            if slow.write_all(b"G").is_err() {
+                break;
+            }
+            thread::sleep(Duration::from_secs(1));
+        }
+        slow.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        assert_closed(slow.read(&mut [0; 1]));
+        assert!(http_get(&format!("http://{addr}/health")).is_ok());
+    }
+
+    #[test]
+    fn slow_reader_does_not_hold_a_slot_forever() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut handle = http_test_handle();
+        handle.render = Arc::new(|_| Ok(vec![0; 32 * 1024 * 1024]));
+        thread::spawn(move || serve(listener, Arc::new(handle), Arc::new(AtomicBool::new(true))));
+        let mut slow = TcpStream::connect(addr).unwrap();
+        slow.write_all(b"GET /screenshot HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .unwrap();
+        assert!(http_get(&format!("http://{addr}/health")).is_ok());
+        thread::sleep(IO_DEADLINE + Duration::from_secs(1));
+        let mut data = Vec::new();
+        slow.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        assert!(slow.read_to_end(&mut data).is_ok());
+        assert!(data.len() < 32 * 1024 * 1024);
+        assert!(http_get(&format!("http://{addr}/health")).is_ok());
+    }
+
+    #[test]
+    fn named_key_route_and_callback() {
+        let handle = http_test_handle();
+        let button = {
+            let mut tree = handle.tree.lock().unwrap();
+            let root = NodeId::from_raw(1);
+            tree.add(NodeKind::Button, Some(root)).unwrap()
+        };
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        *handle.click_js.lock().unwrap() = Some(Arc::new(move |id| {
+            seen.lock().unwrap().push(id);
+            Ok(())
+        }));
+        for name in ["Tab", "Enter"] {
+            let (status, _, _) = process_http_request(
+                &handle,
+                Some((
+                    "POST".into(),
+                    "/key".into(),
+                    json!({"name": name}).to_string(),
+                )),
+            );
+            assert_eq!(status, "200 OK");
+        }
+        assert_eq!(*calls.lock().unwrap(), vec![button]);
+        assert_eq!(handle.tree().last_click, Some(button));
+        for body in ["{}", r#"{"name":"Escape"}"#, "not json"] {
+            let (status, _, body) =
+                process_http_request(&handle, Some(("POST".into(), "/key".into(), body.into())));
+            assert_eq!(status, "400 Bad Request");
+            assert!(String::from_utf8(body).unwrap().contains("error"));
+        }
+        let tools = tool_list();
+        let key = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "ui.key")
+            .unwrap();
+        assert_eq!(key["inputSchema"]["required"], json!(["name"]));
+        assert_eq!(
+            key["inputSchema"]["properties"]["name"]["enum"],
+            json!(["Tab", "Shift+Tab", "Enter", "Space", "Backspace"])
+        );
+    }
+
+    #[test]
+    fn scroll_route_clamps_and_rejects_invalid_input() {
+        let handle = http_test_handle();
+        let id = {
+            let mut tree = handle.tree.lock().unwrap();
+            let id = tree
+                .add(NodeKind::Scroll, Some(NodeId::from_raw(1)))
+                .unwrap();
+            let node = tree.get_mut(id).unwrap();
+            node.bounds.height = 100.0;
+            node.scroll_extent = 350.0;
+            id
+        };
+        let changes = Arc::new(AtomicUsize::new(0));
+        let seen = changes.clone();
+        *handle.on_change.lock().unwrap() = Some(Arc::new(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }));
+        let request = |body: String| {
+            process_http_request(&handle, Some(("POST".into(), "/scroll".into(), body)))
+        };
+        for (delta, expected) in [(1000.0, 250.0), (-1000.0, 0.0)] {
+            let (status, _, body) = request(json!({"id": id.raw(), "delta": delta}).to_string());
+            assert_eq!(status, "200 OK");
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap()["offset"],
+                expected
+            );
+        }
+        assert_eq!(changes.load(Ordering::SeqCst), 2);
+        for body in [
+            "{}".to_string(),
+            r#"{"id":1,"delta":3}"#.into(),
+            format!(r#"{{"id":{},"delta":1e100}}"#, id.raw()),
+            format!(r#"{{"id":{},"delta":"NaN"}}"#, id.raw()),
+        ] {
+            let (status, _, body) = request(body);
+            assert_eq!(status, "400 Bad Request");
+            assert!(String::from_utf8(body).unwrap().contains("error"));
+        }
+        let (status, _, body) = request(r#"{"id":999,"delta":3}"#.into());
+        assert_eq!(status, "404 Not Found");
+        assert!(String::from_utf8(body).unwrap().contains("unknown node"));
+        let tools = tool_list();
+        let scroll = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "ui.scroll")
+            .unwrap();
+        assert_eq!(scroll["inputSchema"]["required"], json!(["id", "delta"]));
+    }
+
+    fn http_test_handle() -> SharedTreeHandle {
+        let mut tree = Tree::new();
+        tree.add(NodeKind::Window, None).unwrap();
+        SharedTreeHandle {
+            tree: Arc::new(Mutex::new(tree)),
+            render: Arc::new(|_| Ok(Vec::new())),
+            logs: Arc::new(Mutex::new(Vec::new())),
+            on_change: Mutex::new(None),
+            pending_js: Mutex::new(None),
+            apply_js: Mutex::new(Some(Arc::new(|_| Ok(())))),
+            last_writeback: Mutex::new(None),
+            action_gate: Arc::new(Mutex::new(())),
+            click_js: Mutex::new(None),
+            input_js: Mutex::new(None),
+            history: Mutex::new(None),
+        }
+    }
+
+    #[test]
+    fn patch_route_accepts_disabled_and_reports_it() {
+        let handle = http_test_handle();
+        let button = handle
+            .tree
+            .lock()
+            .unwrap()
+            .add(NodeKind::Button, None)
+            .unwrap();
+        let body = format!(r#"{{"id":{},"disabled":true}}"#, button.raw());
+        let (status, _, body) =
+            process_http_request(&handle, Some(("POST".into(), "/patch".into(), body)));
+        assert_eq!(status, "200 OK");
+        let response: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response["node"]["disabled"], true);
+        let field = handle
+            .tree
+            .lock()
+            .unwrap()
+            .add(NodeKind::TextField, None)
+            .unwrap();
+        handle
+            .patch(
+                field,
+                NodePatch {
+                    disabled: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let type_body = format!(r#"{{"id":{},"text":"no"}}"#, field.raw());
+        let (status, _, _) =
+            process_http_request(&handle, Some(("POST".into(), "/type".into(), type_body)));
+        assert_eq!(status, "400 Bad Request");
+        let tools = tool_list();
+        let patch = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "ui.patch")
+            .unwrap();
+        assert_eq!(
+            patch["inputSchema"]["properties"]["disabled"]["type"],
+            "boolean"
+        );
+    }
+
+    #[test]
+    fn http_policy_covers_all_routes_and_trusted_mutations() {
+        let handle = http_test_handle();
+        for (method, path) in [
+            ("GET", "/health"),
+            ("GET", "/inspector"),
+            ("GET", "/tree"),
+            ("GET", "/tree.txt"),
+            ("GET", "/screenshot"),
+            ("GET", "/accesskit"),
+            ("GET", "/state"),
+            ("GET", "/states"),
+            ("GET", "/logs"),
+            ("GET", "/components"),
+            ("POST", "/states/restore"),
+            ("POST", "/patch"),
+            ("POST", "/click"),
+            ("POST", "/type"),
+            ("POST", "/reload"),
+        ] {
+            for headers in [
+                "Host: evil.test",
+                "Host: localhost:3000\r\nOrigin: http://evil.test",
+            ] {
+                let raw =
+                    format!("{method} {path} HTTP/1.1\r\n{headers}\r\nContent-Length: 100\r\n\r\n");
+                let request = read_http_request(&mut raw.as_bytes()).unwrap();
+                assert_eq!(
+                    process_http_request(&handle, request).0,
+                    "403 Forbidden",
+                    "{path}"
+                );
+            }
+        }
+        for (path, body, origin) in [
+            (
+                "/patch",
+                r#"{"id":1,"text":"changed"}"#,
+                "Origin: http://localhost:3000\r\n",
+            ),
+            ("/reload", "console.log(1)", ""),
+        ] {
+            let raw = format!("POST {path} HTTP/1.1\r\nHost: localhost:3000\r\n{origin}Content-Length: {}\r\n\r\n{body}", body.len());
+            let response =
+                process_http_request(&handle, read_http_request(&mut raw.as_bytes()).unwrap());
+            assert_eq!(
+                response.0,
+                "200 OK",
+                "{path}: {:?}",
+                String::from_utf8_lossy(&response.2)
+            );
+        }
+        assert_eq!(
+            handle.pending_js.lock().unwrap().as_deref(),
+            Some("console.log(1)")
+        );
+    }
+
+    #[test]
+    fn http_socket_integration_response_and_cli() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let worker = thread::spawn(move || {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                handle_client(stream, Arc::new(http_test_handle())).unwrap();
+            }
+        });
+        let (status, _) = http_get(&format!("http://127.0.0.1:{port}/tree")).unwrap();
+        assert!(status.contains("200"));
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            stream,
+            "GET /state HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://evil.test\r\n\r\n"
+        )
+        .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 403"));
+        assert!(!response
+            .to_ascii_lowercase()
+            .contains("access-control-allow-origin"));
+        worker.join().unwrap();
+    }
 
     #[test]
     fn click_sets_focus_and_is_logged() {
@@ -787,6 +1510,10 @@ mod tests {
             pending_js: Mutex::new(None),
             apply_js: Mutex::new(None),
             last_writeback: Mutex::new(None),
+            action_gate: Arc::new(Mutex::new(())),
+            click_js: Mutex::new(None),
+            input_js: Mutex::new(None),
+            history: Mutex::new(None),
         };
         handle.click(t).unwrap();
         let dump = handle.tree();
@@ -828,10 +1555,155 @@ mod tests {
             pending_js: Mutex::new(None),
             apply_js: Mutex::new(None),
             last_writeback: Mutex::new(None),
+            action_gate: Arc::new(Mutex::new(())),
+            click_js: Mutex::new(None),
+            input_js: Mutex::new(None),
+            history: Mutex::new(None),
         };
         let err = handle
             .enqueue_js("tekto.create('window')".into())
             .unwrap_err();
         assert!(err.to_string().contains("no JS runtime"), "{err}");
+    }
+
+    #[test]
+    fn states_restore_jumps_an_opted_in_store() {
+        let store = Arc::new(Mutex::new(Store::recording(json!({"n": 0}), 8)));
+        {
+            let mut g = store.lock().unwrap();
+            g.set(json!({"n": 1}), Some("one".into()));
+            g.set(json!({"n": 2}), None);
+            g.set(json!({"n": 3}), Some("three".into()));
+        }
+        let handle = SharedTreeHandle {
+            tree: Arc::new(Mutex::new(Tree::new())),
+            render: Arc::new(|_| Ok(Vec::new())),
+            logs: Arc::new(Mutex::new(Vec::new())),
+            on_change: Mutex::new(None),
+            pending_js: Mutex::new(None),
+            apply_js: Mutex::new(None),
+            last_writeback: Mutex::new(None),
+            action_gate: Arc::new(Mutex::new(())),
+            click_js: Mutex::new(None),
+            input_js: Mutex::new(None),
+            history: Mutex::new(Some(store)),
+        };
+        let (_s, _c, body) = dispatch(&handle, "GET", "/states", "").unwrap();
+        let listed: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(listed["enabled"], true);
+        assert_eq!(listed["cursor"], 3);
+        assert_eq!(listed["states"].as_array().unwrap().len(), 4);
+
+        let (_s, _c, body) =
+            dispatch(&handle, "POST", "/states/restore", r#"{"index":1}"#).unwrap();
+        let restored: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(restored["value"]["n"], 1);
+        assert_eq!(restored["states"]["cursor"], 1);
+
+        let (_s, _c, body) =
+            dispatch(&handle, "POST", "/states/restore", r#"{"index":3}"#).unwrap();
+        let restored: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(restored["value"]["n"], 3);
+
+        let off = SharedTreeHandle {
+            tree: Arc::new(Mutex::new(Tree::new())),
+            render: Arc::new(|_| Ok(Vec::new())),
+            logs: Arc::new(Mutex::new(Vec::new())),
+            on_change: Mutex::new(None),
+            pending_js: Mutex::new(None),
+            apply_js: Mutex::new(None),
+            last_writeback: Mutex::new(None),
+            action_gate: Arc::new(Mutex::new(())),
+            click_js: Mutex::new(None),
+            input_js: Mutex::new(None),
+            history: Mutex::new(None),
+        };
+        let listed = off.states_json();
+        assert_eq!(listed["enabled"], false);
+        assert!(off.restore_state(0).is_err());
+    }
+
+    #[test]
+    fn app_components_lists_core_widgets() {
+        let listed = tool_list();
+        assert!(listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "app.components"));
+
+        let result = call_tool(&json!({"name": "app.components", "arguments": {}})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert_eq!(text, COMPONENTS_SCHEMA);
+        let schema: Value = serde_json::from_str(text).unwrap();
+        let names: Vec<&str> = schema["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap())
+            .collect();
+
+        let kind_names: Vec<&str> = tekto_tree::NodeKind::all()
+            .iter()
+            .map(|k| k.as_str())
+            .collect();
+        assert_eq!(
+            names, kind_names,
+            "components.json must list every NodeKind and nothing else"
+        );
+
+        // Events come from NodeKind::agent_events (what the host actually
+        // does), not a shorter hand-written list. Prop completeness is
+        // tekto_js::component_schema_lists_every_host_prop: every setProp key
+        // must appear on every kind, because JSX forwards that set globally.
+        for kind in tekto_tree::NodeKind::all() {
+            let widget = kind.as_str();
+            let spec = schema["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["name"] == widget)
+                .unwrap_or_else(|| panic!("schema omits core widget {widget}"));
+            let got_events: Vec<&str> = spec["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["name"].as_str().unwrap())
+                .collect();
+            for event in kind.agent_events() {
+                assert!(
+                    got_events.contains(event),
+                    "{widget} schema omits event {event}"
+                );
+            }
+            for event in &got_events {
+                assert!(
+                    kind.agent_events().contains(event),
+                    "{widget} schema lists event {event} the host does not apply to this kind"
+                );
+            }
+        }
+
+        let (_status, _ct, body) = dispatch(
+            &SharedTreeHandle {
+                tree: Arc::new(Mutex::new(Tree::new())),
+                render: Arc::new(|_| Ok(Vec::new())),
+                logs: Arc::new(Mutex::new(Vec::new())),
+                on_change: Mutex::new(None),
+                pending_js: Mutex::new(None),
+                apply_js: Mutex::new(None),
+                last_writeback: Mutex::new(None),
+                action_gate: Arc::new(Mutex::new(())),
+                click_js: Mutex::new(None),
+                input_js: Mutex::new(None),
+                history: Mutex::new(None),
+            },
+            "GET",
+            "/components",
+            "",
+        )
+        .unwrap();
+        let http: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(http["components"], schema["components"]);
     }
 }

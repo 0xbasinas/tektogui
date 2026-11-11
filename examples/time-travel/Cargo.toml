@@ -1,0 +1,11 @@
+[package]
+name = "time-travel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Tiny counter that records store history and can jump back"
+
+[dependencies]
+tekto = { workspace = true }
+serde_json = { workspace = true }

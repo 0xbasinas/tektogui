@@ -4,12 +4,89 @@
 //! agent MCP, and live patches pointed at the same node after a rebuild
 //! of only part of the tree.
 
+mod animate;
 mod recording;
+mod scroll_feel;
+mod store;
+pub use animate::{
+    ease_smoothstep, reduced_motion_requested, StyleTransition, DEFAULT_TRANSITION_MS,
+};
 pub use recording::{Action, RecordedKey, Recording};
+pub use store::{StateInfo, Store, StoreError};
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::Arc;
+
+/// Named keys supported by agent input and desktop routing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NamedActionKey {
+    Tab,
+    ShiftTab,
+    Enter,
+    Space,
+    Backspace,
+}
+
+impl std::str::FromStr for NamedActionKey {
+    type Err = String;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "Tab" => Ok(Self::Tab),
+            "Shift+Tab" => Ok(Self::ShiftTab),
+            "Enter" => Ok(Self::Enter),
+            "Space" => Ok(Self::Space),
+            "Backspace" => Ok(Self::Backspace),
+            _ => Err(format!(
+                "unknown key {name:?}; expected Tab, Shift+Tab, Enter, Space, or Backspace"
+            )),
+        }
+    }
+}
+
+/// Apply a named key and return any button that should be activated.
+pub fn route_named_key(
+    tree: &mut Tree,
+    key: NamedActionKey,
+    repeat: bool,
+) -> (bool, Option<NodeId>) {
+    match key {
+        NamedActionKey::Tab => (tree.traverse_focus(false), None),
+        NamedActionKey::ShiftTab => (tree.traverse_focus(true), None),
+        NamedActionKey::Enter | NamedActionKey::Space => {
+            let button = tree.focus.filter(|id| {
+                tree.get(*id).is_some_and(|n| {
+                    (n.kind == NodeKind::Button
+                        || (key == NamedActionKey::Space && n.kind == NodeKind::Checkbox))
+                        && !n.disabled
+                })
+            });
+            (false, button.filter(|_| !repeat))
+        }
+        NamedActionKey::Backspace => (
+            tree.apply_field_key(FieldKey::Backspace).unwrap_or(false),
+            None,
+        ),
+    }
+}
+
+/// A committed user action on a tree node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TreeEvent {
+    Click(NodeId),
+    Changed(NodeId),
+}
+
+type EventCallback = dyn Fn(&mut Tree, TreeEvent) + Send + Sync;
+#[derive(Clone)]
+struct EventHandler(Arc<EventCallback>);
+impl fmt::Debug for EventHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("EventHandler")
+    }
+}
 
 /// Stable id of a scene node. Never reused for the life of a [`Tree`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
@@ -42,11 +119,14 @@ pub enum NodeKind {
     Rect,
     Text,
     Button,
+    Checkbox,
     /// Single-line editable value. `name` is the label; `text` is the value.
     TextField,
     /// Vertical clip of overflowing children. `scroll_y` shifts them up.
     Scroll,
-    /// Vertical collection of [`NodeKind::ListItem`] rows. Not virtualized.
+    /// Vertical collection of [`NodeKind::ListItem`] rows.
+    /// Layout keeps only the visible rows plus [`LIST_OVERSCAN_PX`] when the
+    /// list sits in a scroll viewport.
     List,
     /// One row in a [`NodeKind::List`]. Height is per row.
     ListItem,
@@ -56,6 +136,10 @@ pub enum NodeKind {
 /// A notch is a short step, not a page.
 pub const SCROLL_WHEEL_LINE: f32 = 48.0;
 
+/// Extra logical pixels laid out above and below a list viewport.
+/// Layout keeps this band of rows so a small scroll does not pop the edges.
+pub const LIST_OVERSCAN_PX: f32 = 64.0;
+
 impl NodeKind {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -64,6 +148,7 @@ impl NodeKind {
             NodeKind::Rect => "rect",
             NodeKind::Text => "text",
             NodeKind::Button => "button",
+            NodeKind::Checkbox => "checkbox",
             NodeKind::TextField => "text_field",
             NodeKind::Scroll => "scroll",
             NodeKind::List => "list",
@@ -79,11 +164,49 @@ impl NodeKind {
             "rect" => Some(Self::Rect),
             "text" => Some(Self::Text),
             "button" => Some(Self::Button),
+            "checkbox" => Some(Self::Checkbox),
             "text_field" => Some(Self::TextField),
             "scroll" => Some(Self::Scroll),
             "list" => Some(Self::List),
             "list_item" => Some(Self::ListItem),
             _ => None,
+        }
+    }
+
+    /// Every kind. `as_str` is exhaustive, so a new variant fails to compile
+    /// until it has a name. This list must include that name: the component
+    /// schema test requires `components.json` to match `all()`.
+    pub fn all() -> &'static [NodeKind] {
+        &[
+            NodeKind::Window,
+            NodeKind::Group,
+            NodeKind::Rect,
+            NodeKind::Text,
+            NodeKind::Button,
+            NodeKind::Checkbox,
+            NodeKind::TextField,
+            NodeKind::Scroll,
+            NodeKind::List,
+            NodeKind::ListItem,
+        ]
+    }
+
+    /// Host actions an agent can use on this kind.
+    ///
+    /// `click` (`ui.click`) focuses any node. `type`, `key`, and `ime` apply
+    /// only to a text field. `scroll` applies only to a scroll container.
+    pub fn agent_events(self) -> &'static [&'static str] {
+        match self {
+            NodeKind::TextField => &["click", "type", "key", "ime"],
+            NodeKind::Scroll => &["click", "scroll"],
+            NodeKind::Window
+            | NodeKind::Group
+            | NodeKind::Rect
+            | NodeKind::Text
+            | NodeKind::Button
+            | NodeKind::Checkbox
+            | NodeKind::List
+            | NodeKind::ListItem => &["click"],
         }
     }
 }
@@ -171,6 +294,13 @@ pub struct LayoutStyle {
     /// If true, pack children on the main axis (vertical when `column`).
     #[serde(default)]
     pub justify_center: bool,
+    /// When finite, layout keeps this x after a position transition.
+    /// `NaN` means the flex position.
+    #[serde(default = "nan_f32", skip_serializing_if = "is_nan_f32")]
+    pub x: f32,
+    /// When finite, layout keeps this y after a position transition.
+    #[serde(default = "nan_f32", skip_serializing_if = "is_nan_f32")]
+    pub y: f32,
 }
 
 impl Default for LayoutStyle {
@@ -182,6 +312,8 @@ impl Default for LayoutStyle {
             gap: 0.0,
             column: true,
             justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
         }
     }
 }
@@ -204,11 +336,22 @@ impl LayoutStyle {
     }
 }
 
+/// Default window padding.
+pub const PAGE_PADDING: f32 = 24.0;
+/// Default space between window children.
+pub const STACK_GAP: f32 = 20.0;
+/// Default control text size.
+pub const BODY_SIZE: f32 = 20.0;
+
 /// A node in the scene tree.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Node {
     pub id: NodeId,
     pub kind: NodeKind,
+    #[serde(default)]
+    pub disabled: bool,
+    #[serde(default)]
+    pub checked: bool,
     pub name: Option<String>,
     pub text: Option<String>,
     pub fill: Option<Color>,
@@ -246,6 +389,40 @@ pub struct Node {
     /// reads it when deciding whether to insert a scroll parent.
     #[serde(default = "nan_f32", skip_serializing_if = "is_nan_f32")]
     pub list_viewport: f32,
+    /// Every list row in order, including rows layout has detached.
+    /// Empty until the first layout of a list. Not an accessibility child list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub list_slots: Vec<NodeId>,
+    /// Spacer above the virtual window. `0` means there is no spacer yet.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub list_pad_top: u64,
+    /// Spacer below the virtual window. `0` means there is no spacer yet.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub list_pad_bottom: u64,
+    /// Paint multiplier for this node and its children. 1 is solid, 0 is hidden.
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+}
+
+/// A detached row or spacer still belongs to `list_id`. A row whose parent
+/// lives outside the removed subtree does not.
+fn claim_with_list(
+    nodes: &HashMap<NodeId, Node>,
+    queued: &HashSet<NodeId>,
+    list_id: NodeId,
+    id: NodeId,
+) -> bool {
+    if id.raw() == 0 || !nodes.contains_key(&id) {
+        return false;
+    }
+    match nodes[&id].parent {
+        None => true,
+        Some(parent) => parent == list_id || queued.contains(&parent),
+    }
+}
+
+fn default_opacity() -> f32 {
+    1.0
 }
 
 fn nan_f32() -> f32 {
@@ -256,11 +433,17 @@ fn is_nan_f32(value: &f32) -> bool {
     value.is_nan()
 }
 
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
 impl Node {
     fn new(id: NodeId, kind: NodeKind) -> Self {
         Self {
             id,
             kind,
+            disabled: false,
+            checked: false,
             name: None,
             text: None,
             fill: None,
@@ -277,6 +460,40 @@ impl Node {
             scroll_y: 0.0,
             scroll_extent: 0.0,
             list_viewport: f32::NAN,
+            list_slots: Vec::new(),
+            list_pad_top: 0,
+            list_pad_bottom: 0,
+            opacity: 1.0,
+        }
+    }
+
+    /// Apply the built-in defaults for a window or control before setting props.
+    pub fn apply_widget_defaults(&mut self) {
+        match self.kind {
+            NodeKind::Window => {
+                self.fill = Some(Color::PAGE);
+                self.layout.padding = PAGE_PADDING;
+                self.layout.gap = STACK_GAP;
+                self.layout.column = true;
+            }
+            NodeKind::Button => {
+                self.fill = Some(Color::BANNER);
+                self.color = Some(Color::ON_BANNER);
+                self.font_size = BODY_SIZE;
+                self.layout.padding = 12.0;
+            }
+            NodeKind::Checkbox => {
+                self.color = Some(Color::INK);
+                self.font_size = BODY_SIZE;
+                self.layout.padding = 4.0;
+            }
+            NodeKind::TextField => {
+                self.fill = Some(Color::FIELD);
+                self.color = Some(Color::INK);
+                self.font_size = BODY_SIZE;
+                self.layout.padding = 10.0;
+            }
+            _ => {}
         }
     }
 
@@ -346,6 +563,11 @@ fn clamp_char_boundary(s: &str, index: usize) -> usize {
 pub enum FieldKey {
     Insert(char),
     Backspace,
+    Left,
+    Right,
+    Home,
+    End,
+    Delete,
 }
 
 /// One winit input-method event, without a winit dependency.
@@ -365,6 +587,8 @@ pub enum ImeEvent {
 /// Partial update used by live edits and by MCP `ui.patch`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NodePatch {
+    pub disabled: Option<bool>,
+    pub checked: Option<bool>,
     pub text: Option<String>,
     pub name: Option<String>,
     pub fill: Option<String>,
@@ -396,6 +620,7 @@ impl std::error::Error for TreeError {}
 /// The scene tree.
 #[derive(Clone, Debug)]
 pub struct Tree {
+    event_handler: Option<EventHandler>,
     next_id: u64,
     root: Option<NodeId>,
     nodes: HashMap<NodeId, Node>,
@@ -403,6 +628,12 @@ pub struct Tree {
     pub focus: Option<NodeId>,
     /// Last node that was clicked, if any.
     pub last_click: Option<NodeId>,
+    pub(crate) transitions: Vec<animate::ActiveTransition>,
+    /// Milliseconds last passed to [`Tree::advance`].
+    pub(crate) time_ms: f64,
+    pub(crate) reduced_motion: bool,
+    pub(crate) gesture: Option<scroll_feel::Gesture>,
+    pub(crate) flings: Vec<scroll_feel::Fling>,
 }
 
 impl Default for Tree {
@@ -414,11 +645,36 @@ impl Default for Tree {
 impl Tree {
     pub fn new() -> Self {
         Self {
+            event_handler: None,
             next_id: 1,
             root: None,
             nodes: HashMap::new(),
             focus: None,
             last_click: None,
+            transitions: Vec::new(),
+            time_ms: 0.0,
+            reduced_motion: false,
+            gesture: None,
+            flings: Vec::new(),
+        }
+    }
+
+    /// Keep the Rust event handler when replacing a tree.
+    pub fn inherit_event_handler(&mut self, other: &Tree) {
+        self.event_handler = other.event_handler.clone();
+    }
+
+    /// Install a synchronous handler for clicks and committed field changes.
+    pub fn set_event_handler(
+        &mut self,
+        handler: impl Fn(&mut Tree, TreeEvent) + Send + Sync + 'static,
+    ) {
+        self.event_handler = Some(EventHandler(Arc::new(handler)));
+    }
+
+    fn emit(&mut self, event: TreeEvent) {
+        if let Some(handler) = self.event_handler.clone() {
+            (handler.0)(self, event);
         }
     }
 
@@ -495,6 +751,13 @@ impl Tree {
                 old_node.children.retain(|c| *c != child);
             }
         }
+        // A virtualized row can be off the child list and still sit in `list_slots`.
+        // Drop that slot so the next layout does not attach it under the old list.
+        for node in self.nodes.values_mut() {
+            if node.kind == NodeKind::List {
+                node.list_slots.retain(|id| *id != child);
+            }
+        }
         self.nodes.get_mut(&parent).unwrap().children.push(child);
         self.nodes.get_mut(&child).unwrap().parent = Some(parent);
         Ok(())
@@ -515,19 +778,112 @@ impl Tree {
                 p.children.retain(|c| *c != id);
             }
         }
+        // Offscreen list rows and spacers have no parent, so a child walk
+        // would leave them in the tree. Take those that still belong to a
+        // list inside this subtree. A row already reparented elsewhere stays.
+        let mut queued = HashSet::new();
         let mut stack = vec![id];
+        queued.insert(id);
         while let Some(cur) = stack.pop() {
-            if let Some(node) = self.nodes.remove(&cur) {
-                stack.extend(node.children);
+            let (children, kind, slots, pad_top, pad_bottom) = {
+                let Some(node) = self.nodes.get(&cur) else {
+                    continue;
+                };
+                (
+                    node.children.clone(),
+                    node.kind,
+                    node.list_slots.clone(),
+                    node.list_pad_top,
+                    node.list_pad_bottom,
+                )
+            };
+            let mut extra = Vec::new();
+            if kind == NodeKind::List {
+                for slot in slots {
+                    if claim_with_list(&self.nodes, &queued, cur, slot) {
+                        extra.push(slot);
+                    }
+                }
+                if pad_top != 0 {
+                    let pad = NodeId::from_raw(pad_top);
+                    if claim_with_list(&self.nodes, &queued, cur, pad) {
+                        extra.push(pad);
+                    }
+                }
+                if pad_bottom != 0 {
+                    let pad = NodeId::from_raw(pad_bottom);
+                    if claim_with_list(&self.nodes, &queued, cur, pad) {
+                        extra.push(pad);
+                    }
+                }
             }
-            if self.focus == Some(cur) {
+            for child in children.into_iter().chain(extra) {
+                if queued.insert(child) {
+                    stack.push(child);
+                }
+            }
+        }
+        for cur in &queued {
+            self.nodes.remove(cur);
+            if self.focus == Some(*cur) {
                 self.focus = self.root;
             }
-            if self.last_click == Some(cur) {
+            if self.last_click == Some(*cur) {
                 self.last_click = None;
+            }
+            self.drop_transitions(*cur);
+            self.drop_scroll_motion(*cur);
+        }
+        for node in self.nodes.values_mut() {
+            node.children.retain(|child| !queued.contains(child));
+            if node.parent.is_some_and(|parent| queued.contains(&parent)) {
+                node.parent = None;
+            }
+            if node.kind == NodeKind::List {
+                node.list_slots.retain(|slot| !queued.contains(slot));
+                if node.list_pad_top != 0 && queued.contains(&NodeId::from_raw(node.list_pad_top)) {
+                    node.list_pad_top = 0;
+                }
+                if node.list_pad_bottom != 0
+                    && queued.contains(&NodeId::from_raw(node.list_pad_bottom))
+                {
+                    node.list_pad_bottom = 0;
+                }
             }
         }
         Ok(())
+    }
+
+    /// Move focus among attached buttons and text fields in depth-first tree order.
+    /// From a non-eligible focus, start at the first (or last when reversed).
+    /// Returns false if there are no eligible nodes.
+    pub fn traverse_focus(&mut self, reverse: bool) -> bool {
+        let mut stack: Vec<_> = self.root.into_iter().collect();
+        let mut eligible = Vec::new();
+        while let Some(id) = stack.pop() {
+            if let Some(node) = self.get(id) {
+                if !node.disabled
+                    && matches!(
+                        node.kind,
+                        NodeKind::Button | NodeKind::TextField | NodeKind::Checkbox
+                    )
+                {
+                    eligible.push(id);
+                }
+                stack.extend(node.children.iter().rev().copied());
+            }
+        }
+        if eligible.is_empty() {
+            return false;
+        }
+        let index = eligible.iter().position(|id| Some(*id) == self.focus);
+        let next = match (index, reverse) {
+            (Some(i), false) => (i + 1) % eligible.len(),
+            (Some(i), true) => (i + eligible.len() - 1) % eligible.len(),
+            (None, false) => 0,
+            (None, true) => eligible.len() - 1,
+        };
+        self.set_focus(eligible[next]).is_ok()
     }
 
     /// Set AccessKit / keyboard focus. The id must already be in the tree.
@@ -537,6 +893,11 @@ impl Tree {
         if !self.nodes.contains_key(&id) {
             return Err(TreeError {
                 message: format!("unknown node {id}"),
+            });
+        }
+        if self.nodes[&id].disabled {
+            return Err(TreeError {
+                message: format!("node {id} is disabled"),
             });
         }
         if self.focus != Some(id) {
@@ -559,6 +920,18 @@ impl Tree {
                 node.caret = node.text.as_deref().unwrap_or("").chars().count();
             }
         }
+        let changed = self.nodes.get_mut(&id).is_some_and(|node| {
+            if node.kind == NodeKind::Checkbox {
+                node.checked = !node.checked;
+                true
+            } else {
+                false
+            }
+        });
+        if changed {
+            self.emit(TreeEvent::Changed(id));
+        }
+        self.emit(TreeEvent::Click(id));
         Ok(())
     }
 
@@ -583,7 +956,10 @@ impl Tree {
         let Some(id) = self.focus else {
             return Ok(false);
         };
-        if self.get(id).is_some_and(|n| n.kind != NodeKind::TextField) {
+        if self
+            .get(id)
+            .is_some_and(|n| n.kind != NodeKind::TextField || n.disabled)
+        {
             return Ok(false);
         }
         if self.get(id).is_some_and(|n| !n.preedit.is_empty()) {
@@ -623,7 +999,10 @@ impl Tree {
         let Some(id) = self.focus else {
             return Ok(false);
         };
-        if self.get(id).is_some_and(|n| n.kind != NodeKind::TextField) {
+        if self
+            .get(id)
+            .is_some_and(|n| n.kind != NodeKind::TextField || n.disabled)
+        {
             return Ok(false);
         }
         // The input method owns the keys while a composition is on screen.
@@ -631,6 +1010,38 @@ impl Tree {
             return Ok(false);
         }
         self.apply_on_field(id, key)?;
+        Ok(true)
+    }
+
+    /// Replace the focused field's committed value. Used by the Android overlay.
+    ///
+    /// Control characters are dropped. A preedit is cleared and not committed.
+    /// Returns `Ok(false)` when focus is not a text field or nothing changed.
+    pub fn set_focused_field_value(&mut self, text: &str, caret: usize) -> Result<bool, TreeError> {
+        let Some(id) = self.focus else {
+            return Ok(false);
+        };
+        if self
+            .get(id)
+            .is_none_or(|n| n.kind != NodeKind::TextField || n.disabled)
+        {
+            return Ok(false);
+        }
+        let plain: String = text.chars().filter(|c| !c.is_control()).collect();
+        let caret = caret.min(plain.chars().count());
+        let node = self.nodes.get_mut(&id).expect("field");
+        if node.text.as_deref().unwrap_or("") == plain
+            && node.caret == caret
+            && node.preedit.is_empty()
+            && node.preedit_cursor.is_none()
+        {
+            return Ok(false);
+        }
+        node.preedit.clear();
+        node.preedit_cursor = None;
+        node.text = Some(plain);
+        node.caret = caret;
+        self.emit(TreeEvent::Changed(id));
         Ok(true)
     }
 
@@ -645,7 +1056,10 @@ impl Tree {
         let Some(id) = self.focus else {
             return Ok(false);
         };
-        if self.get(id).is_some_and(|n| n.kind != NodeKind::TextField) {
+        if self
+            .get(id)
+            .is_some_and(|n| n.kind != NodeKind::TextField || n.disabled)
+        {
             return Ok(false);
         }
         self.ensure_field(id)?;
@@ -689,6 +1103,9 @@ impl Tree {
 
     fn ensure_field(&self, id: NodeId) -> Result<(), TreeError> {
         match self.nodes.get(&id) {
+            Some(node) if node.disabled => Err(TreeError {
+                message: format!("node {id} is disabled"),
+            }),
             Some(node) if node.kind == NodeKind::TextField => Ok(()),
             Some(_) => Err(TreeError {
                 message: format!("node {id} is not a text field"),
@@ -725,15 +1142,28 @@ impl Tree {
                     caret -= 1;
                 }
             }
+            FieldKey::Left => caret = caret.saturating_sub(1),
+            FieldKey::Right => caret = (caret + 1).min(chars.len()),
+            FieldKey::Home => caret = 0,
+            FieldKey::End => caret = chars.len(),
+            FieldKey::Delete => {
+                if caret < chars.len() {
+                    chars.remove(caret);
+                }
+            }
         }
         node.text = Some(chars.into_iter().collect());
         node.caret = caret;
+        if current != node.text.as_deref().unwrap_or("") {
+            self.emit(TreeEvent::Changed(id));
+        }
         Ok(())
     }
 
     /// Set the vertical offset of a scroll container. Clamped to the content
     /// from the last layout. There is no overscroll.
     pub fn set_scroll_y(&mut self, id: NodeId, y: f32) -> Result<f32, TreeError> {
+        self.stop_fling(id);
         self.write_scroll(id, y, false)
     }
 
@@ -748,6 +1178,9 @@ impl Tree {
                 message: format!("unknown node {id}"),
             })?
             .scroll_y;
+        // A wheel or programmatic step owns the offset. A running fling would
+        // add itself on the next tick and fight that step.
+        self.stop_fling(id);
         self.write_scroll(id, current + delta_y, true)
     }
 
@@ -796,10 +1229,36 @@ impl Tree {
         Some(id)
     }
 
+    /// Disabling the focused control moves focus to the root and drops preedit.
     pub fn patch(&mut self, id: NodeId, patch: NodePatch) -> Result<(), TreeError> {
+        let changed_text = patch.text.is_some();
+        let disabling = patch.disabled == Some(true);
         let node = self.nodes.get_mut(&id).ok_or_else(|| TreeError {
             message: format!("unknown node {id}"),
         })?;
+        if patch.disabled.is_some()
+            && !matches!(
+                node.kind,
+                NodeKind::Button | NodeKind::TextField | NodeKind::Checkbox
+            )
+        {
+            return Err(TreeError {
+                message: format!(
+                    "disabled is only supported on buttons, text fields, and checkboxes (node {id})"
+                ),
+            });
+        }
+        if let Some(checked) = patch.checked {
+            if node.kind != NodeKind::Checkbox {
+                return Err(TreeError {
+                    message: format!("checked is only supported on checkboxes (node {id})"),
+                });
+            }
+            node.checked = checked;
+        }
+        if let Some(disabled) = patch.disabled {
+            node.disabled = disabled;
+        }
         if let Some(text) = patch.text {
             // Buttons and labels start with name == text. A text field's name
             // is the accessible label and must stay put when the value changes.
@@ -838,6 +1297,13 @@ impl Tree {
         if let Some(gap) = patch.gap {
             node.layout.gap = gap;
         }
+        if disabling && self.focus == Some(id) {
+            self.clear_field_preedit(id);
+            self.focus = self.root;
+        }
+        if changed_text {
+            self.emit(TreeEvent::Changed(id));
+        }
         Ok(())
     }
 
@@ -874,13 +1340,29 @@ impl Tree {
             return;
         };
         let indent = "  ".repeat(depth);
-        let name = node.display_name();
+        let label = if node.kind == NodeKind::TextField {
+            let name = node.name.as_deref().map(pretty_field_string);
+            let value = pretty_field_string(node.text.as_deref().unwrap_or_default());
+            format!("name={} value={value}", name.as_deref().unwrap_or("null"))
+        } else {
+            format!("\"{}\"", escape_quotes(&node.display_name()))
+        };
+        let label = if node.kind == NodeKind::Checkbox {
+            format!("{label} checked={}", node.checked)
+        } else {
+            label
+        };
+        let label = if node.disabled {
+            format!("{label} disabled=true")
+        } else {
+            label
+        };
         let b = node.bounds;
         out.push_str(&format!(
-            "{indent}- {}#{} \"{}\" [{:.0},{:.0} {:.0}x{:.0}]\n",
+            "{indent}- {}#{} {} [{:.0},{:.0} {:.0}x{:.0}]\n",
             node.kind.as_str(),
             node.id,
-            escape_quotes(&name),
+            label,
             b.x,
             b.y,
             b.width,
@@ -897,6 +1379,8 @@ impl Tree {
         Some(NodeDump {
             id: node.id.raw(),
             kind: node.kind,
+            disabled: node.disabled,
+            checked: node.checked,
             name: node.name.clone(),
             text: node.text.clone(),
             fill: node.fill.map(|c| c.to_hex()),
@@ -929,6 +1413,8 @@ impl Tree {
         out.push(NodeDump {
             id: node.id.raw(),
             kind: node.kind,
+            disabled: node.disabled,
+            checked: node.checked,
             name: node.name.clone(),
             text: node.text.clone(),
             fill: node.fill.map(|c| c.to_hex()),
@@ -969,6 +1455,19 @@ fn escape_quotes(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+// Bound both fields before escaping, without cutting a UTF-8 character in half.
+fn pretty_field_string(s: &str) -> String {
+    const LIMIT: usize = 120;
+    let mut chars = s.chars();
+    let prefix: String = chars.by_ref().take(LIMIT).collect();
+    let suffix = if chars.next().is_some() {
+        " (truncated)"
+    } else {
+        ""
+    };
+    format!("{prefix:?}{suffix}")
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeDump {
     pub root: Option<u64>,
@@ -981,6 +1480,10 @@ pub struct TreeDump {
 pub struct NodeDump {
     pub id: u64,
     pub kind: NodeKind,
+    #[serde(default)]
+    pub disabled: bool,
+    #[serde(default)]
+    pub checked: bool,
     pub name: Option<String>,
     pub text: Option<String>,
     pub fill: Option<String>,
@@ -995,6 +1498,50 @@ pub struct NodeDump {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pretty_text_fields_show_name_and_committed_value() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        let node = tree.get_mut(field).unwrap();
+        node.name = Some("Title".into());
+        node.text = Some(String::new());
+        assert!(tree
+            .to_pretty_text()
+            .contains("text_field#2 name=\"Title\" value=\"\""));
+
+        let node = tree.get_mut(field).unwrap();
+        node.text = Some("a\"\\\n\tb".into());
+        node.preedit = "composing".into();
+        assert!(tree
+            .to_pretty_text()
+            .contains(r#"text_field#2 name="Title" value="a\"\\\n\tb""#));
+        assert_eq!(
+            tree.node_dump(field).unwrap().text.as_deref(),
+            Some("a\"\\\n\tb")
+        );
+
+        let node = tree.get_mut(field).unwrap();
+        node.name = None;
+        node.text = Some("é".repeat(121));
+        let pretty = tree.to_pretty_text();
+        assert!(pretty.contains(&format!(
+            "text_field#2 name=null value=\"{}\" (truncated)",
+            "é".repeat(120)
+        )));
+        tree.get_mut(field).unwrap().text = Some("é".repeat(120));
+        assert!(!tree.to_pretty_text().contains("(truncated)"));
+        let node = tree.get_mut(field).unwrap();
+        node.name = Some("n".repeat(121));
+        node.text = None;
+        assert!(tree.to_pretty_text().contains(&format!(
+            "name=\"{}\" (truncated) value=\"\"",
+            "n".repeat(120)
+        )));
+        tree.get_mut(field).unwrap().name = Some(String::new());
+        assert!(tree.to_pretty_text().contains("name=\"\" value=\"\""));
+    }
 
     #[test]
     fn ids_are_stable_and_never_reused() {
@@ -1092,6 +1639,83 @@ mod tests {
         let other = tree.add(NodeKind::Text, Some(root)).unwrap();
         tree.set_focus(other).unwrap();
         assert!(!tree.apply_field_key(FieldKey::Insert('x')).unwrap());
+    }
+
+    #[test]
+    fn field_caret_keys_edit_unicode_and_clamp_during_preedit() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        tree.get_mut(field).unwrap().text = Some("aé你🙂".into());
+        tree.get_mut(field).unwrap().caret = 4;
+        tree.set_focus(field).unwrap();
+        for key in [
+            FieldKey::Left,
+            FieldKey::Left,
+            FieldKey::Delete,
+            FieldKey::Insert('界'),
+        ] {
+            assert!(tree.apply_field_key(key).unwrap());
+        }
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("aé界🙂"));
+        assert_eq!(tree.get(field).unwrap().caret, 3);
+        for key in [FieldKey::Home, FieldKey::Left, FieldKey::Left] {
+            tree.apply_field_key(key).unwrap();
+        }
+        assert_eq!(tree.get(field).unwrap().caret, 0);
+        tree.apply_field_key(FieldKey::Delete).unwrap();
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("é界🙂"));
+        for key in [FieldKey::End, FieldKey::Right, FieldKey::Delete] {
+            tree.apply_field_key(key).unwrap();
+        }
+        assert_eq!(tree.get(field).unwrap().caret, 3);
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("é界🙂"));
+        tree.apply_field_key(FieldKey::Home).unwrap();
+        tree.apply_field_key(FieldKey::Right).unwrap();
+        assert_eq!(tree.get(field).unwrap().caret, 1);
+        tree.apply_ime(ImeEvent::Preedit {
+            text: "文".into(),
+            cursor: None,
+        })
+        .unwrap();
+        for key in [
+            FieldKey::Left,
+            FieldKey::Right,
+            FieldKey::Home,
+            FieldKey::End,
+            FieldKey::Delete,
+        ] {
+            assert!(!tree.apply_field_key(key).unwrap());
+        }
+        let node = tree.get(field).unwrap();
+        assert_eq!(node.caret, 1);
+        assert_eq!(node.text.as_deref(), Some("é界🙂"));
+        assert_eq!(node.preedit, "文");
+    }
+
+    #[test]
+    fn android_overlay_value_replaces_the_focused_field() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        tree.get_mut(field).unwrap().name = Some("Title".into());
+        tree.get_mut(field).unwrap().text = Some("Hi".into());
+        tree.get_mut(field).unwrap().caret = 2;
+        tree.set_focus(field).unwrap();
+        tree.apply_ime(ImeEvent::Preedit {
+            text: "x".into(),
+            cursor: None,
+        })
+        .unwrap();
+        assert!(tree.set_focused_field_value("Hi你\n", 3).unwrap());
+        let node = tree.get(field).unwrap();
+        assert_eq!(node.text.as_deref(), Some("Hi你"));
+        assert_eq!(node.name.as_deref(), Some("Title"));
+        assert!(node.preedit.is_empty());
+        assert_eq!(node.caret, 3);
+        assert!(!tree.set_focused_field_value("Hi你", 3).unwrap());
+        tree.set_focus(root).unwrap();
+        assert!(!tree.set_focused_field_value("nope", 0).unwrap());
     }
 
     #[test]

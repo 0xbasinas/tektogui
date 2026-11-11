@@ -4,12 +4,7 @@
 use tekto_text::TextEngine;
 use tekto_tree::{Color, LayoutStyle, Node, NodeId, NodeKind, Tree, TreeError};
 
-/// Space used around the window content.
-pub const PAGE_PADDING: f32 = 24.0;
-/// Space between stacked children (body sits comfortably under the banner).
-pub const STACK_GAP: f32 = 20.0;
-/// Default body text size.
-pub const BODY_SIZE: f32 = 20.0;
+pub use tekto_tree::{BODY_SIZE, PAGE_PADDING, STACK_GAP};
 /// Default title text size.
 pub const TITLE_SIZE: f32 = 22.0;
 /// Quiet header band. Title is padded and vertically centered inside it.
@@ -49,15 +44,9 @@ pub fn window(
     let id = tree.add(NodeKind::Window, None)?;
     if let Some(n) = tree.get_mut(id) {
         n.name = Some(title.into());
-        n.fill = Some(Color::PAGE);
-        n.layout = LayoutStyle {
-            width,
-            height,
-            padding: PAGE_PADDING,
-            gap: STACK_GAP,
-            column: true,
-            justify_center: false,
-        };
+        n.apply_widget_defaults();
+        n.layout.width = width;
+        n.layout.height = height;
     }
     Ok(id)
 }
@@ -84,6 +73,8 @@ pub fn banner(
             gap: 0.0,
             column: true,
             justify_center: true,
+            x: f32::NAN,
+            y: f32::NAN,
         };
     }
     Ok(id)
@@ -115,19 +106,33 @@ pub fn button(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId, Wi
     if let Some(n) = tree.get_mut(id) {
         n.name = Some(label.into());
         n.text = Some(label.into());
-        n.fill = Some(Color::BANNER);
-        n.color = Some(Color::ON_BANNER);
-        n.font_size = BODY_SIZE;
-        n.layout.padding = 12.0;
+        n.apply_widget_defaults();
+    }
+    Ok(id)
+}
+
+/// A labeled checkbox with an initial checked state.
+pub fn checkbox(
+    tree: &mut Tree,
+    parent: NodeId,
+    label: &str,
+    checked: bool,
+) -> Result<NodeId, WidgetError> {
+    let id = tree.add(NodeKind::Checkbox, Some(parent))?;
+    if let Some(n) = tree.get_mut(id) {
+        n.name = Some(label.into());
+        n.text = Some(label.into());
+        n.checked = checked;
+        n.apply_widget_defaults();
     }
     Ok(id)
 }
 
 /// A single-line text field. `label` is the accessible name; `value` is `text`.
 ///
-/// The caret starts at the end of `value`. Full IME (composition, candidates,
-/// marked text) is not implemented. Desktop keys that produce a character,
-/// and Backspace, edit `value` when the field is focused.
+/// The caret starts at the end of `value`. Desktop character keys, Backspace,
+/// and Delete edit the focused field; Left, Right, Home, and End move the caret
+/// by Unicode scalar values. These keys are ignored during IME preedit.
 pub fn text_field(
     tree: &mut Tree,
     parent: NodeId,
@@ -138,11 +143,8 @@ pub fn text_field(
     if let Some(n) = tree.get_mut(id) {
         n.name = Some(label.into());
         n.text = Some(value.into());
-        n.fill = Some(Color::FIELD);
-        n.color = Some(Color::INK);
-        n.font_size = BODY_SIZE;
+        n.apply_widget_defaults();
         n.caret = value.chars().count();
-        n.layout.padding = 10.0;
     }
     Ok(id)
 }
@@ -167,6 +169,8 @@ pub fn scroll(
             gap: 0.0,
             column: true,
             justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
         };
     }
     Ok(id)
@@ -197,7 +201,11 @@ pub struct ListIds {
 /// A vertical list of variable-height rows.
 ///
 /// Each row is a [`NodeKind::ListItem`] with a stable scene id. The list node
-/// is [`NodeKind::List`]. Rows are not virtualized.
+/// is [`NodeKind::List`]. Layout lays out and paints only the rows that
+/// intersect the viewport plus [`tekto_tree::LIST_OVERSCAN_PX`]. Rows outside
+/// that window stay in the tree (same ids) but are not children until scrolled
+/// back. A top and bottom spacer keeps the scroll height equal to every row,
+/// so a jump in `scroll_y` stays on the same content.
 ///
 /// When `viewport_height` is finite and the stacked rows are taller than that
 /// viewport, the list is parented under [`scroll`]. A shorter list, or a
@@ -227,6 +235,8 @@ pub fn list(
             gap: LIST_GAP,
             column: true,
             justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
         };
     }
     for row in rows {
@@ -272,6 +282,8 @@ pub fn list_item(
             gap: 0.0,
             column: true,
             justify_center: false,
+            x: f32::NAN,
+            y: f32::NAN,
         };
     }
     ensure_list_scroll(tree, list)?;

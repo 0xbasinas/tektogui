@@ -5,7 +5,9 @@ description: Debug Tekto layout, text, or CPU painting (wrong bounds, clipped or
 
 # Debug render or layout
 
-Pipeline: scene tree → `layout_tree` (Taffy) → `paint_tree` / `CpuRenderer` (tiny-skia + Skrifa outlines) → PNG or softbuffer. Text is Parley with bundled Roboto only (`system_fonts: false`).
+Pipeline: scene tree → `layout_tree` (Taffy) → `paint_tree` / `CpuRenderer` (tiny-skia + Skrifa outlines) → PNG or softbuffer. Text is Parley with bundled Roboto by default (`system_fonts: false`). An app may opt in to one supplied fallback font or collection for glyphs Roboto lacks (see step 3).
+
+The optional `gpu` feature swaps the desktop window to `GpuRenderer` (wgpu + Vello). It uses the same `paint_tree` calls, then reads the texture back for softbuffer. Official headless PNGs (`render_tree_png`) stay on the CPU. If GPU init fails, or a readback fails while the surface is still live, the window falls back to CPU and says so on stderr. A lost or outdated surface (`classify_present_failure`) skips present. On Android the same code compiles with `notes-android` feature `gpu`, but the painter stays on CPU unless `TEKTO_ANDROID_GPU=1` (drivers were not proven here). Check desktop GPU with `cargo test -p tekto-render --features gpu --lib gpu_paints` or `cargo run -p notes --features gpu`. The lost-surface classifier is `cargo test -p tekto-render --lib present_failure`. Do not turn `gpu` on for default tests.
 
 ## Where to look
 
@@ -27,7 +29,11 @@ cargo run -p tekto-cli -- dev --headless --out /tmp/tekto-debug.png
 TEKTO_SHOT_DIR=/tmp/tekto-shots cargo test -p tekto --test headless_snapshot -- --nocapture
 ```
 
-3. If text is missing, first run `cargo test -p tekto-text`. Confirm the font file is `crates/tekto-text/fonts/Roboto-Regular.ttf`. Do not re-enable Parley's `system` / fontconfig feature.
+3. If text is missing, first run `cargo test -p tekto-text`. Confirm the font file is `crates/tekto-text/fonts/Roboto-Regular.ttf`. Do not re-enable Parley's `system` / fontconfig feature; system fonts stay undiscovered.
+   - Missing glyphs (boxes, e.g. Japanese) are expected with the default: Roboto is the only font, so default output is deterministic.
+   - Opt-in, native only: call `tekto::set_fallback_font(bytes)` in Rust before the first text engine, layout, or paint, or set `TEKTO_FALLBACK_FONT=/path/to/font` before starting a native Rust or native TSX process. The Rust call wins if made first. Roboto stays first; the supplied font only fills missing glyphs. Config is process-wide and frozen on first use. Invalid bytes or a late call return an error; a bad env file stops startup on first engine creation.
+   - Browser WASM TSX has no JavaScript entry point to supply font bytes yet, so it cannot opt in and keeps Roboto only. That host wiring is still missing.
+   - Do not commit or copy a font into the repo. To test locally, run `TEKTO_TEST_CJK_FONT=/path/to/font cargo test -p tekto --test fallback_font` (skips when unset); see `docs/architecture.md`.
 4. If only the live window is blank but the PNG is fine, look at resize/scale-factor and the softbuffer present path in `desktop.rs`. On this box, use `DISPLAY=:99` (Xvfb), never `:1` or `:2`. A grab of the Xvfb *root* may be black if no window manager is running; trust the headless PNG or `GET /screenshot`.
 5. Compile errors in font/glyph code: keep `skrifa = "0.44"` (not a newer workspace pin).
 

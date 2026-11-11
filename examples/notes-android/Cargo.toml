@@ -23,6 +23,10 @@ default = []
 # bundle over adb forward. Off by default: compiling rquickjs for two
 # Android ABIs is slow, and nightly PR-less Android CI stays lean.
 quickjs = ["tekto/quickjs"]
+# Optional wgpu / Vello paint. Off by default. Even with this feature,
+# the window stays on the CPU renderer unless TEKTO_ANDROID_GPU=1.
+# Drivers were not proven in this repo (no device GPU, no emulator).
+gpu = ["tekto/gpu"]
 
 [target.'cfg(target_os = "android")'.dependencies]
 tekto = { path = "../../crates/tekto", default-features = false, features = ["cpu", "desktop"] }
@@ -36,6 +40,9 @@ package = "com.tektogui.notes"
 apk_name = "notes"
 build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
 include_cplusplus_shared = true
+# Native EditText overlay (com.tektogui.ime.FieldOverlay). cargo-apk2 compiles
+# this into the APK. Without it the Android window falls back to key events.
+java_sources = "java"
 
 [package.metadata.android.sdk]
 min_sdk_version = 24
@@ -46,6 +53,12 @@ target_sdk_version = 30
 [[package.metadata.android.uses_permission]]
 name = "android.permission.INTERNET"
 
+# Required so `Notifications::show` can request POST_NOTIFICATIONS on API 33+
+# once target_sdk_version is 33 or higher. On this APK the target is 30, so
+# the permission is granted at install. See the add-native-feature skill.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.POST_NOTIFICATIONS"
+
 [package.metadata.android.application]
 label = "Notes"
 debuggable = true
@@ -55,6 +68,7 @@ theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
 name = "android.app.NativeActivity"
 exported = true
 config_changes = "orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density"
+window_soft_input_mode = "adjustResize"
 launch_mode = "singleTask"
 
 # cargo-apk2 only fills this if the entry already exists; NativeActivity

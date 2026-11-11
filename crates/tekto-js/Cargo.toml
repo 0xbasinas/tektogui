@@ -13,16 +13,16 @@ default = []
 # QuickJS-ng via rquickjs (both MIT). Off by default: compiling the engine is slow.
 # Do not enable this on PR CI.
 quickjs = ["dep:rquickjs"]
+# Global shortcuts in tekto-native (Linux X11, Windows RegisterHotKey). Off by default.
+shortcuts = ["tekto-native/shortcuts"]
 
 [dependencies]
 tekto-tree = { workspace = true }
 tekto-native = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
-rquickjs = { version = "0.14", optional = true, default-features = true }
-
-[dev-dependencies]
 serde_json = { workspace = true }
+rquickjs = { version = "0.14", optional = true, default-features = true }
 
 # rquickjs-sys 0.14 ships no Android bindgen files. Enable bindgen only
 # when targeting Android so desktop `--features quickjs` stays off this path.

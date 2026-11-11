@@ -26,7 +26,7 @@ Short, command-accurate how-tos live in `.agents/skills/<slug>/SKILL.md`. The sa
 | [write-headless-test](.agents/skills/write-headless-test/SKILL.md) | Snapshot and tree asserts without a window |
 | [debug-render-or-layout](.agents/skills/debug-render-or-layout/SKILL.md) | Wrong bounds, missing text, blank PNG or window |
 | [android-build-and-run](.agents/skills/android-build-and-run/SKILL.md) | Package Notes with cargo-apk2, run on AVD beddcode30, `adb forward` + `tekto tree` |
-| [web-build](.agents/skills/web-build/SKILL.md) | WASM / web target — not built yet; keep abstractions ready |
+| [web-build](.agents/skills/web-build/SKILL.md) | WASM core (`tekto-wasm`), HostOp glue, and CPU canvas blit |
 | [add-mcp-tool](.agents/skills/add-mcp-tool/SKILL.md) | New dev-server route, MCP tool, or CLI inspect command |
 | [release-and-ci](.agents/skills/release-and-ci/SKILL.md) | PRs into `nightly`, merge to `main`, light CI rules |
 | [pick-up-an-issue](.agents/skills/pick-up-an-issue/SKILL.md) | Start from a GitHub issue and open a small PR |
@@ -42,6 +42,7 @@ Windows runtime steps and the report template are in [docs/windows-handoff.md](d
 - Commit as `0xbasinas <241305723+0xbasinas@users.noreply.github.com>` when committing in this project.
 - Do not print secrets. Keep GitHub Actions minutes low (Linux checks on PRs; Windows and Android only on `nightly` or a manual run).
 - Default `cargo test` is the `dev` profile. Use `--profile dev-fast` for a slightly faster local window, `--release` for a small binary. Default features stay lean (`cpu` + `desktop` only). See [docs/dev-builds.md](docs/dev-builds.md).
+- GitHub Actions: Linux on every PR. Windows and Android on `nightly` or a manual run with `full=true`. WASM and QuickJS checks, including retained owner tests in required esbuild mode and a CLI QuickJS compile check, on `nightly` or any manual run. Do not put them on PR CI.
 
 ## Code rules
 
@@ -49,7 +50,7 @@ Windows runtime steps and the report template are in [docs/windows-handoff.md](d
 - One crate does one job. Put new code in the crate that already owns that job.
 - Public APIs should be small and easy to read.
 - Default features must stay lean. Optional, heavy work (QuickJS, wgpu / Vello, `a11y-os` / accesskit_winit) goes behind feature flags and is off by default.
-- Only MIT, Apache-2.0, BSD, or zlib dependencies. If you add a crate, write the license in the PR.
+- New direct dependencies: only MIT, Apache-2.0, BSD, or zlib. If you add a crate, write the license in the PR. Do not add GPL or LGPL. The existing text stack already has Unicode License v3 transitives (ICU, `zerovec`, `unicode-ident`). Windows clipboard uses Win32 directly; review the complete target-specific dependency graph when adding dependencies.
 - Do not invent a new DSL. TypeScript and Rust are enough.
 - Do not put HTML, CSS, or DOM types in the public app API. The web target paints our tree; apps never see the DOM.
 - Every interactive widget needs a stable node id and an AccessKit role and name. The AccessKit tree *is* the agent tree. Do not build a second parallel tree.
@@ -66,7 +67,7 @@ Windows runtime steps and the report template are in [docs/windows-handoff.md](d
 
 `tekto-js` is the `HostOp` protocol. Desktop embeds QuickJS-ng behind `--features quickjs` (off by default, not on PR CI). Web uses the browser engine and calls the same ops on a WASM module.
 
-`tekto-native` is the plugin API for files, dialogs, clipboard, notifications, tray, and global shortcuts. Fill in one platform at a time; stubs should return a clear error.
+`tekto-native` is the plugin API for files, dialogs, clipboard, notifications, tray, and global shortcuts. Fill in one platform at a time; stubs should return a clear error. Android text clipboard uses `ClipboardManager` (same `get_text` / `set_text`). A background read on API 29+ is `Unavailable`. Android app-private text and byte reads and writes use relative paths under `Context.getFilesDir()`; dialogs and Storage Access Framework / shared-document access remain unsupported. A device check is still open. The tray is the optional `tray` feature (off by default): StatusNotifierItem on Linux, `Shell_NotifyIconW` on Windows. Linux and Windows global shortcuts are the optional `shortcuts` feature (X11 grab via `x11rb` on Linux, `RegisterHotKey` on Windows, off by default). A live Windows hotkey check is still open.
 
 ## How to check a change
 

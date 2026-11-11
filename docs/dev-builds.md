@@ -23,10 +23,12 @@ It does include, on purpose:
 
 Off by default (opt in only when you need them):
 
-- `gpu` — reserved; do not add wgpu or Vello to the default graph
+- `gpu` — Vello 0.10 and wgpu 29.0.4 (both MIT OR Apache-2.0), plus `pollster` 0.4 and `png` 0.18 (same license). Desktop wgpu is Vulkan, GLES, and Metal only (no DX12). The same native backends compile for Android. The wasm `tekto-wasm` feature `gpu` switches wgpu to its WebGPU backend and adds `wasm-bindgen` 0.2.130, `wasm-bindgen-futures` 0.4.80, and `web-sys` 0.3.107 (MIT OR Apache-2.0). Off by default. `cargo run -p notes --features gpu` paints the window on the GPU. `cargo test -p tekto --features gpu --lib gpu_notes` paints the Notes tree when an adapter exists (llvmpipe counts). On Android the default APK stays CPU-only. `notes-android` feature `gpu` only tries the GPU when `TEKTO_ANDROID_GPU=1`, then falls back to CPU if the device cannot be created. Do not enable `gpu` on default tests or PR CI. The web host falls back to the CPU canvas when the flag is off or WebGPU is missing.
 - `js` — the `HostOp` protocol only (no engine)
 - `quickjs` — embeds QuickJS-ng via `rquickjs` (both MIT). Slow to compile. Do not enable on PR CI. Local check: `cargo test -p tekto-js --features quickjs`. The CLI flag is the same: `cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx`. Hot reload also needs the MIT `esbuild` binary on `PATH` (not a Rust dependency, not on PR CI).
 - `a11y-os` — `accesskit_winit`, which pulls zbus / AT-SPI on Linux
+- `tray` — system tray inside `tekto-native` (no extra crate). Linux uses StatusNotifierItem. Windows uses `Shell_NotifyIconW` and `TrackPopupMenu`. Off by default. `cargo test -p tekto-native --features tray`. Windows is compile-only here: `cargo check -p tekto-native --target x86_64-pc-windows-gnu --features tray`. Do not enable it on default tests or PR CI.
+- `shortcuts` — global shortcuts inside `tekto-native`. Off by default. Linux is an X11 key grab (`x11rb` 0.13.2, MIT OR Apache-2.0, default features off). Windows is `RegisterHotKey` (no extra crate). `cargo test -p tekto-native --features shortcuts`. Windows compile-check: `cargo check -p tekto-native --target x86_64-pc-windows-gnu --features shortcuts` (no linker, no Windows runtime). Do not enable it on default tests or PR CI. Wayland-only sessions, a denied grab, and a reserved or taken Windows hotkey return `Unavailable`. See `docs/architecture.md`.
 
 The `tekto` crate still Android-checks with `--no-default-features --features cpu` so the desktop/winit shell is not in that graph. The Notes APK (`examples/notes-android`) enables `cpu` + `desktop` only for `target_os = "android"` and is packaged with `cargo apk2` / `tekto build --target android`. The default APK does not enable `quickjs`; `tekto dev --js --android` (or `cargo apk2 build -p notes-android -F quickjs`) embeds QuickJS-ng so a TSX bundle can be posted over `adb forward`. Do not enable `quickjs` on the nightly Android CI check, and do not add APK packaging or an emulator to PR CI.
 
@@ -34,7 +36,7 @@ Nothing unexpected showed up in the default graph that we should gate or drop in
 
 ## CI caches and times
 
-Linux `fmt` + `clippy -D warnings` + `cargo test --workspace` runs on every PR and every push. Windows and Android compile jobs run only on `push` to `nightly`, or on `workflow_dispatch` with `full=true`. Swatinem/rust-cache and concurrency cancel are on.
+Linux `fmt` + `clippy -D warnings` + `cargo test --workspace --all-targets` runs on every PR and every push. That one test command is what runs the record/replay integration test and the headless Notes PNG compare. Windows and Android compile jobs run only on `push` to `nightly`, or on `workflow_dispatch` with `full=true`. The WASM and QuickJS job runs on `push` to `nightly` or any `workflow_dispatch`, not on PR CI. It builds the WASM core, checks `tekto` with `--no-default-features --features cpu,js`, runs the required Node WASM and `tekto-js` QuickJS tests, verifies the existing owner tests are discovered and runs all `tekto` QuickJS owner tests, and compile-checks `tekto-cli` with QuickJS. Both QuickJS test steps set `TEKTO_REQUIRE_ESBUILD=1`, so esbuild-dependent owner and example regressions fail instead of skipping when esbuild is missing. Swatinem/rust-cache and concurrency cancel are on. The added owner and CLI steps have not yet been timed in CI.
 
 Times from GitHub-hosted Linux (UTC, job "Linux check", step "Test (includes headless snapshot)"):
 
@@ -85,9 +87,16 @@ Probe edits were reverted. They are not in the tree.
 ### Why nothing was split or gated
 
 - JS is already behind `tekto`'s `js` / `quickjs` features and is not in `cargo check -p notes`.
-- `gpu` is an empty feature. wgpu and Vello are not dependencies.
+- `gpu` now depends on wgpu and Vello, but only when that feature is on. A default Notes check still does not build them.
 - `a11y-os` (and `accesskit_winit`) stays off. In-process `accesskit` stays, on purpose.
 - A one-line Notes or widget edit is well under a second. Gating widgets, or making the example depend on leaf crates instead of `tekto`, would change the default API (`notes_tree`, `window`, `button`) for a gain measured in tens of milliseconds.
 - Editing the text or platform crate still does not rebuild the heavy third-party graph; those crates are small wrappers. Their compile cost shows up on a cold check, which feature flags cannot remove from an app that windows and draws text.
 
 Rust hot-patch options (dylib, Cranelift, Subsecond) are in [rust-hot-reload.md](rust-hot-reload.md) (issue #29). None is adopted yet.
+
+## Several worktrees at once
+
+Do not share one `CARGO_TARGET_DIR` for full builds and tests across worktrees. Integration tests run the unhashed `target/debug/tekto` binary. A build in another worktree can overwrite it while a test is using it, and the test then sees the wrong binary. Independent reviewers hit this.
+
+- Give each worktree its own target: `export CARGO_TARGET_DIR=$PWD/target` (and `CARGO_BUILD_JOBS=2` on a busy box).
+- Share only the Cargo download cache (`~/.cargo/registry`, the default). That is safe.
