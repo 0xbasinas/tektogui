@@ -28,7 +28,7 @@ function pageHtml() {
 <pre id="log"></pre>
 <script type="module">
 import { connectWasm } from "./src/index.js";
-import { paintCanvas } from "./src/canvas.js";
+import { paintCanvas, attachCanvasInput } from "./src/canvas.js";
 import { applyUiPatch } from "./src/patch.js";
 import { mountApp } from "./app.js";
 
@@ -44,6 +44,7 @@ async function show() {
 }
 
 await show();
+attachCanvasInput(host, canvas);
 
 const events = new EventSource("/events");
 events.onmessage = async (ev) => {

@@ -15,7 +15,7 @@
 <script type="module">
 import { mount } from "../jsx-runtime/src/index.js";
 import { connectWasm } from "./src/index.js";
-import { paintCanvas, resizeCanvas } from "./src/canvas.js";
+import { paintCanvas, resizeCanvas, attachCanvasInput } from "./src/canvas.js";
 import { Notes } from "../jsx-runtime/notes-app.js";
 
 const canvas = document.querySelector("#view");
@@ -30,6 +30,7 @@ try {
   host.reset();
   mount(Notes(), host);
   await paintCanvas(host, canvas, 640, 400);
+  attachCanvasInput(host, canvas);
   note(`painted ${canvas.width}×${canvas.height}`);
   document.querySelector("#desk").onclick = async () => {
     await resizeCanvas(host, canvas, 640, 400);
