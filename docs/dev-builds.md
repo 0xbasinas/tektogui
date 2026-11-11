@@ -99,5 +99,4 @@ Rust hot-patch options (dylib, Cranelift, Subsecond) are in [rust-hot-reload.md]
 Do not share one `CARGO_TARGET_DIR` for full builds and tests across worktrees. Integration tests run the unhashed `target/debug/tekto` binary. A build in another worktree can overwrite it while a test is using it, and the test then sees the wrong binary. Independent reviewers hit this.
 
 - Give each worktree its own target: `export CARGO_TARGET_DIR=$PWD/target` (and `CARGO_BUILD_JOBS=2` on a busy box).
-- Or run the whole build and test section of each worktree one at a time (serialize it, for example with `flock`).
 - Share only the Cargo download cache (`~/.cargo/registry`, the default). That is safe.

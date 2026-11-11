@@ -60,7 +60,15 @@ cargo run -- --headless --out hello.png
 
 That writes a compiling Rust app, a `src/app.tsx` sketch, and a README. The app depends on this checkout by path, so you only need a Rust toolchain.
 
-`npm create tektogui hello` (or `npx create-tektogui hello`) is not a standalone installer. It is a thin wrapper that needs a tektogui checkout: it exits with an error if `crates/tekto-cli` is not next to the package, and it runs `cargo run -p tekto-cli -- new <name>` with `TEKTO_ROOT` set to that checkout. That `cargo run` uses your current folder, so run it from inside the checkout. The name must be one directory name, not a path.
+`create-tektogui` is not a standalone installer. It is a thin wrapper that finds the checkout from where the package itself is installed, not from your current folder. It exits with an error if `crates/tekto-cli` is not next to the package. It then runs `cargo run -p tekto-cli -- new <name>` with `TEKTO_ROOT` set to that checkout, in your current folder, so that folder must be inside the checkout. The name must be one directory name, not a path.
+
+Supported: run the script from the checkout, with cwd inside it:
+
+```bash
+node packages/create-tektogui/src/index.js hello
+```
+
+Not supported: `npm create tektogui` or `npx create-tektogui` from the registry. The package ships only `src`, so a registry copy (for example in the npm cache) has no checkout next to it, even if your cwd is inside one. This was not tried against a registry, and the package is not shown to be published.
 
 To scaffold somewhere else, build the CLI once and call it with `TEKTO_ROOT`:
 
