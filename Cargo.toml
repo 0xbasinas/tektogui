@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "crates/tekto-tree",
+    "crates/tekto-image",
+    "crates/tekto-test",
     "crates/tekto-layout",
     "crates/tekto-text",
     "crates/tekto-render",
@@ -30,6 +32,8 @@ authors = ["0xbasinas <241305723+0xbasinas@users.noreply.github.com>"]
 
 [workspace.dependencies]
 tekto-tree = { path = "crates/tekto-tree", version = "0.1.0" }
+tekto-image = { path = "crates/tekto-image", version = "0.1.0" }
+tekto-test = { path = "crates/tekto-test", version = "0.1.0" }
 tekto-layout = { path = "crates/tekto-layout", version = "0.1.0" }
 tekto-text = { path = "crates/tekto-text", version = "0.1.0" }
 tekto-render = { path = "crates/tekto-render", version = "0.1.0" }
@@ -44,6 +48,7 @@ tekto-wasm = { path = "crates/tekto-wasm", version = "0.1.0" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+unicode-segmentation = "1.13"
 thiserror = "2.0"
 taffy = "0.15"
 parley = { version = "0.12", default-features = false, features = ["std"] }

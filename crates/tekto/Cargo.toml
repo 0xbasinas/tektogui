@@ -14,6 +14,7 @@ cpu = ["tekto-render/cpu", "tekto-platform/cpu"]
 desktop = ["tekto-platform/desktop", "cpu"]
 gpu = ["tekto-render/gpu", "tekto-platform/gpu"]
 a11y-os = ["tekto-platform/a11y-os"]
+image-png = ["tekto-tree/image-png"]
 js = ["dep:tekto-js"]
 # Embeds QuickJS-ng. Off by default; do not enable on PR CI.
 quickjs = ["js", "tekto-js/quickjs"]

@@ -16,6 +16,7 @@ gpu = ["dep:vello", "dep:wgpu", "dep:pollster", "dep:png", "dep:tekto-text", "de
 
 [dependencies]
 tekto-tree = { workspace = true }
+tekto-image = { workspace = true }
 thiserror = { workspace = true }
 tiny-skia = { workspace = true, optional = true }
 skrifa = { workspace = true, optional = true }

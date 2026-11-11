@@ -70,7 +70,52 @@ pub fn layout_tree_with_text(
         },
     );
     write_bounds(&taffy, tree, root, 0.0, 0.0, &map);
+    if let Some(overlay) = tree.overlay() {
+        let mut overlay_map = Vec::new();
+        let overlay_root = build(&mut taffy, tree, overlay.node, &mut overlay_map);
+        let _ = taffy.compute_layout_with_measure(
+            overlay_root,
+            Size {
+                width: AvailableSpace::Definite(viewport_width),
+                height: AvailableSpace::Definite(viewport_height),
+            },
+            |inputs, _tid, ctx, style| {
+                compute_leaf_layout(
+                    inputs,
+                    style,
+                    |_, _| 0.0,
+                    |known, avail| {
+                        ctx.copied()
+                            .map_or(Size::ZERO, |id| measure_text(tree, text, id, known, avail))
+                    },
+                )
+            },
+        );
+        let anchor = tree
+            .get(overlay.anchor)
+            .map(|n| n.bounds)
+            .unwrap_or_default();
+        let size = taffy.layout(overlay_root).expect("overlay layout").size;
+        let (x, y) = match overlay.side {
+            tekto_tree::OverlaySide::Above => (anchor.x, anchor.y - size.height),
+            tekto_tree::OverlaySide::Below => (anchor.x, anchor.y + anchor.height),
+            tekto_tree::OverlaySide::Left => (anchor.x - size.width, anchor.y),
+            tekto_tree::OverlaySide::Right => (anchor.x + anchor.width, anchor.y),
+            tekto_tree::OverlaySide::Center => (
+                (viewport_width - size.width) / 2.0,
+                (viewport_height - size.height) / 2.0,
+            ),
+        };
+        let (x, y) = overlay.position.map_or((x, y), |(x, y)| {
+            (
+                x.clamp(0.0, (viewport_width - size.width).max(0.0)),
+                y.clamp(0.0, (viewport_height - size.height).max(0.0)),
+            )
+        });
+        write_bounds(&taffy, tree, overlay.node, x, y, &overlay_map);
+    }
     place_carets(tree, text);
+    place_text_chars(tree, text);
 }
 
 /// Resolve a pointer position to a field's character index using painted text layout.
@@ -95,10 +140,88 @@ pub fn field_caret_at(tree: &Tree, id: NodeId, x: f32, y: f32) -> Option<usize> 
         let byte = tekto_text::cursor_index(
             &layout,
             x - node.bounds.x - inset,
-            y - node.bounds.y - inset,
+            y - node.bounds.y - inset
+                + if node.multiline {
+                    node.text_scroll_y
+                } else {
+                    0.0
+                },
         );
         Some(value[..byte].chars().count())
     })
+}
+
+/// Move a multiline field selection by visual lines using its current layout.
+pub fn field_move_lines(tree: &mut Tree, id: NodeId, delta: isize, extend: bool) -> bool {
+    let Some(node) = tree.get(id) else {
+        return false;
+    };
+    if node.kind != NodeKind::TextField
+        || !node.multiline
+        || node.disabled
+        || !node.preedit.is_empty()
+        || tree.focus != Some(id)
+    {
+        return false;
+    }
+    let value = node.text.clone().unwrap_or_default();
+    let width = (node.bounds.width - 2.0 * node.layout.padding).max(0.0);
+    let font_size = node.font_size;
+    let anchor = node.selection_anchor.unwrap_or(node.caret);
+    let caret = node.caret;
+    let preferred_x = node.vertical_goal_x;
+    let (anchor, focus, preferred_x) = TEXT.with(|engine| {
+        let mut engine = engine.borrow_mut();
+        let layout = engine.layout(&value, font_size, [0, 0, 0, 255], Some(width));
+        let mut selection = tekto_text::TextSelection::new(&layout, &value, anchor, caret);
+        let x = preferred_x.unwrap_or_else(|| selection.caret_rect(&layout).0);
+        selection.move_lines_at_x(&layout, delta, extend, x);
+        let (anchor, focus) = selection.indices(&value);
+        (anchor, focus, x)
+    });
+    if tree.set_field_selection(id, anchor, focus).is_err() {
+        return false;
+    }
+    if let Some(node) = tree.get_mut(id) {
+        node.vertical_goal_x = Some(preferred_x);
+    }
+    true
+}
+
+/// Width of `prefix` for caret and selection offsets. Parley reports a
+/// non-zero width for an empty string, which pushed a caret at the start of
+/// the text into the first letter.
+fn measure_prefix(text: &mut TextEngine, prefix: &str, size: f32, max_w: Option<f32>) -> f32 {
+    if prefix.is_empty() {
+        0.0
+    } else {
+        text.measure(prefix, size, max_w).0
+    }
+}
+
+/// Store one box per grapheme for every text field so accessibility can
+/// report per-line and per-character geometry.
+fn place_text_chars(tree: &mut Tree, text: &mut TextEngine) {
+    let ids: Vec<NodeId> = tree
+        .ids()
+        .filter(|id| tree.get(*id).is_some_and(|n| n.kind == NodeKind::TextField))
+        .collect();
+    for id in ids {
+        let Some(node) = tree.get(id) else {
+            continue;
+        };
+        let value = node.composed_text();
+        let inner = node.bounds.width - 2.0 * node.layout.padding;
+        let max_w = (inner > 0.0).then_some(inner);
+        let shaped = text.layout(&value, node.font_size, [0, 0, 0, 255], max_w);
+        let chars = tekto_text::grapheme_rects(&shaped, &value)
+            .into_iter()
+            .map(|(x, y, w, h)| tekto_tree::Rect::new(x, y, w, h))
+            .collect();
+        if let Some(node) = tree.get_mut(id) {
+            node.text_chars = chars;
+        }
+    }
 }
 
 fn place_carets(tree: &mut Tree, text: &mut TextEngine) {
@@ -125,10 +248,103 @@ fn place_carets(tree: &mut Tree, text: &mut TextEngine) {
             }
         };
         let size = node.font_size;
-        let (w, _) = text.measure(&prefix, size, max_w);
+        if node.multiline {
+            let shaped = text.layout(&value, size, [0, 0, 0, 255], max_w);
+            let anchor = if node.preedit.is_empty() {
+                node.selection_anchor.unwrap_or(caret)
+            } else {
+                caret
+            };
+            let selection = tekto_text::TextSelection::new(&shaped, &value, anchor, caret);
+            let (x, y, _, height) = selection.caret_rect(&shaped);
+            let viewport = (node.bounds.height - 2.0 * node.layout.padding).max(0.0);
+            let mut scroll = node.text_scroll_y;
+            if y < scroll {
+                scroll = y;
+            }
+            if y + height > scroll + viewport {
+                scroll = y + height - viewport;
+            }
+            scroll = scroll.clamp(0.0, (shaped.height() - viewport).max(0.0));
+            let rects = selection
+                .rectangles(&shaped)
+                .into_iter()
+                .map(|(x, y, w, h)| tekto_tree::Rect::new(x, y, w, h))
+                .collect();
+            let preedit_rects = if node.preedit.is_empty() {
+                Vec::new()
+            } else {
+                let start = node.selection().map_or(node.caret, |(start, _)| start);
+                let end = start + node.preedit.chars().count();
+                tekto_text::TextSelection::new(&shaped, &value, start, end)
+                    .rectangles(&shaped)
+                    .into_iter()
+                    .map(|(x, y, w, h)| tekto_tree::Rect::new(x, y, w, h))
+                    .collect()
+            };
+            let preedit_selection_rects =
+                node.preedit_selection()
+                    .map_or_else(Vec::new, |(start, end)| {
+                        tekto_text::TextSelection::new(&shaped, &value, start, end)
+                            .rectangles(&shaped)
+                            .into_iter()
+                            .map(|(x, y, w, h)| tekto_tree::Rect::new(x, y, w, h))
+                            .collect()
+                    });
+            if let Some(node) = tree.get_mut(id) {
+                node.preedit_selection_rects = preedit_selection_rects;
+                node.caret_x = x;
+                node.caret_y = y;
+                node.caret_height = height;
+                node.selection_rects = rects;
+                node.preedit_rects = preedit_rects;
+                node.text_scroll_y = scroll;
+                node.selection_x = None;
+                node.preedit_x = None;
+            }
+            continue;
+        }
+        let w = measure_prefix(text, &prefix, size, max_w);
+        let selection_x = if node.preedit.is_empty() {
+            node.selection().map(|(start, end)| {
+                let committed = node.text.as_deref().unwrap_or("");
+                let left: String = committed.chars().take(start).collect();
+                let right: String = committed.chars().take(end).collect();
+                (
+                    measure_prefix(text, &left, size, max_w),
+                    measure_prefix(text, &right, size, max_w),
+                )
+            })
+        } else {
+            None
+        };
+        let preedit_x = if node.preedit.is_empty() {
+            None
+        } else {
+            let start = node.selection().map_or(node.caret, |(start, _)| start);
+            let end = start + node.preedit.chars().count();
+            let left: String = value.chars().take(start).collect();
+            let right: String = value.chars().take(end).collect();
+            Some((
+                measure_prefix(text, &left, size, max_w),
+                measure_prefix(text, &right, size, max_w),
+            ))
+        };
+        let preedit_selection_rects =
+            node.preedit_selection()
+                .map_or_else(Vec::new, |(start, end)| {
+                    let shaped = text.layout(&value, size, [0, 0, 0, 255], max_w);
+                    tekto_text::TextSelection::new(&shaped, &value, start, end)
+                        .rectangles(&shaped)
+                        .into_iter()
+                        .map(|(x, y, w, h)| tekto_tree::Rect::new(x, y, w, h))
+                        .collect()
+                });
         if let Some(node) = tree.get_mut(id) {
-            node.caret = caret;
+            node.preedit_selection_rects = preedit_selection_rects;
             node.caret_x = w;
+            node.selection_x = selection_x;
+            node.preedit_x = preedit_x;
         }
     }
 }
@@ -147,7 +363,12 @@ fn measure_text(
         node.kind,
         NodeKind::Text
             | NodeKind::Button
+            | NodeKind::MenuItem
+            | NodeKind::Select
             | NodeKind::Checkbox
+            | NodeKind::Radio
+            | NodeKind::Tab
+            | NodeKind::Switch
             | NodeKind::TextField
             | NodeKind::ListItem
     ) {
@@ -175,8 +396,10 @@ fn measure_text(
     let w = if content.is_empty() { 0.0 } else { w };
     Size {
         width: known.width.unwrap_or(
-            w + if node.kind == NodeKind::Checkbox {
+            w + if matches!(node.kind, NodeKind::Checkbox | NodeKind::Radio) {
                 28.0
+            } else if node.kind == NodeKind::Switch {
+                42.0
             } else {
                 0.0
             },
@@ -264,14 +487,30 @@ fn build(
 ) -> taffy::NodeId {
     let is_root = tree.root() == Some(id);
     let style = style_for(tree, id, is_root);
-    let child_ids: Vec<NodeId> = tree.get(id).map(|n| n.children.clone()).unwrap_or_default();
+    let child_ids: Vec<NodeId> = tree
+        .get(id)
+        .map(|n| {
+            n.children
+                .iter()
+                .filter(|_| n.kind != NodeKind::Select)
+                .copied()
+                .filter(|child| tree.is_visible(*child))
+                .filter(|child| !(is_root && tree.overlay().is_some_and(|o| o.node == *child)))
+                .collect()
+        })
+        .unwrap_or_default();
     let tid = if child_ids.is_empty() {
         let is_text = tree.get(id).is_some_and(|n| {
             matches!(
                 n.kind,
                 NodeKind::Text
                     | NodeKind::Button
+                    | NodeKind::MenuItem
+                    | NodeKind::Select
                     | NodeKind::Checkbox
+                    | NodeKind::Radio
+                    | NodeKind::Tab
+                    | NodeKind::Switch
                     | NodeKind::TextField
                     | NodeKind::ListItem
             )
@@ -595,7 +834,12 @@ fn border_height(
         node.kind,
         NodeKind::Text
             | NodeKind::Button
+            | NodeKind::MenuItem
+            | NodeKind::Select
             | NodeKind::Checkbox
+            | NodeKind::Radio
+            | NodeKind::Tab
+            | NodeKind::Switch
             | NodeKind::TextField
             | NodeKind::ListItem
     ) {

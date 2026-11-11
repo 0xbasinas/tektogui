@@ -13,3 +13,4 @@ tekto-tree = { workspace = true }
 accesskit = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+unicode-segmentation = { workspace = true }

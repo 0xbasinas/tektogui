@@ -141,6 +141,47 @@ impl GpuRenderer {
 }
 
 impl Renderer for GpuRenderer {
+    fn draw_image(
+        &mut self,
+        image: &tekto_image::Image,
+        bounds: Rect,
+        fit: tekto_image::Fit,
+        opacity: f32,
+    ) {
+        let Some((x, y, width, height)) = tekto_image::fit(image, bounds.width, bounds.height, fit)
+        else {
+            return;
+        };
+        if !bounds.x.is_finite() || !bounds.y.is_finite() || !opacity.is_finite() {
+            return;
+        }
+        let data = vello::peniko::ImageData {
+            data: image.pixels().to_vec().into(),
+            format: vello::peniko::ImageFormat::Rgba8,
+            alpha_type: vello::peniko::ImageAlphaType::Alpha,
+            width: image.width(),
+            height: image.height(),
+        };
+        self.push_clip(bounds);
+        {
+            let mut inner = self.inner.borrow_mut();
+            let s = inner.scale;
+            let transform = Affine::new([
+                f64::from(width / image.width() as f32 * s),
+                0.0,
+                0.0,
+                f64::from(height / image.height() as f32 * s),
+                f64::from((bounds.x + x) * s),
+                f64::from((bounds.y + y) * s),
+            ]);
+            let brush = vello::peniko::ImageBrush::new(data)
+                .with_quality(vello::peniko::ImageQuality::Low)
+                .multiply_alpha(opacity.clamp(0.0, 1.0));
+            inner.scene.draw_image(brush.as_ref(), transform);
+            inner.pixels = None;
+        }
+        self.pop_clip();
+    }
     fn width(&self) -> u32 {
         self.inner.borrow().width
     }
@@ -209,13 +250,7 @@ impl Renderer for GpuRenderer {
         inner.pixels = None;
     }
 
-    fn stroke_rrect(
-        &mut self,
-        rect: Rect,
-        radius: f32,
-        width: f32,
-        color: TektoColor,
-    ) {
+    fn stroke_rrect(&mut self, rect: Rect, radius: f32, width: f32, color: TektoColor) {
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
@@ -225,19 +260,20 @@ impl Renderer for GpuRenderer {
         if stroke_width <= 0.0 {
             return;
         }
-        let r = (radius.max(0.0).min(rect.width.min(rect.height) / 2.0) * s) as f64;
-        let inset = (stroke_width / 2.0) as f64;
+        // Logical coordinates, scaled by the transform like `draw_line`.
+        let r = f64::from(radius.max(0.0).min(rect.width.min(rect.height) / 2.0));
+        let inset = f64::from(stroke_width / 2.0);
         let shape = vello::kurbo::RoundedRect::new(
-            (rect.x + stroke_width / 2.0) as f64,
-            (rect.y + stroke_width / 2.0) as f64,
-            (rect.x + rect.width - stroke_width / 2.0) as f64,
-            (rect.y + rect.height - stroke_width / 2.0) as f64,
+            f64::from(rect.x + stroke_width / 2.0),
+            f64::from(rect.y + stroke_width / 2.0),
+            f64::from(rect.x + rect.width - stroke_width / 2.0),
+            f64::from(rect.y + rect.height - stroke_width / 2.0),
             (r - inset).max(0.0),
         );
-        let stroke = vello::kurbo::Stroke::new(stroke_width as f64);
+        let stroke = vello::kurbo::Stroke::new(f64::from(stroke_width));
         inner.scene.stroke(
             &stroke,
-            Affine::IDENTITY,
+            Affine::scale(f64::from(s)),
             to_color(color),
             None,
             &shape,
@@ -245,15 +281,7 @@ impl Renderer for GpuRenderer {
         inner.pixels = None;
     }
 
-    fn draw_line(
-        &mut self,
-        x0: f32,
-        y0: f32,
-        x1: f32,
-        y1: f32,
-        thickness: f32,
-        color: TektoColor,
-    ) {
+    fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, color: TektoColor) {
         let mut inner = self.inner.borrow_mut();
         let s = inner.scale;
         let stroke = vello::kurbo::Stroke::new(thickness.max(0.0) as f64);
@@ -773,5 +801,88 @@ mod tests {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = std::fs::write(&shot, &png);
+    }
+
+    #[cfg(feature = "cpu")]
+    #[test]
+    fn gpu_matches_cpu_per_primitive() {
+        use crate::CpuRenderer;
+        use tekto_image::{Fit, Image};
+        let mut gpu = match GpuRenderer::new(96, 64) {
+            Ok(renderer) => renderer,
+            Err(err) => {
+                eprintln!("gpu adapter unavailable: {err}");
+                return;
+            }
+        };
+        let mut cpu = CpuRenderer::new(96, 64).unwrap();
+        let mut px = Vec::new();
+        for i in 0..16u32 {
+            let on = (i / 4 + i % 4) % 2 == 0;
+            px.extend_from_slice(if on {
+                &[200, 40, 40, 255]
+            } else {
+                &[30, 60, 200, 255]
+            });
+        }
+        let image = Image::new(4, 4, px).unwrap();
+        type Case = (&'static str, fn(&mut dyn Renderer, &Image));
+        let cases: [Case; 8] = [
+            ("fill_rect", |r, _| {
+                r.fill_rect(Rect::new(8.0, 8.0, 40.0, 24.0), Color::BANNER)
+            }),
+            ("fill_rrect", |r, _| {
+                r.fill_rrect(Rect::new(8.0, 8.0, 60.0, 40.0), 8.0, Color::BANNER)
+            }),
+            ("stroke_rrect", |r, _| {
+                r.stroke_rrect(Rect::new(8.0, 8.0, 60.0, 40.0), 6.0, 2.0, Color::INK)
+            }),
+            ("draw_line", |r, _| {
+                r.draw_line(6.0, 6.0, 80.0, 50.0, 3.0, Color::INK)
+            }),
+            ("nested_clip", |r, _| {
+                r.push_clip(Rect::new(4.0, 4.0, 60.0, 40.0));
+                r.push_clip(Rect::new(20.0, 10.0, 70.0, 40.0));
+                r.fill_rect(Rect::new(0.0, 0.0, 96.0, 64.0), Color::BANNER);
+                r.pop_clip();
+                r.pop_clip();
+            }),
+            ("text_max_width", |r, _| {
+                r.draw_text("Milk and eggs", 6.0, 10.0, 14.0, Color::INK, Some(50.0))
+            }),
+            ("image_contain", |r, img| {
+                r.draw_image(img, Rect::new(4.0, 4.0, 60.0, 40.0), Fit::Contain, 1.0)
+            }),
+            ("image_cover_alpha", |r, img| {
+                r.draw_image(img, Rect::new(4.0, 4.0, 60.0, 40.0), Fit::Cover, 0.5)
+            }),
+        ];
+        for (name, draw) in cases
+            .iter()
+            .flat_map(|c| [(c, 1.0_f32), (c, 1.25)])
+            .map(|(c, scale)| ((c.0, c.1, scale), ()))
+            .map(|(t, _)| (t.0, (t.1, t.2)))
+        {
+            let (draw, scale) = draw;
+            cpu.set_scale(scale);
+            gpu.set_scale(scale);
+            cpu.begin_frame(Color::PAGE);
+            gpu.begin_frame(Color::PAGE);
+            draw(&mut cpu, &image);
+            draw(&mut gpu, &image);
+            let (a, b) = (cpu.rgba8().unwrap(), gpu.rgba8().unwrap());
+            let differing = a
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(b.as_chunks::<4>().0.iter())
+                .filter(|(x, y)| x.iter().zip(*y).any(|(p, q)| p.abs_diff(*q) > 48))
+                .count();
+            let total = a.len() / 4;
+            assert!(
+                differing * 100 < total * 3,
+                "{name} at scale {scale}: cpu and gpu differ on {differing} of {total} pixels"
+            );
+        }
     }
 }

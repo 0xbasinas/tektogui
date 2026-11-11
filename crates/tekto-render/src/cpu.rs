@@ -46,6 +46,51 @@ impl CpuRenderer {
 }
 
 impl Renderer for CpuRenderer {
+    fn draw_image(
+        &mut self,
+        image: &tekto_image::Image,
+        bounds: Rect,
+        fit: tekto_image::Fit,
+        opacity: f32,
+    ) {
+        let Some((x, y, width, height)) = tekto_image::fit(image, bounds.width, bounds.height, fit)
+        else {
+            return;
+        };
+        if !bounds.x.is_finite() || !bounds.y.is_finite() || !opacity.is_finite() {
+            return;
+        }
+        let mut pixels = image.pixels().to_vec();
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            let alpha = u16::from(pixel[3]);
+            for channel in &mut pixel[..3] {
+                *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+            }
+        }
+        let Some(size) = tiny_skia::IntSize::from_wh(image.width(), image.height()) else {
+            return;
+        };
+        let Some(pixmap) = Pixmap::from_vec(pixels, size) else {
+            return;
+        };
+        let transform = Transform::from_row(
+            width / image.width() as f32 * self.scale,
+            0.0,
+            0.0,
+            height / image.height() as f32 * self.scale,
+            (bounds.x + x) * self.scale,
+            (bounds.y + y) * self.scale,
+        );
+        self.push_clip(bounds);
+        let mask = self.clip_mask();
+        let paint = tiny_skia::PixmapPaint {
+            opacity: opacity.clamp(0.0, 1.0),
+            ..Default::default()
+        };
+        self.pixmap
+            .draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, mask.as_ref());
+        self.pop_clip();
+    }
     fn width(&self) -> u32 {
         self.pixmap.width()
     }
@@ -111,13 +156,7 @@ impl Renderer for CpuRenderer {
         );
     }
 
-    fn stroke_rrect(
-        &mut self,
-        rect: Rect,
-        radius: f32,
-        width: f32,
-        color: TektoColor,
-    ) {
+    fn stroke_rrect(&mut self, rect: Rect, radius: f32, width: f32, color: TektoColor) {
         // A ring between the outer rounded rect and the inset inner one.
         // Even-odd fill turns the band between them into the border.
         if clip_rect(rect, self.clip_bounds()).is_none() {
@@ -157,15 +196,7 @@ impl Renderer for CpuRenderer {
         );
     }
 
-    fn draw_line(
-        &mut self,
-        x0: f32,
-        y0: f32,
-        x1: f32,
-        y1: f32,
-        thickness: f32,
-        color: TektoColor,
-    ) {
+    fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, color: TektoColor) {
         let thickness = thickness.max(0.0);
         if thickness <= 0.0 {
             return;

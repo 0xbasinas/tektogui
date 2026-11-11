@@ -12,6 +12,38 @@ pub const BANNER_HEIGHT: f32 = 64.0;
 /// Inset for title text inside the banner.
 pub const BANNER_PADDING: f32 = 20.0;
 
+/// Add a sized image with an accessible name, or `None` for decoration.
+pub fn image(
+    tree: &mut Tree,
+    parent: NodeId,
+    pixels: tekto_tree::Image,
+    width: f32,
+    height: f32,
+    fit: tekto_tree::ImageFit,
+    name: Option<&str>,
+) -> Result<NodeId, WidgetError> {
+    if !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+        || name.is_some_and(|name| name.trim().is_empty())
+    {
+        return Err(WidgetError(TreeError {
+            message: "image needs positive dimensions and a non-empty name or decorative state"
+                .into(),
+        }));
+    }
+    let id = tree.add(NodeKind::Image, Some(parent))?;
+    let node = tree.get_mut(id).expect("new image");
+    node.layout.width = width;
+    node.layout.height = height;
+    node.name = name.map(str::to_owned);
+    node.decorative = name.is_none();
+    node.image = Some(pixels);
+    node.image_fit = fit;
+    Ok(id)
+}
+
 pub struct WidgetError(pub TreeError);
 
 impl From<TreeError> for WidgetError {
@@ -128,6 +160,252 @@ pub fn checkbox(
     Ok(id)
 }
 
+/// A labeled on/off switch with an initial checked state.
+pub fn switch(
+    tree: &mut Tree,
+    parent: NodeId,
+    label: &str,
+    checked: bool,
+) -> Result<NodeId, WidgetError> {
+    let id = tree.add(NodeKind::Switch, Some(parent))?;
+    let node = tree.get_mut(id).expect("new switch");
+    node.name = Some(label.into());
+    node.text = Some(label.into());
+    node.checked = checked;
+    node.apply_widget_defaults();
+    Ok(id)
+}
+
+/// A labeled determinate progress bar. Values are clamped to zero through one.
+pub fn progress(
+    tree: &mut Tree,
+    parent: NodeId,
+    label: &str,
+    value: f32,
+) -> Result<NodeId, WidgetError> {
+    if !value.is_finite() {
+        return Err(WidgetError(TreeError {
+            message: "progress must be finite".into(),
+        }));
+    }
+    let id = tree.add(NodeKind::Progress, Some(parent))?;
+    let node = tree.get_mut(id).expect("new progress");
+    node.name = Some(label.into());
+    node.progress = value.clamp(0.0, 1.0);
+    node.apply_widget_defaults();
+    Ok(id)
+}
+
+/// A labeled slider with a normalized value from zero to one.
+pub fn slider(
+    tree: &mut Tree,
+    parent: NodeId,
+    label: &str,
+    value: f32,
+) -> Result<NodeId, WidgetError> {
+    if !value.is_finite() {
+        return Err(WidgetError(TreeError {
+            message: "slider must be finite".into(),
+        }));
+    }
+    let id = tree.add(NodeKind::Slider, Some(parent))?;
+    let node = tree.get_mut(id).expect("new slider");
+    node.name = Some(label.into());
+    node.progress = value.clamp(0.0, 1.0);
+    node.apply_widget_defaults();
+    Ok(id)
+}
+
+/// A named group for mutually exclusive radio options.
+pub fn radio_group(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId, WidgetError> {
+    let id = tree.add(NodeKind::RadioGroup, Some(parent))?;
+    tree.get_mut(id).expect("new radio group").name = Some(label.into());
+    Ok(id)
+}
+
+/// Add an option to a radio group. Selecting it clears its siblings.
+pub fn radio(
+    tree: &mut Tree,
+    group: NodeId,
+    label: &str,
+    checked: bool,
+) -> Result<NodeId, WidgetError> {
+    if tree
+        .get(group)
+        .is_none_or(|node| node.kind != NodeKind::RadioGroup)
+    {
+        return Err(WidgetError(TreeError {
+            message: "radio must belong to a radio group".into(),
+        }));
+    }
+    let id = tree.add(NodeKind::Radio, Some(group))?;
+    let node = tree.get_mut(id).expect("new radio");
+    node.name = Some(label.into());
+    node.text = Some(label.into());
+    node.apply_widget_defaults();
+    if checked {
+        tree.patch(
+            id,
+            tekto_tree::NodePatch {
+                checked: Some(true),
+                ..Default::default()
+            },
+        )?;
+    }
+    Ok(id)
+}
+
+/// A horizontal list of mutually exclusive tabs.
+pub fn tab_list(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId, WidgetError> {
+    let id = tree.add(NodeKind::TabList, Some(parent))?;
+    let node = tree.get_mut(id).expect("new tab list");
+    node.name = Some(label.into());
+    node.layout.column = false;
+    Ok(id)
+}
+
+/// Add a named tab to a tab list.
+pub fn tab(
+    tree: &mut Tree,
+    list: NodeId,
+    label: &str,
+    selected: bool,
+) -> Result<NodeId, WidgetError> {
+    if tree
+        .get(list)
+        .is_none_or(|node| node.kind != NodeKind::TabList)
+    {
+        return Err(WidgetError(TreeError {
+            message: "tab must belong to a tab list".into(),
+        }));
+    }
+    let id = tree.add(NodeKind::Tab, Some(list))?;
+    let node = tree.get_mut(id).expect("new tab");
+    node.name = Some(label.into());
+    node.text = Some(label.into());
+    node.apply_widget_defaults();
+    if selected {
+        tree.patch(
+            id,
+            tekto_tree::NodePatch {
+                checked: Some(true),
+                ..Default::default()
+            },
+        )?;
+    }
+    Ok(id)
+}
+
+/// Add a panel and associate it with a tab. Inactive panels retain their state.
+pub fn tab_panel(
+    tree: &mut Tree,
+    parent: NodeId,
+    tab: NodeId,
+    label: &str,
+) -> Result<NodeId, WidgetError> {
+    let panel = tree.add(NodeKind::TabPanel, Some(parent))?;
+    tree.get_mut(panel).expect("new tab panel").name = Some(label.into());
+    if let Err(error) = tree.bind_tab_panel(tab, panel) {
+        let _ = tree.remove(panel);
+        return Err(WidgetError(error));
+    }
+    Ok(panel)
+}
+
+/// Build a named dialog subtree. Open it with `Tree::open_overlay` and `OverlaySide::Center`.
+pub fn dialog(tree: &mut Tree, label: &str) -> Result<NodeId, WidgetError> {
+    if tree
+        .root()
+        .and_then(|id| tree.get(id))
+        .is_none_or(|n| n.kind != NodeKind::Window)
+    {
+        return Err(WidgetError(TreeError {
+            message: "dialog requires a window root".into(),
+        }));
+    }
+    if label.trim().is_empty() {
+        return Err(WidgetError(TreeError {
+            message: "dialog requires an accessible name".into(),
+        }));
+    }
+    let id = tree.add(NodeKind::Dialog, None)?;
+    let node = tree.get_mut(id).expect("new dialog");
+    node.name = Some(label.into());
+    node.apply_widget_defaults();
+    Ok(id)
+}
+
+/// Build a named popup menu. Open it as an anchored overlay.
+pub fn menu(tree: &mut Tree, label: &str) -> Result<NodeId, WidgetError> {
+    if tree
+        .root()
+        .and_then(|id| tree.get(id))
+        .is_none_or(|n| n.kind != NodeKind::Window)
+        || label.trim().is_empty()
+    {
+        return Err(WidgetError(TreeError {
+            message: "menu requires a window and accessible name".into(),
+        }));
+    }
+    let id = tree.add(NodeKind::Menu, None)?;
+    let node = tree.get_mut(id).expect("new menu");
+    node.name = Some(label.into());
+    node.apply_widget_defaults();
+    Ok(id)
+}
+
+/// Add an actionable item to a popup menu.
+pub fn menu_item(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId, WidgetError> {
+    if tree.get(parent).is_none_or(|n| n.kind != NodeKind::Menu) {
+        return Err(WidgetError(TreeError {
+            message: "menu item requires a menu parent".into(),
+        }));
+    }
+    let id = tree.add(NodeKind::MenuItem, Some(parent))?;
+    let node = tree.get_mut(id).expect("new menu item");
+    node.name = Some(label.into());
+    node.text = Some(label.into());
+    node.apply_widget_defaults();
+    Ok(id)
+}
+
+/// Build a labeled single-select control. Add options with `select_option`.
+pub fn select(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId, WidgetError> {
+    if label.trim().is_empty() {
+        return Err(WidgetError(TreeError {
+            message: "select requires an accessible name".into(),
+        }));
+    }
+    let id = tree.add(NodeKind::Select, Some(parent))?;
+    let node = tree.get_mut(id).expect("new select");
+    node.name = Some(label.into());
+    node.apply_widget_defaults();
+    Ok(id)
+}
+
+/// Add a stable option to a select. A checked option becomes the selection.
+pub fn select_option(
+    tree: &mut Tree,
+    select: NodeId,
+    label: &str,
+    checked: bool,
+) -> Result<NodeId, WidgetError> {
+    if tree.get(select).is_none_or(|n| n.kind != NodeKind::Select) {
+        return Err(WidgetError(TreeError {
+            message: "option requires a select parent".into(),
+        }));
+    }
+    let id = tree.add(NodeKind::MenuItem, Some(select))?;
+    let node = tree.get_mut(id).expect("new option");
+    node.name = Some(label.into());
+    node.text = Some(label.into());
+    node.apply_widget_defaults();
+    if checked {
+        tree.select_option(select, id)?;
+    }
+    Ok(id)
+}
+
 /// A single-line text field. `label` is the accessible name; `value` is `text`.
 ///
 /// The caret starts at the end of `value`. Desktop character keys, Backspace,
@@ -146,6 +424,23 @@ pub fn text_field(
         n.apply_widget_defaults();
         n.caret = value.chars().count();
     }
+    Ok(id)
+}
+
+/// A plain multiline text field with a fixed viewport.
+pub fn text_area(
+    tree: &mut Tree,
+    parent: NodeId,
+    label: &str,
+    value: &str,
+    width: f32,
+    height: f32,
+) -> Result<NodeId, WidgetError> {
+    let id = text_field(tree, parent, label, value)?;
+    let node = tree.get_mut(id).expect("new text field");
+    node.multiline = true;
+    node.layout.width = width;
+    node.layout.height = height;
     Ok(id)
 }
 

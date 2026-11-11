@@ -13,11 +13,13 @@ pub use animate::{
 };
 pub use recording::{Action, RecordedKey, Recording};
 pub use store::{StateInfo, Store, StoreError};
+pub use tekto_image::{Fit as ImageFit, Image, ImageError};
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Named keys supported by agent input and desktop routing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +29,18 @@ pub enum NamedActionKey {
     Enter,
     Space,
     Backspace,
+    Escape,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    ArrowDown,
+    ShiftLeft,
+    ShiftRight,
+    ShiftHome,
+    ShiftEnd,
+    SelectAll,
+    Home,
+    End,
 }
 
 impl std::str::FromStr for NamedActionKey {
@@ -39,8 +53,20 @@ impl std::str::FromStr for NamedActionKey {
             "Enter" => Ok(Self::Enter),
             "Space" => Ok(Self::Space),
             "Backspace" => Ok(Self::Backspace),
+            "Escape" => Ok(Self::Escape),
+            "ArrowLeft" => Ok(Self::ArrowLeft),
+            "ArrowRight" => Ok(Self::ArrowRight),
+            "ArrowUp" => Ok(Self::ArrowUp),
+            "ArrowDown" => Ok(Self::ArrowDown),
+            "Shift+ArrowLeft" => Ok(Self::ShiftLeft),
+            "Shift+ArrowRight" => Ok(Self::ShiftRight),
+            "Shift+Home" => Ok(Self::ShiftHome),
+            "Shift+End" => Ok(Self::ShiftEnd),
+            "SelectAll" => Ok(Self::SelectAll),
+            "Home" => Ok(Self::Home),
+            "End" => Ok(Self::End),
             _ => Err(format!(
-                "unknown key {name:?}; expected Tab, Shift+Tab, Enter, Space, or Backspace"
+                "unknown key {name:?}; expected Tab, Shift+Tab, Enter, Space, Backspace, Escape, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, Shift+ArrowLeft, Shift+ArrowRight, Shift+Home, Shift+End, or SelectAll"
             )),
         }
     }
@@ -58,13 +84,103 @@ pub fn route_named_key(
         NamedActionKey::Enter | NamedActionKey::Space => {
             let button = tree.focus.filter(|id| {
                 tree.get(*id).is_some_and(|n| {
-                    (n.kind == NodeKind::Button
-                        || (key == NamedActionKey::Space && n.kind == NodeKind::Checkbox))
+                    (matches!(
+                        n.kind,
+                        NodeKind::Button | NodeKind::MenuItem | NodeKind::Select | NodeKind::Tab
+                    ) || (key == NamedActionKey::Space
+                        && matches!(
+                            n.kind,
+                            NodeKind::Checkbox | NodeKind::Switch | NodeKind::Radio | NodeKind::Tab
+                        )))
                         && !n.disabled
                 })
             });
             (false, button.filter(|_| !repeat))
         }
+        NamedActionKey::ArrowLeft
+        | NamedActionKey::ArrowRight
+        | NamedActionKey::ArrowUp
+        | NamedActionKey::ArrowDown
+        | NamedActionKey::Home
+        | NamedActionKey::End => {
+            let before = tree
+                .focus
+                .and_then(|id| tree.get(id))
+                .filter(|node| node.kind == NodeKind::Tab)
+                .map(|node| node.id);
+            let changed = tree
+                .focus
+                .and_then(|id| {
+                    let node = tree.get(id)?;
+                    if node.kind == NodeKind::MenuItem
+                        && matches!(
+                            key,
+                            NamedActionKey::ArrowUp
+                                | NamedActionKey::ArrowDown
+                                | NamedActionKey::Home
+                                | NamedActionKey::End
+                        )
+                    {
+                        return Some(tree.move_menu(id, key).unwrap_or(false));
+                    }
+                    if matches!(node.kind, NodeKind::Radio | NodeKind::Tab)
+                        && matches!(
+                            key,
+                            NamedActionKey::ArrowLeft
+                                | NamedActionKey::ArrowRight
+                                | NamedActionKey::ArrowUp
+                                | NamedActionKey::ArrowDown
+                        )
+                    {
+                        return Some(
+                            tree.move_radio(
+                                id,
+                                matches!(key, NamedActionKey::ArrowLeft | NamedActionKey::ArrowUp),
+                            )
+                            .unwrap_or(false),
+                        );
+                    }
+                    if node.kind != NodeKind::Slider {
+                        return None;
+                    }
+                    let value = match key {
+                        NamedActionKey::ArrowLeft | NamedActionKey::ArrowDown => {
+                            node.progress - 0.05
+                        }
+                        NamedActionKey::ArrowRight | NamedActionKey::ArrowUp => {
+                            node.progress + 0.05
+                        }
+                        NamedActionKey::Home => 0.0,
+                        NamedActionKey::End => 1.0,
+                        _ => unreachable!(),
+                    };
+                    Some(tree.set_slider_value(id, value).unwrap_or(false))
+                })
+                .unwrap_or(false);
+            let activation = if changed {
+                tree.focus
+                    .filter(|id| Some(*id) != before && before.is_some())
+            } else {
+                None
+            };
+            (changed, activation)
+        }
+        NamedActionKey::ShiftLeft
+        | NamedActionKey::ShiftRight
+        | NamedActionKey::ShiftHome
+        | NamedActionKey::ShiftEnd
+        | NamedActionKey::SelectAll => {
+            let key = match key {
+                NamedActionKey::ShiftLeft => FieldKey::SelectLeft,
+                NamedActionKey::ShiftRight => FieldKey::SelectRight,
+                NamedActionKey::ShiftHome => FieldKey::SelectHome,
+                NamedActionKey::ShiftEnd => FieldKey::SelectEnd,
+                NamedActionKey::SelectAll => FieldKey::SelectAll,
+                _ => unreachable!(),
+            };
+            (tree.apply_field_key(key).unwrap_or(false), None)
+        }
+        NamedActionKey::Escape => (tree.close_overlay(), None),
         NamedActionKey::Backspace => (
             tree.apply_field_key(FieldKey::Backspace).unwrap_or(false),
             None,
@@ -117,9 +233,22 @@ pub enum NodeKind {
     Window,
     Group,
     Rect,
+    Image,
     Text,
     Button,
     Checkbox,
+    Switch,
+    Progress,
+    Slider,
+    RadioGroup,
+    Radio,
+    TabList,
+    Tab,
+    TabPanel,
+    Dialog,
+    Menu,
+    MenuItem,
+    Select,
     /// Single-line editable value. `name` is the label; `text` is the value.
     TextField,
     /// Vertical clip of overflowing children. `scroll_y` shifts them up.
@@ -146,9 +275,22 @@ impl NodeKind {
             NodeKind::Window => "window",
             NodeKind::Group => "group",
             NodeKind::Rect => "rect",
+            NodeKind::Image => "image",
             NodeKind::Text => "text",
             NodeKind::Button => "button",
             NodeKind::Checkbox => "checkbox",
+            NodeKind::Switch => "switch",
+            NodeKind::Progress => "progress",
+            NodeKind::Slider => "slider",
+            NodeKind::RadioGroup => "radio_group",
+            NodeKind::Radio => "radio",
+            NodeKind::TabList => "tab_list",
+            NodeKind::Tab => "tab",
+            NodeKind::TabPanel => "tab_panel",
+            NodeKind::Dialog => "dialog",
+            NodeKind::Menu => "menu",
+            NodeKind::MenuItem => "menu_item",
+            NodeKind::Select => "select",
             NodeKind::TextField => "text_field",
             NodeKind::Scroll => "scroll",
             NodeKind::List => "list",
@@ -162,9 +304,22 @@ impl NodeKind {
             "window" => Some(Self::Window),
             "group" => Some(Self::Group),
             "rect" => Some(Self::Rect),
+            "image" => Some(Self::Image),
             "text" => Some(Self::Text),
             "button" => Some(Self::Button),
             "checkbox" => Some(Self::Checkbox),
+            "switch" => Some(Self::Switch),
+            "progress" => Some(Self::Progress),
+            "slider" => Some(Self::Slider),
+            "radio_group" => Some(Self::RadioGroup),
+            "radio" => Some(Self::Radio),
+            "tab_list" => Some(Self::TabList),
+            "tab" => Some(Self::Tab),
+            "tab_panel" => Some(Self::TabPanel),
+            "dialog" => Some(Self::Dialog),
+            "menu" => Some(Self::Menu),
+            "menu_item" => Some(Self::MenuItem),
+            "select" => Some(Self::Select),
             "text_field" => Some(Self::TextField),
             "scroll" => Some(Self::Scroll),
             "list" => Some(Self::List),
@@ -181,9 +336,22 @@ impl NodeKind {
             NodeKind::Window,
             NodeKind::Group,
             NodeKind::Rect,
+            NodeKind::Image,
+            NodeKind::Progress,
+            NodeKind::Slider,
+            NodeKind::RadioGroup,
+            NodeKind::Radio,
+            NodeKind::TabList,
+            NodeKind::Tab,
+            NodeKind::TabPanel,
+            NodeKind::Dialog,
+            NodeKind::Menu,
+            NodeKind::MenuItem,
+            NodeKind::Select,
             NodeKind::Text,
             NodeKind::Button,
             NodeKind::Checkbox,
+            NodeKind::Switch,
             NodeKind::TextField,
             NodeKind::Scroll,
             NodeKind::List,
@@ -199,12 +367,25 @@ impl NodeKind {
         match self {
             NodeKind::TextField => &["click", "type", "key", "ime"],
             NodeKind::Scroll => &["click", "scroll"],
+            NodeKind::Slider => &["click", "set_value"],
             NodeKind::Window
             | NodeKind::Group
             | NodeKind::Rect
+            | NodeKind::Image
             | NodeKind::Text
             | NodeKind::Button
             | NodeKind::Checkbox
+            | NodeKind::Switch
+            | NodeKind::RadioGroup
+            | NodeKind::Radio
+            | NodeKind::TabList
+            | NodeKind::Tab
+            | NodeKind::TabPanel
+            | NodeKind::Dialog
+            | NodeKind::Menu
+            | NodeKind::MenuItem
+            | NodeKind::Select
+            | NodeKind::Progress
             | NodeKind::List
             | NodeKind::ListItem => &["click"],
         }
@@ -352,7 +533,23 @@ pub struct Node {
     pub disabled: bool,
     #[serde(default)]
     pub checked: bool,
+    /// Normalized progress from zero to one.
+    #[serde(default)]
+    pub progress: f32,
+    /// Whether a text field accepts line breaks.
+    #[serde(default)]
+    pub multiline: bool,
     pub name: Option<String>,
+    /// Optional developer key for locating an attached node in tests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_key: Option<String>,
+    /// Pixel buffers are runtime resources and are not included in scene JSON.
+    #[serde(skip)]
+    pub image: Option<tekto_image::Image>,
+    #[serde(skip)]
+    pub image_fit: tekto_image::Fit,
+    #[serde(default)]
+    pub decorative: bool,
     pub text: Option<String>,
     pub fill: Option<Color>,
     pub color: Option<Color>,
@@ -365,9 +562,38 @@ pub struct Node {
     /// Used by text fields. A preedit string, if any, is inserted here for display.
     #[serde(default)]
     pub caret: usize,
+    /// Selection anchor in Unicode scalar indices. None means no selection.
+    #[serde(default)]
+    pub selection_anchor: Option<usize>,
+    /// Selection edge positions in logical pixels, populated by layout.
+    #[serde(default)]
+    pub selection_x: Option<(f32, f32)>,
+    /// Composition underline extents in logical pixels, populated by layout.
+    #[serde(default)]
+    pub preedit_x: Option<(f32, f32)>,
     /// Caret x inside the content box, in logical pixels. Layout fills this in.
     #[serde(default)]
     pub caret_x: f32,
+    /// Multiline caret and selection geometry relative to the text origin.
+    #[serde(default)]
+    pub caret_y: f32,
+    #[serde(default)]
+    pub caret_height: f32,
+    /// One box per grapheme of the composed text, relative to the text origin.
+    /// Filled by layout; empty for very long text. Not saved with the scene.
+    #[serde(skip)]
+    pub text_chars: Vec<Rect>,
+    #[serde(default)]
+    pub selection_rects: Vec<Rect>,
+    #[serde(default)]
+    pub preedit_rects: Vec<Rect>,
+    #[serde(default)]
+    pub preedit_selection_rects: Vec<Rect>,
+    #[serde(default)]
+    pub text_scroll_y: f32,
+    /// Preferred visual column for consecutive vertical caret moves.
+    #[serde(skip)]
+    pub vertical_goal_x: Option<f32>,
     /// Uncommitted IME composition, inserted at `caret` for display and AccessKit.
     /// Empty when the field is not composing. Not part of the committed value.
     #[serde(default)]
@@ -461,7 +687,13 @@ impl Node {
             kind,
             disabled: false,
             checked: false,
+            progress: 0.0,
+            multiline: false,
             name: None,
+            test_key: None,
+            image: None,
+            image_fit: tekto_image::Fit::Contain,
+            decorative: false,
             text: None,
             fill: None,
             color: None,
@@ -471,7 +703,18 @@ impl Node {
             parent: None,
             children: Vec::new(),
             caret: 0,
+            selection_anchor: None,
+            selection_x: None,
+            preedit_x: None,
             caret_x: 0.0,
+            caret_y: 0.0,
+            caret_height: 0.0,
+            text_chars: Vec::new(),
+            selection_rects: Vec::new(),
+            preedit_rects: Vec::new(),
+            preedit_selection_rects: Vec::new(),
+            text_scroll_y: 0.0,
+            vertical_goal_x: None,
             preedit: String::new(),
             preedit_cursor: None,
             scroll_y: 0.0,
@@ -502,10 +745,58 @@ impl Node {
                 self.font_size = BODY_SIZE;
                 self.layout.padding = 12.0;
             }
-            NodeKind::Checkbox => {
+            NodeKind::Checkbox | NodeKind::Switch | NodeKind::Radio => {
                 self.color = Some(Color::INK);
                 self.font_size = BODY_SIZE;
                 self.layout.padding = 4.0;
+            }
+            NodeKind::TabList => {
+                self.layout.column = false;
+            }
+            NodeKind::Tab => {
+                self.color = Some(Color::INK);
+                self.font_size = BODY_SIZE;
+                self.layout.padding = 8.0;
+            }
+            NodeKind::Menu => {
+                self.fill = Some(Color::PAGE);
+                self.color = Some(Color::INK);
+                self.layout.width = 180.0;
+                self.layout.padding = 4.0;
+                self.radius = 6.0;
+                self.border_color = Some(Color::INK);
+            }
+            NodeKind::MenuItem => {
+                self.color = Some(Color::INK);
+                self.font_size = BODY_SIZE;
+                self.layout.padding = 8.0;
+            }
+            NodeKind::Select => {
+                self.fill = Some(Color::FIELD);
+                self.color = Some(Color::INK);
+                self.font_size = BODY_SIZE;
+                self.layout.padding = 10.0;
+                self.layout.width = 160.0;
+            }
+            NodeKind::Dialog => {
+                self.fill = Some(Color::PAGE);
+                self.color = Some(Color::INK);
+                self.layout.width = 320.0;
+                self.layout.padding = 20.0;
+                self.layout.gap = 12.0;
+                self.radius = 8.0;
+                self.border_color = Some(Color::INK);
+            }
+            NodeKind::Progress | NodeKind::Slider => {
+                self.fill = Some(Color::FIELD);
+                self.color = Some(Color::INK);
+                self.layout.width = 160.0;
+                self.layout.height = if self.kind == NodeKind::Slider {
+                    24.0
+                } else {
+                    8.0
+                };
+                self.radius = 4.0;
             }
             NodeKind::TextField => {
                 self.fill = Some(Color::FIELD);
@@ -543,11 +834,31 @@ impl Node {
         }
         let committed = self.text.clone().unwrap_or_default();
         let mut chars: Vec<char> = committed.chars().collect();
-        let caret = self.caret.min(chars.len());
-        let mut out: String = chars.drain(..caret).collect();
+        let (start, end) = self.selection().unwrap_or_else(|| {
+            let caret = self.caret.min(chars.len());
+            (caret, caret)
+        });
+        let mut out: String = chars[..start].iter().collect();
         out.push_str(&self.preedit);
-        out.extend(chars);
+        out.extend(chars.drain(end..));
         out
+    }
+
+    /// Selected composition subrange in composed-text scalar indices.
+    pub fn preedit_selection(&self) -> Option<(usize, usize)> {
+        if self.preedit.is_empty() {
+            return None;
+        }
+        let (start, end) = self.preedit_cursor?;
+        let start = clamp_char_boundary(&self.preedit, start);
+        let end = clamp_char_boundary(&self.preedit, end);
+        if start == end {
+            return None;
+        }
+        let offset = self.selection().map_or(self.caret, |(start, _)| start);
+        let a = offset + self.preedit[..start].chars().count();
+        let b = offset + self.preedit[..end].chars().count();
+        Some((a.min(b), a.max(b)))
     }
 
     /// Caret in [`composed_text`], in Unicode scalar values.
@@ -559,6 +870,7 @@ impl Node {
         if self.kind != NodeKind::TextField || self.preedit.is_empty() {
             return Some(caret);
         }
+        let caret = self.selection().map_or(caret, |(start, _)| start);
         let (_, end) = self.preedit_cursor?;
         let end = clamp_char_boundary(&self.preedit, end);
         Some(caret + self.preedit[..end].chars().count())
@@ -576,6 +888,26 @@ fn clamp_char_boundary(s: &str, index: usize) -> usize {
     index
 }
 
+fn grapheme_boundaries(text: &str) -> Vec<usize> {
+    let mut result = vec![0];
+    let mut chars = 0;
+    for grapheme in text.graphemes(true) {
+        chars += grapheme.chars().count();
+        result.push(chars);
+    }
+    result
+}
+
+impl Node {
+    /// Ordered selection in committed Unicode scalar indices, if non-empty.
+    pub fn selection(&self) -> Option<(usize, usize)> {
+        let len = self.text.as_deref().unwrap_or("").chars().count();
+        let anchor = self.selection_anchor?.min(len);
+        let caret = self.caret.min(len);
+        (anchor != caret).then_some((anchor.min(caret), anchor.max(caret)))
+    }
+}
+
 /// One desktop key applied to a focused text field.
 ///
 /// IME composition uses [`ImeEvent`], not this enum.
@@ -588,6 +920,11 @@ pub enum FieldKey {
     Home,
     End,
     Delete,
+    SelectLeft,
+    SelectRight,
+    SelectHome,
+    SelectEnd,
+    SelectAll,
 }
 
 /// One winit input-method event, without a winit dependency.
@@ -609,6 +946,8 @@ pub enum ImeEvent {
 pub struct NodePatch {
     pub disabled: Option<bool>,
     pub checked: Option<bool>,
+    /// Normalized progress, clamped to 0..=1.
+    pub value: Option<f32>,
     pub text: Option<String>,
     pub name: Option<String>,
     pub fill: Option<String>,
@@ -620,10 +959,10 @@ pub struct NodePatch {
     #[serde(default)]
     pub radius: Option<f32>,
     /// Border stroke color.
-    #[serde(default)]
+    #[serde(default, alias = "borderColor")]
     pub border_color: Option<String>,
     /// Border stroke width in logical pixels.
-    #[serde(default)]
+    #[serde(default, alias = "borderWidth")]
     pub border_width: Option<f32>,
     /// Uniform padding in logical pixels. Also accepted as JSX `padding`.
     #[serde(default)]
@@ -646,6 +985,27 @@ impl fmt::Display for TreeError {
 
 impl std::error::Error for TreeError {}
 
+/// Placement of a window overlay relative to its anchor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverlaySide {
+    Above,
+    Below,
+    Left,
+    Right,
+    Center,
+}
+
+/// The currently open window overlay.
+#[derive(Clone, Copy, Debug)]
+pub struct Overlay {
+    pub node: NodeId,
+    pub anchor: NodeId,
+    pub side: OverlaySide,
+    /// Pointer position for a context menu, in logical pixels.
+    pub position: Option<(f32, f32)>,
+    previous_focus: Option<NodeId>,
+}
+
 /// The scene tree.
 #[derive(Clone, Debug)]
 pub struct Tree {
@@ -653,6 +1013,9 @@ pub struct Tree {
     next_id: u64,
     root: Option<NodeId>,
     nodes: HashMap<NodeId, Node>,
+    overlay: Option<Overlay>,
+    context_menus: HashMap<NodeId, NodeId>,
+    tab_panels: HashMap<NodeId, NodeId>,
     /// Keyboard / AccessKit focus. Defaults to the root once it exists.
     pub focus: Option<NodeId>,
     /// Last node that was clicked, if any.
@@ -678,6 +1041,9 @@ impl Tree {
             next_id: 1,
             root: None,
             nodes: HashMap::new(),
+            overlay: None,
+            context_menus: HashMap::new(),
+            tab_panels: HashMap::new(),
             focus: None,
             last_click: None,
             transitions: Vec::new(),
@@ -731,8 +1097,233 @@ impl Tree {
         self.nodes.keys().copied()
     }
 
+    /// Associate one tab with one panel. Panels and their state stay in the tree.
+    pub fn bind_tab_panel(&mut self, tab: NodeId, panel: NodeId) -> Result<(), TreeError> {
+        if self.get(tab).is_none_or(|n| n.kind != NodeKind::Tab)
+            || self.get(panel).is_none_or(|n| n.kind != NodeKind::TabPanel)
+            || self.tab_panels.contains_key(&tab)
+            || self.tab_panels.values().any(|id| *id == panel)
+            || self.is_descendant(tab, panel)
+            || self.is_descendant(panel, tab)
+        {
+            return Err(TreeError {
+                message: "invalid or already bound tab panel".into(),
+            });
+        }
+        self.tab_panels.insert(tab, panel);
+        if self.focus.is_some_and(|focus| !self.is_visible(focus)) {
+            let _ = self.set_focus(tab);
+        }
+        Ok(())
+    }
+
+    pub fn panel_for_tab(&self, tab: NodeId) -> Option<NodeId> {
+        self.tab_panels.get(&tab).copied()
+    }
+    pub fn tab_for_panel(&self, panel: NodeId) -> Option<NodeId> {
+        self.tab_panels
+            .iter()
+            .find_map(|(tab, id)| (*id == panel).then_some(*tab))
+    }
+
+    /// Whether a node and its ancestors are in active tab panels.
+    pub fn is_visible(&self, mut id: NodeId) -> bool {
+        loop {
+            let Some(node) = self.get(id) else {
+                return false;
+            };
+            if let Some(tab) = self.tab_for_panel(id) {
+                if self.get(tab).is_none_or(|n| !n.checked) {
+                    return false;
+                }
+            }
+            match node.parent {
+                Some(parent) => id = parent,
+                None => return true,
+            }
+        }
+    }
+
+    /// Return the open overlay, if any.
+    pub fn overlay(&self) -> Option<Overlay> {
+        self.overlay
+    }
+
+    /// Attach an existing subtree to the window as an anchored overlay.
+    /// Opening a replacement closes the previous overlay and removes its subtree.
+    pub fn open_overlay(
+        &mut self,
+        node: NodeId,
+        anchor: NodeId,
+        side: OverlaySide,
+    ) -> Result<(), TreeError> {
+        let root = self.root.ok_or_else(|| TreeError {
+            message: "no window root".into(),
+        })?;
+        if self.get(root).is_none_or(|n| n.kind != NodeKind::Window)
+            || node == root
+            || node == anchor
+            || !self.nodes.contains_key(&node)
+            || !self.nodes.contains_key(&anchor)
+            || !self.is_descendant(anchor, root)
+            || self.is_descendant(anchor, node)
+            || self.overlay.is_some_and(|old| {
+                self.is_descendant(node, old.node) || self.is_descendant(anchor, old.node)
+            })
+        {
+            return Err(TreeError {
+                message: "invalid overlay or anchor".into(),
+            });
+        }
+        let is_dialog = self.nodes[&node].kind == NodeKind::Dialog;
+        let needs_name = matches!(self.nodes[&node].kind, NodeKind::Dialog | NodeKind::Menu);
+        if needs_name
+            && self.nodes[&node]
+                .name
+                .as_deref()
+                .is_none_or(|name| name.trim().is_empty())
+        {
+            return Err(TreeError {
+                message: "dialog or menu requires an accessible name".into(),
+            });
+        }
+        self.close_overlay();
+        let previous_focus = self.focus;
+        self.append(root, node)?;
+        self.overlay = Some(Overlay {
+            node,
+            anchor,
+            side,
+            position: None,
+            previous_focus,
+        });
+        self.set_focus(node)?;
+        if is_dialog || self.get(node).is_some_and(|n| n.kind == NodeKind::Menu) {
+            self.traverse_focus(false);
+        }
+        Ok(())
+    }
+
+    /// Associate a detached, named menu with an attached target. The menu is
+    /// owned by the target and is kept for subsequent context-menu gestures.
+    pub fn bind_context_menu(&mut self, target: NodeId, menu: NodeId) -> Result<(), TreeError> {
+        let valid_target = self.get(target).is_some_and(|n| !n.disabled);
+        let valid_menu = self.get(menu).is_some_and(|n| {
+            n.kind == NodeKind::Menu
+                && n.parent.is_none()
+                && n.name
+                    .as_deref()
+                    .is_some_and(|name| !name.trim().is_empty())
+        });
+        if !valid_target
+            || !valid_menu
+            || target == menu
+            || self.context_menus.contains_key(&target)
+            || self.context_menus.values().any(|id| *id == menu)
+        {
+            return Err(TreeError {
+                message: "invalid or already bound context menu".into(),
+            });
+        }
+        self.context_menus.insert(target, menu);
+        Ok(())
+    }
+
+    /// Open the nearest bound context menu at the pointer. Returns its target.
+    pub fn context_menu_at(&mut self, x: f32, y: f32) -> Option<NodeId> {
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        if self.overlay.is_some() {
+            self.close_overlay();
+        }
+        let mut cursor = self.hit(x, y);
+        while let Some(id) = cursor {
+            let node = self.get(id)?;
+            if node.disabled {
+                return None;
+            }
+            let parent = node.parent;
+            if let Some(menu) = self.context_menus.get(&id).copied() {
+                self.open_overlay(menu, id, OverlaySide::Below).ok()?;
+                self.overlay.as_mut()?.position = Some((x, y));
+                return Some(id);
+            }
+            cursor = parent;
+        }
+        None
+    }
+
+    /// Close and remove the overlay, restoring focus if possible.
+    pub fn close_overlay(&mut self) -> bool {
+        let Some(overlay) = self.overlay.take() else {
+            return false;
+        };
+        if self
+            .get(overlay.anchor)
+            .is_some_and(|node| node.kind == NodeKind::Select)
+            && self
+                .get(overlay.node)
+                .is_some_and(|node| node.kind == NodeKind::Menu)
+        {
+            let options = self
+                .get(overlay.node)
+                .map(|node| node.children.clone())
+                .unwrap_or_default();
+            for option in options {
+                let _ = self.append(overlay.anchor, option);
+            }
+        }
+        if self.context_menus.get(&overlay.anchor) == Some(&overlay.node) {
+            if let Some(parent) = self.get(overlay.node).and_then(|node| node.parent) {
+                if let Some(parent) = self.nodes.get_mut(&parent) {
+                    parent.children.retain(|id| *id != overlay.node);
+                }
+            }
+            if let Some(node) = self.nodes.get_mut(&overlay.node) {
+                node.parent = None;
+            }
+        } else {
+            let _ = self.remove(overlay.node);
+        }
+        if let Some(focus) = overlay.previous_focus {
+            if self.set_focus(focus).is_err() {
+                if let Some(root) = self.root {
+                    let _ = self.set_focus(root);
+                }
+            }
+        }
+        true
+    }
+
+    fn is_descendant(&self, mut id: NodeId, ancestor: NodeId) -> bool {
+        loop {
+            if id == ancestor {
+                return true;
+            }
+            let Some(parent) = self.get(id).and_then(|n| n.parent) else {
+                return false;
+            };
+            id = parent;
+        }
+    }
+
     /// Allocate a node and, if `parent` is set, append it as a child.
     pub fn add(&mut self, kind: NodeKind, parent: Option<NodeId>) -> Result<NodeId, TreeError> {
+        if matches!(kind, NodeKind::Radio | NodeKind::Tab)
+            && parent.is_some_and(|id| {
+                let expected = if kind == NodeKind::Radio {
+                    NodeKind::RadioGroup
+                } else {
+                    NodeKind::TabList
+                };
+                self.nodes.get(&id).is_none_or(|n| n.kind != expected)
+            })
+        {
+            return Err(TreeError {
+                message: "radio must belong to a radio group".into(),
+            });
+        }
         let id = NodeId(self.next_id);
         self.next_id += 1;
         let mut node = Node::new(id, kind);
@@ -760,6 +1351,16 @@ impl Tree {
                 message: "cannot append a node to itself".into(),
             });
         }
+        if self.is_descendant(parent, child) {
+            return Err(TreeError {
+                message: "cannot append a node inside its own subtree".into(),
+            });
+        }
+        if self.overlay.is_some_and(|o| o.node == child) {
+            return Err(TreeError {
+                message: "close the overlay before moving it".into(),
+            });
+        }
         if self.root == Some(child) {
             return Err(TreeError {
                 message: "cannot append the root".into(),
@@ -773,6 +1374,15 @@ impl Tree {
         if !self.nodes.contains_key(&child) {
             return Err(TreeError {
                 message: format!("unknown node {child}"),
+            });
+        }
+        if (self.nodes[&child].kind == NodeKind::Radio
+            && self.nodes[&parent].kind != NodeKind::RadioGroup)
+            || (self.nodes[&child].kind == NodeKind::Tab
+                && self.nodes[&parent].kind != NodeKind::TabList)
+        {
+            return Err(TreeError {
+                message: "radio must belong to a radio group".into(),
             });
         }
         if let Some(old) = self.nodes[&child].parent {
@@ -789,6 +1399,17 @@ impl Tree {
         }
         self.nodes.get_mut(&parent).unwrap().children.push(child);
         self.nodes.get_mut(&child).unwrap().parent = Some(parent);
+        if matches!(self.nodes[&child].kind, NodeKind::Radio | NodeKind::Tab)
+            && self.nodes[&child].checked
+        {
+            self.select_radio(child)?;
+        }
+        if self.nodes[&parent].kind == NodeKind::Select
+            && self.nodes[&child].kind == NodeKind::MenuItem
+            && self.nodes[&child].checked
+        {
+            self.select_option(parent, child)?;
+        }
         Ok(())
     }
 
@@ -798,6 +1419,15 @@ impl Tree {
             return Err(TreeError {
                 message: format!("unknown node {id}"),
             });
+        }
+        if self.overlay.is_some_and(|o| {
+            o.node == id
+                && self
+                    .get(o.anchor)
+                    .is_some_and(|n| n.kind == NodeKind::Select)
+        }) {
+            self.close_overlay();
+            return Ok(());
         }
         if self.root == Some(id) {
             self.root = None;
@@ -852,6 +1482,37 @@ impl Tree {
                 }
             }
         }
+        if self.overlay.is_some_and(|overlay| {
+            queued.contains(&overlay.node) || queued.contains(&overlay.anchor)
+        }) {
+            if let Some(overlay) = self.overlay.take() {
+                if !queued.contains(&overlay.node) {
+                    let _ = self.remove(overlay.node);
+                }
+            }
+        }
+        let owned_menus: Vec<_> = self
+            .context_menus
+            .iter()
+            .filter(|(target, menu)| queued.contains(target) && !queued.contains(menu))
+            .map(|(_, menu)| *menu)
+            .collect();
+        self.context_menus
+            .retain(|target, menu| !queued.contains(target) && !queued.contains(menu));
+        for menu in owned_menus {
+            let _ = self.remove(menu);
+        }
+        let owned_panels: Vec<_> = self
+            .tab_panels
+            .iter()
+            .filter(|(tab, panel)| queued.contains(tab) && !queued.contains(panel))
+            .map(|(_, panel)| *panel)
+            .collect();
+        self.tab_panels
+            .retain(|tab, panel| !queued.contains(tab) && !queued.contains(panel));
+        for panel in owned_panels {
+            let _ = self.remove(panel);
+        }
         for cur in &queued {
             self.nodes.remove(cur);
             if self.focus == Some(*cur) {
@@ -887,19 +1548,67 @@ impl Tree {
     /// From a non-eligible focus, start at the first (or last when reversed).
     /// Returns false if there are no eligible nodes.
     pub fn traverse_focus(&mut self, reverse: bool) -> bool {
-        let mut stack: Vec<_> = self.root.into_iter().collect();
+        let mut stack: Vec<_> = self
+            .overlay
+            .map(|o| o.node)
+            .or(self.root)
+            .into_iter()
+            .collect();
         let mut eligible = Vec::new();
         while let Some(id) = stack.pop() {
+            if !self.is_visible(id) {
+                continue;
+            }
             if let Some(node) = self.get(id) {
                 if !node.disabled
                     && matches!(
                         node.kind,
-                        NodeKind::Button | NodeKind::TextField | NodeKind::Checkbox
+                        NodeKind::Button
+                            | NodeKind::TextField
+                            | NodeKind::Checkbox
+                            | NodeKind::Switch
+                            | NodeKind::Slider
+                            | NodeKind::Radio
+                            | NodeKind::Tab
+                            | NodeKind::MenuItem
+                            | NodeKind::Select
                     )
                 {
-                    eligible.push(id);
+                    let representative = if matches!(node.kind, NodeKind::Radio | NodeKind::Tab) {
+                        let group_kind = if node.kind == NodeKind::Radio {
+                            NodeKind::RadioGroup
+                        } else {
+                            NodeKind::TabList
+                        };
+                        node.parent
+                            .and_then(|parent| self.get(parent))
+                            .filter(|group| group.kind == group_kind)
+                            .and_then(|group| {
+                                let mut radios = group.children.iter().copied().filter(|child| {
+                                    self.get(*child)
+                                        .is_some_and(|n| n.kind == node.kind && !n.disabled)
+                                });
+                                let first = radios.next()?;
+                                if self.get(first).is_some_and(|n| n.checked) {
+                                    return Some(first);
+                                }
+                                Some(
+                                    radios
+                                        .find(|child| self.get(*child).is_some_and(|n| n.checked))
+                                        .unwrap_or(first),
+                                )
+                            })
+                            == Some(id)
+                    } else {
+                        true
+                    };
+                    if representative {
+                        eligible.push(id);
+                    }
                 }
-                stack.extend(node.children.iter().rev().copied());
+                if node.kind != NodeKind::Select {
+                    stack.extend(node.children.iter().rev().copied());
+                }
             }
         }
         if eligible.is_empty() {
@@ -922,6 +1631,29 @@ impl Tree {
         if !self.nodes.contains_key(&id) {
             return Err(TreeError {
                 message: format!("unknown node {id}"),
+            });
+        }
+        if !self.is_visible(id) {
+            return Err(TreeError {
+                message: format!("node {id} is in an inactive tab panel"),
+            });
+        }
+        if self
+            .overlay
+            .is_some_and(|o| !self.is_descendant(id, o.node))
+        {
+            return Err(TreeError {
+                message: format!("node {id} is blocked by an overlay"),
+            });
+        }
+        if self.nodes[&id].kind == NodeKind::MenuItem
+            && self.nodes[&id]
+                .parent
+                .and_then(|p| self.nodes.get(&p))
+                .is_some_and(|n| n.kind == NodeKind::Select)
+        {
+            return Err(TreeError {
+                message: format!("option {id} is not visible"),
             });
         }
         if self.nodes[&id].disabled {
@@ -947,21 +1679,273 @@ impl Tree {
                 node.preedit.clear();
                 node.preedit_cursor = None;
                 node.caret = node.text.as_deref().unwrap_or("").chars().count();
+                node.selection_anchor = None;
+                node.selection_x = None;
+                node.vertical_goal_x = None;
             }
         }
-        let changed = self.nodes.get_mut(&id).is_some_and(|node| {
-            if node.kind == NodeKind::Checkbox {
-                node.checked = !node.checked;
-                true
-            } else {
-                false
-            }
-        });
+        let is_select = self
+            .nodes
+            .get(&id)
+            .is_some_and(|node| node.kind == NodeKind::Select);
+        if is_select {
+            self.emit(TreeEvent::Click(id));
+            return self.open_select(id);
+        }
+        let select_anchor = self
+            .overlay
+            .filter(|overlay| {
+                self.get(overlay.anchor)
+                    .is_some_and(|node| node.kind == NodeKind::Select)
+                    && self
+                        .get(id)
+                        .is_some_and(|node| node.kind == NodeKind::MenuItem)
+                    && self.is_descendant(id, overlay.node)
+            })
+            .map(|overlay| overlay.anchor);
+        if let Some(select) = select_anchor {
+            self.select_option(select, id)?;
+        }
+        let is_radio = self
+            .nodes
+            .get(&id)
+            .is_some_and(|node| matches!(node.kind, NodeKind::Radio | NodeKind::Tab));
+        let changed = if is_radio {
+            self.select_radio(id)?
+        } else {
+            self.nodes.get_mut(&id).is_some_and(|node| {
+                if matches!(node.kind, NodeKind::Checkbox | NodeKind::Switch) {
+                    node.checked = !node.checked;
+                    true
+                } else {
+                    false
+                }
+            })
+        };
         if changed {
             self.emit(TreeEvent::Changed(id));
         }
         self.emit(TreeEvent::Click(id));
+        if self.overlay.is_some_and(|overlay| {
+            self.get(overlay.node)
+                .is_some_and(|n| n.kind == NodeKind::Menu)
+                && self.is_descendant(id, overlay.node)
+        }) && self.get(id).is_some_and(|n| n.kind == NodeKind::MenuItem)
+        {
+            self.close_overlay();
+        }
         Ok(())
+    }
+
+    /// Open a select using a temporary popup while preserving its option ids.
+    pub fn open_select(&mut self, id: NodeId) -> Result<(), TreeError> {
+        let node = self.get(id).ok_or_else(|| TreeError {
+            message: format!("unknown node {id}"),
+        })?;
+        if node.kind != NodeKind::Select || node.disabled {
+            return Err(TreeError {
+                message: "select is invalid or disabled".into(),
+            });
+        }
+        let options = node.children.clone();
+        if options
+            .iter()
+            .any(|id| self.get(*id).is_none_or(|n| n.kind != NodeKind::MenuItem))
+        {
+            return Err(TreeError {
+                message: "select children must be options".into(),
+            });
+        }
+        let mut labels = HashSet::new();
+        for option in &options {
+            let label = self.get(*option).expect("validated option").display_name();
+            if label.trim().is_empty() || !labels.insert(label) {
+                return Err(TreeError {
+                    message: "select option labels must be non-empty and unique".into(),
+                });
+            }
+        }
+        let popup = self.add(NodeKind::Menu, None)?;
+        {
+            let node = self.get_mut(popup).expect("popup");
+            node.name = Some("Options".into());
+            node.apply_widget_defaults();
+        }
+        let selected = options.iter().copied().find(|option| {
+            self.get(*option)
+                .is_some_and(|node| node.checked && !node.disabled)
+        });
+        for option in options {
+            self.append(popup, option)?;
+        }
+        self.open_overlay(popup, id, OverlaySide::Below)?;
+        if let Some(selected) = selected {
+            self.set_focus(selected)?;
+        }
+        Ok(())
+    }
+
+    /// Select an existing option by stable id, updating the labeled control.
+    pub fn select_option(&mut self, select: NodeId, option: NodeId) -> Result<(), TreeError> {
+        let node = self
+            .get(select)
+            .filter(|n| n.kind == NodeKind::Select && !n.disabled)
+            .ok_or_else(|| TreeError {
+                message: "select is invalid or disabled".into(),
+            })?;
+        let children = if let Some(overlay) = self.overlay.filter(|o| o.anchor == select) {
+            self.get(overlay.node)
+                .map(|n| n.children.clone())
+                .unwrap_or_default()
+        } else {
+            node.children.clone()
+        };
+        let item = self
+            .get(option)
+            .filter(|n| n.kind == NodeKind::MenuItem && !n.disabled && children.contains(&option))
+            .ok_or_else(|| TreeError {
+                message: "option is invalid or disabled".into(),
+            })?;
+        let value = item.display_name();
+        let changed = self.get(select).and_then(|n| n.text.as_deref()) != Some(value.as_str());
+        for child in children {
+            if let Some(node) = self.get_mut(child) {
+                node.checked = child == option;
+            }
+        }
+        self.get_mut(select).expect("select").text = Some(value);
+        if changed {
+            self.emit(TreeEvent::Changed(select));
+        }
+        Ok(())
+    }
+
+    /// Select a radio and clear its direct radio siblings in the same group.
+    fn select_radio(&mut self, id: NodeId) -> Result<bool, TreeError> {
+        let node = self.nodes.get(&id).ok_or_else(|| TreeError {
+            message: format!("unknown node {id}"),
+        })?;
+        let kind = node.kind;
+        let group_kind = if kind == NodeKind::Tab {
+            NodeKind::TabList
+        } else {
+            NodeKind::RadioGroup
+        };
+        let parent = node.parent.ok_or_else(|| TreeError {
+            message: "radio must belong to a radio group".into(),
+        })?;
+        let group = self
+            .nodes
+            .get(&parent)
+            .filter(|n| n.kind == group_kind)
+            .ok_or_else(|| TreeError {
+                message: "radio must belong to a radio group".into(),
+            })?;
+        let siblings = group.children.clone();
+        let changed = !self.nodes[&id].checked;
+        for sibling in siblings {
+            if let Some(node) = self.nodes.get_mut(&sibling).filter(|n| n.kind == kind) {
+                node.checked = sibling == id;
+            }
+        }
+        if kind == NodeKind::Tab && self.focus.is_some_and(|focus| !self.is_visible(focus)) {
+            let _ = self.set_focus(id);
+        }
+        Ok(changed)
+    }
+
+    fn move_menu(&mut self, id: NodeId, key: NamedActionKey) -> Result<bool, TreeError> {
+        let parent = self
+            .get(id)
+            .and_then(|n| n.parent)
+            .ok_or_else(|| TreeError {
+                message: "menu item has no menu".into(),
+            })?;
+        let menu = self
+            .get(parent)
+            .filter(|n| n.kind == NodeKind::Menu)
+            .ok_or_else(|| TreeError {
+                message: "menu item has no menu".into(),
+            })?;
+        let items: Vec<_> = menu
+            .children
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.get(*id)
+                    .is_some_and(|n| n.kind == NodeKind::MenuItem && !n.disabled)
+            })
+            .collect();
+        let index = items
+            .iter()
+            .position(|item| *item == id)
+            .ok_or_else(|| TreeError {
+                message: "menu item is disabled".into(),
+            })?;
+        let next = match key {
+            NamedActionKey::Home => 0,
+            NamedActionKey::End => items.len() - 1,
+            NamedActionKey::ArrowUp => (index + items.len() - 1) % items.len(),
+            _ => (index + 1) % items.len(),
+        };
+        self.set_focus(items[next])?;
+        Ok(items[next] != id)
+    }
+
+    fn move_radio(&mut self, id: NodeId, reverse: bool) -> Result<bool, TreeError> {
+        let kind = self
+            .get(id)
+            .ok_or_else(|| TreeError {
+                message: "missing option".into(),
+            })?
+            .kind;
+        let group_kind = if kind == NodeKind::Tab {
+            NodeKind::TabList
+        } else {
+            NodeKind::RadioGroup
+        };
+        let parent = self
+            .nodes
+            .get(&id)
+            .and_then(|n| n.parent)
+            .ok_or_else(|| TreeError {
+                message: "radio has no group".into(),
+            })?;
+        let group = self
+            .nodes
+            .get(&parent)
+            .filter(|n| n.kind == group_kind)
+            .ok_or_else(|| TreeError {
+                message: "radio has no group".into(),
+            })?;
+        let items: Vec<_> = group
+            .children
+            .iter()
+            .copied()
+            .filter(|child| {
+                self.nodes
+                    .get(child)
+                    .is_some_and(|n| n.kind == kind && !n.disabled)
+            })
+            .collect();
+        let index = items
+            .iter()
+            .position(|child| *child == id)
+            .ok_or_else(|| TreeError {
+                message: "radio is disabled".into(),
+            })?;
+        let next = if reverse {
+            (index + items.len() - 1) % items.len()
+        } else {
+            (index + 1) % items.len()
+        };
+        let target = items[next];
+        self.set_focus(target)?;
+        let changed = self.select_radio(target)?;
+        if changed {
+            self.emit(TreeEvent::Changed(target));
+        }
+        Ok(changed || target != id)
     }
 
     fn clear_field_preedit(&mut self, id: NodeId) {
@@ -994,7 +1978,11 @@ impl Tree {
         if self.get(id).is_some_and(|n| !n.preedit.is_empty()) {
             return Ok(false);
         }
-        let plain: String = text.chars().filter(|c| !c.is_control()).collect();
+        let multiline = self.get(id).is_some_and(|node| node.multiline);
+        let plain: String = text
+            .chars()
+            .filter(|c| !c.is_control() || (multiline && *c == '\n'))
+            .collect();
         if plain.is_empty() {
             return Ok(false);
         }
@@ -1015,7 +2003,11 @@ impl Tree {
             node.preedit.clear();
             node.preedit_cursor = None;
         }
-        for ch in text.chars().filter(|c| !c.is_control()) {
+        let multiline = self.get(id).is_some_and(|node| node.multiline);
+        for ch in text
+            .chars()
+            .filter(|c| !c.is_control() || (multiline && *c == '\n'))
+        {
             self.apply_on_field(id, FieldKey::Insert(ch))?;
         }
         Ok(())
@@ -1056,13 +2048,18 @@ impl Tree {
         {
             return Ok(false);
         }
-        let plain: String = text.chars().filter(|c| !c.is_control()).collect();
+        let multiline = self.get(id).is_some_and(|node| node.multiline);
+        let plain: String = text
+            .chars()
+            .filter(|c| !c.is_control() || (multiline && *c == '\n'))
+            .collect();
         let caret = caret.min(plain.chars().count());
         let node = self.nodes.get_mut(&id).expect("field");
         if node.text.as_deref().unwrap_or("") == plain
             && node.caret == caret
             && node.preedit.is_empty()
             && node.preedit_cursor.is_none()
+            && node.selection_anchor.is_none()
         {
             return Ok(false);
         }
@@ -1070,6 +2067,9 @@ impl Tree {
         node.preedit_cursor = None;
         node.text = Some(plain);
         node.caret = caret;
+        node.vertical_goal_x = None;
+        node.selection_anchor = None;
+        node.selection_x = None;
         self.emit(TreeEvent::Changed(id));
         Ok(true)
     }
@@ -1106,6 +2106,7 @@ impl Tree {
             ImeEvent::Preedit { text, cursor } => {
                 let cursor = sanitize_preedit_cursor(&text, cursor);
                 let node = self.nodes.get_mut(&id).expect("field");
+                node.vertical_goal_x = None;
                 if node.preedit == text && node.preedit_cursor == cursor {
                     return Ok(false);
                 }
@@ -1118,7 +2119,11 @@ impl Tree {
                 let had_preedit = !node.preedit.is_empty() || node.preedit_cursor.is_some();
                 node.preedit.clear();
                 node.preedit_cursor = None;
-                let plain: String = text.chars().filter(|c| !c.is_control()).collect();
+                let multiline = node.multiline;
+                let plain: String = text
+                    .chars()
+                    .filter(|c| !c.is_control() || (multiline && *c == '\n'))
+                    .collect();
                 if plain.is_empty() {
                     return Ok(had_preedit);
                 }
@@ -1155,38 +2160,160 @@ impl Tree {
             });
         }
         let current = node.text.clone().unwrap_or_default();
+        node.vertical_goal_x = None;
         let mut chars: Vec<char> = current.chars().collect();
-        let mut caret = node.caret.min(chars.len());
+        let boundaries = grapheme_boundaries(&current);
+        let snap = |at: usize| {
+            boundaries
+                .iter()
+                .copied()
+                .take_while(|b| *b <= at)
+                .last()
+                .unwrap_or(0)
+        };
+        let mut caret = snap(node.caret.min(chars.len()));
+        node.caret = caret;
+        node.selection_anchor = node.selection_anchor.map(snap);
+        let selection = node.selection();
+        let extending = matches!(
+            key,
+            FieldKey::SelectLeft
+                | FieldKey::SelectRight
+                | FieldKey::SelectHome
+                | FieldKey::SelectEnd
+                | FieldKey::SelectAll
+        );
+        if extending && node.selection_anchor.is_none() {
+            node.selection_anchor = Some(caret);
+        }
+        let previous = |at: usize| {
+            boundaries
+                .iter()
+                .copied()
+                .take_while(|b| *b < at)
+                .last()
+                .unwrap_or(0)
+        };
+        let next = |at: usize| {
+            boundaries
+                .iter()
+                .copied()
+                .find(|b| *b > at)
+                .unwrap_or(chars.len())
+        };
         match key {
             FieldKey::Insert(ch) => {
-                if ch.is_control() {
+                if ch.is_control() && !(node.multiline && ch == '\n') {
                     return Ok(());
+                }
+                if let Some((start, end)) = selection {
+                    chars.drain(start..end);
+                    caret = start;
                 }
                 chars.insert(caret, ch);
                 caret += 1;
             }
             FieldKey::Backspace => {
-                if caret > 0 {
-                    chars.remove(caret - 1);
-                    caret -= 1;
+                let (start, end) = selection.unwrap_or((previous(caret), caret));
+                if start < end {
+                    chars.drain(start..end);
+                    caret = start;
                 }
             }
-            FieldKey::Left => caret = caret.saturating_sub(1),
-            FieldKey::Right => caret = (caret + 1).min(chars.len()),
-            FieldKey::Home => caret = 0,
-            FieldKey::End => caret = chars.len(),
             FieldKey::Delete => {
-                if caret < chars.len() {
-                    chars.remove(caret);
+                let (start, end) = selection.unwrap_or((caret, next(caret)));
+                if start < end {
+                    chars.drain(start..end);
+                    caret = start;
                 }
+            }
+            FieldKey::Left => caret = selection.map_or_else(|| previous(caret), |(start, _)| start),
+            FieldKey::Right => caret = selection.map_or_else(|| next(caret), |(_, end)| end),
+            FieldKey::Home | FieldKey::SelectHome => {
+                caret = if node.multiline {
+                    chars[..caret]
+                        .iter()
+                        .rposition(|ch| *ch == '\n')
+                        .map_or(0, |index| index + 1)
+                } else {
+                    0
+                }
+            }
+            FieldKey::End | FieldKey::SelectEnd => {
+                caret = if node.multiline {
+                    chars[caret..]
+                        .iter()
+                        .position(|ch| *ch == '\n')
+                        .map_or(chars.len(), |index| caret + index)
+                } else {
+                    chars.len()
+                }
+            }
+            FieldKey::SelectLeft => caret = previous(caret),
+            FieldKey::SelectRight => caret = next(caret),
+            FieldKey::SelectAll => {
+                node.selection_anchor = Some(0);
+                caret = chars.len();
             }
         }
+        if !extending {
+            node.selection_anchor = None;
+        }
+        node.selection_x = None;
         node.text = Some(chars.into_iter().collect());
         node.caret = caret;
         if current != node.text.as_deref().unwrap_or("") {
             self.emit(TreeEvent::Changed(id));
         }
         Ok(())
+    }
+
+    /// Set a selection using Unicode scalar indices, snapped to grapheme boundaries.
+    pub fn set_field_selection(
+        &mut self,
+        id: NodeId,
+        anchor: usize,
+        focus: usize,
+    ) -> Result<(), TreeError> {
+        self.ensure_field(id)?;
+        self.set_focus(id)?;
+        let node = self.nodes.get_mut(&id).expect("field");
+        if !node.preedit.is_empty() {
+            return Err(TreeError {
+                message: "cannot select during IME composition".into(),
+            });
+        }
+        let boundaries = grapheme_boundaries(node.text.as_deref().unwrap_or(""));
+        let snap = |index| {
+            boundaries
+                .iter()
+                .copied()
+                .take_while(|value| *value <= index)
+                .last()
+                .unwrap_or(0)
+        };
+        node.selection_anchor = Some(snap(anchor));
+        node.vertical_goal_x = None;
+        node.caret = snap(focus);
+        node.selection_x = None;
+        Ok(())
+    }
+
+    /// Return the selected committed text, without changing the clipboard.
+    pub fn selected_text(&self, id: NodeId) -> Result<String, TreeError> {
+        self.ensure_field(id)?;
+        let node = &self.nodes[&id];
+        let Some((start, end)) = node.selection() else {
+            return Ok(String::new());
+        };
+        Ok(node
+            .text
+            .as_deref()
+            .unwrap_or("")
+            .chars()
+            .skip(start)
+            .take(end - start)
+            .collect())
     }
 
     /// Set the vertical offset of a scroll container. Clamped to the content
@@ -1251,10 +2378,58 @@ impl Tree {
         Ok(clamp_scroll(node))
     }
 
+    /// Set an enabled slider's normalized value and emit a change when it moves.
+    pub fn set_slider_value(&mut self, id: NodeId, value: f32) -> Result<bool, TreeError> {
+        if !value.is_finite() {
+            return Err(TreeError {
+                message: "slider value must be finite".into(),
+            });
+        }
+        let node = self.nodes.get(&id).ok_or_else(|| TreeError {
+            message: format!("unknown node {id}"),
+        })?;
+        if self.root.is_none_or(|root| !self.is_descendant(id, root)) {
+            return Err(TreeError {
+                message: format!("node {id} is not attached"),
+            });
+        }
+        if node.kind != NodeKind::Slider {
+            return Err(TreeError {
+                message: format!("node {id} is not a slider"),
+            });
+        }
+        if node.disabled
+            || self
+                .overlay
+                .is_some_and(|o| !self.is_descendant(id, o.node))
+        {
+            return Err(TreeError {
+                message: format!("node {id} is disabled or blocked"),
+            });
+        }
+        let value = value.clamp(0.0, 1.0);
+        if self.nodes[&id].progress == value {
+            return Ok(false);
+        }
+        self.nodes.get_mut(&id).expect("slider").progress = value;
+        self.emit(TreeEvent::Changed(id));
+        Ok(true)
+    }
+
     /// Hit-test `(x, y)` in logical pixels, then [`click`] the node.
     pub fn click_at(&mut self, x: f32, y: f32) -> Option<NodeId> {
+        if let Some(overlay) = self.overlay {
+            if self.hit_in(overlay.node, x, y).is_none() {
+                self.close_overlay();
+                return None;
+            }
+        }
         let id = self.hit(x, y)?;
         self.click(id).ok()?;
+        if let Some(node) = self.get(id).filter(|node| node.kind == NodeKind::Slider) {
+            let value = (x - node.bounds.x - 8.0) / (node.bounds.width - 16.0).max(1.0);
+            self.set_slider_value(id, value).ok()?;
+        }
         Some(id)
     }
 
@@ -1268,19 +2443,46 @@ impl Tree {
         if patch.disabled.is_some()
             && !matches!(
                 node.kind,
-                NodeKind::Button | NodeKind::TextField | NodeKind::Checkbox
+                NodeKind::Button
+                    | NodeKind::TextField
+                    | NodeKind::Checkbox
+                    | NodeKind::Switch
+                    | NodeKind::Slider
+                    | NodeKind::Radio
+                    | NodeKind::Tab
+                    | NodeKind::MenuItem
+                    | NodeKind::Select
             )
         {
             return Err(TreeError {
                 message: format!(
-                    "disabled is only supported on buttons, text fields, and checkboxes (node {id})"
+                    "disabled is only supported on buttons, text fields, checkboxes, switches, sliders, radios, and menu items (node {id})"
                 ),
             });
         }
-        if let Some(checked) = patch.checked {
-            if node.kind != NodeKind::Checkbox {
+        if let Some(value) = patch.value {
+            if !matches!(node.kind, NodeKind::Progress | NodeKind::Slider) || !value.is_finite() {
                 return Err(TreeError {
-                    message: format!("checked is only supported on checkboxes (node {id})"),
+                    message: format!(
+                        "value must be finite and is only supported on progress and slider nodes (node {id})"
+                    ),
+                });
+            }
+            node.progress = value.clamp(0.0, 1.0);
+        }
+        if let Some(checked) = patch.checked {
+            if !matches!(
+                node.kind,
+                NodeKind::Checkbox
+                    | NodeKind::Switch
+                    | NodeKind::Radio
+                    | NodeKind::Tab
+                    | NodeKind::MenuItem
+            ) {
+                return Err(TreeError {
+                    message: format!(
+                        "checked is only supported on checkboxes, switches, and radios (node {id})"
+                    ),
                 });
             }
             node.checked = checked;
@@ -1301,6 +2503,9 @@ impl Tree {
             if node.kind == NodeKind::TextField {
                 node.preedit.clear();
                 node.preedit_cursor = None;
+                node.selection_anchor = None;
+                node.selection_x = None;
+                node.vertical_goal_x = None;
             }
             node.text = Some(text);
         }
@@ -1337,6 +2542,30 @@ impl Tree {
         if let Some(gap) = patch.gap {
             node.layout.gap = gap;
         }
+        let select_radio = patch.checked == Some(true)
+            && matches!(node.kind, NodeKind::Radio | NodeKind::Tab)
+            && node.parent.is_some();
+        if select_radio {
+            self.select_radio(id)?;
+        }
+        let select_parent = self
+            .get(id)
+            .filter(|n| n.kind == NodeKind::MenuItem && n.checked)
+            .and_then(|n| n.parent)
+            .filter(|parent| {
+                self.get(*parent)
+                    .is_some_and(|n| n.kind == NodeKind::Select)
+            });
+        if let Some(parent) = select_parent {
+            self.select_option(parent, id)?;
+        }
+        if disabling
+            && self.overlay.is_some_and(|o| {
+                o.anchor == id && self.get(id).is_some_and(|n| n.kind == NodeKind::Select)
+            })
+        {
+            self.close_overlay();
+        }
         if disabling && self.focus == Some(id) {
             self.clear_field_preedit(id);
             self.focus = self.root;
@@ -1349,16 +2578,27 @@ impl Tree {
 
     /// Hit-test from the front (last child) backwards.
     pub fn hit(&self, x: f32, y: f32) -> Option<NodeId> {
+        if let Some(overlay) = self.overlay {
+            return self.hit_in(overlay.node, x, y);
+        }
         let root = self.root?;
         self.hit_in(root, x, y)
     }
 
     fn hit_in(&self, id: NodeId, x: f32, y: f32) -> Option<NodeId> {
         let node = self.nodes.get(&id)?;
+        if !self.is_visible(id) {
+            return None;
+        }
         if !node.bounds.contains(x, y) && !matches!(node.kind, NodeKind::Window) {
             return None;
         }
-        for child in node.children.iter().rev() {
+        for child in node
+            .children
+            .iter()
+            .rev()
+            .filter(|_| node.kind != NodeKind::Select)
+        {
             if let Some(hit) = self.hit_in(*child, x, y) {
                 return Some(hit);
             }
@@ -1387,7 +2627,10 @@ impl Tree {
         } else {
             format!("\"{}\"", escape_quotes(&node.display_name()))
         };
-        let label = if node.kind == NodeKind::Checkbox {
+        let label = if matches!(
+            node.kind,
+            NodeKind::Checkbox | NodeKind::Switch | NodeKind::Radio | NodeKind::Tab
+        ) {
             format!("{label} checked={}", node.checked)
         } else {
             label
@@ -1421,11 +2664,19 @@ impl Tree {
             kind: node.kind,
             disabled: node.disabled,
             checked: node.checked,
+            progress: node.progress,
+            multiline: node.multiline,
             name: node.name.clone(),
+            test_key: node.test_key.clone(),
+            image: image_dump(node),
             text: node.text.clone(),
             fill: node.fill.map(|c| c.to_hex()),
             color: node.color.map(|c| c.to_hex()),
             font_size: node.font_size,
+            selection: node.selection(),
+            radius: node.radius,
+            border_color: node.border_color.map(|c| c.to_hex()),
+            border_width: node.border_width,
             padding: node.layout.padding,
             gap: node.layout.gap,
             bounds: node.bounds,
@@ -1455,11 +2706,19 @@ impl Tree {
             kind: node.kind,
             disabled: node.disabled,
             checked: node.checked,
+            progress: node.progress,
+            multiline: node.multiline,
             name: node.name.clone(),
+            test_key: node.test_key.clone(),
+            image: image_dump(node),
             text: node.text.clone(),
             fill: node.fill.map(|c| c.to_hex()),
             color: node.color.map(|c| c.to_hex()),
             font_size: node.font_size,
+            selection: node.selection(),
+            radius: node.radius,
+            border_color: node.border_color.map(|c| c.to_hex()),
+            border_width: node.border_width,
             padding: node.layout.padding,
             gap: node.layout.gap,
             bounds: node.bounds,
@@ -1524,20 +2783,77 @@ pub struct NodeDump {
     pub disabled: bool,
     #[serde(default)]
     pub checked: bool,
+    #[serde(default)]
+    pub progress: f32,
+    #[serde(default)]
+    pub multiline: bool,
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageDump>,
     pub text: Option<String>,
     pub fill: Option<String>,
     pub color: Option<String>,
     pub font_size: f32,
+    #[serde(default)]
+    pub selection: Option<(usize, usize)>,
+    #[serde(default)]
+    pub radius: f32,
+    #[serde(default)]
+    pub border_color: Option<String>,
+    #[serde(default = "default_border_width")]
+    pub border_width: f32,
     pub padding: f32,
     pub gap: f32,
     pub bounds: Rect,
     pub children: Vec<u64>,
 }
 
+/// Image metadata for agents; pixel buffers remain private to the scene.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImageDump {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub fit: String,
+    pub decorative: bool,
+}
+
+fn image_dump(node: &Node) -> Option<ImageDump> {
+    (node.kind == NodeKind::Image).then(|| ImageDump {
+        width: node.image.as_ref().map(Image::width),
+        height: node.image.as_ref().map(Image::height),
+        fit: match node.image_fit {
+            ImageFit::Contain => "contain",
+            ImageFit::Cover => "cover",
+        }
+        .into(),
+        decorative: node.decorative,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multiline_fields_keep_newlines_and_move_to_line_edges() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        tree.get_mut(field).unwrap().multiline = true;
+        tree.insert_text(field, "one\ntwo🙂").unwrap();
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("one\ntwo🙂"));
+        tree.apply_field_key(FieldKey::Home).unwrap();
+        assert_eq!(tree.get(field).unwrap().caret, 4);
+        tree.apply_field_key(FieldKey::End).unwrap();
+        assert_eq!(tree.get(field).unwrap().caret, 8);
+        tree.apply_field_key(FieldKey::Backspace).unwrap();
+        assert_eq!(tree.get(field).unwrap().text.as_deref(), Some("one\ntwo"));
+        let single = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        tree.insert_text(single, "a\nb").unwrap();
+        assert_eq!(tree.get(single).unwrap().text.as_deref(), Some("ab"));
+    }
 
     #[test]
     fn pretty_text_fields_show_name_and_committed_value() {

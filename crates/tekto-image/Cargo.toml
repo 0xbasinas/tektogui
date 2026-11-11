@@ -1,0 +1,16 @@
+[package]
+name = "tekto-image"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Bounded RGBA image data and fitting for Tekto"
+publish = false
+
+[features]
+default = []
+png = ["dep:png"]
+
+[dependencies]
+png = { workspace = true, optional = true }

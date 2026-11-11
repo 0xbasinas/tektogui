@@ -1,0 +1,24 @@
+[package]
+name = "tekto-test"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Headless semantic test helpers for Tekto apps"
+publish = false
+
+[features]
+default = []
+quickjs = ["dep:tekto-js", "tekto-js/quickjs"]
+
+[dependencies]
+tekto-tree.workspace = true
+tekto-a11y.workspace = true
+tekto-layout.workspace = true
+tekto-render.workspace = true
+tiny-skia.workspace = true
+tekto-js = { workspace = true, optional = true }
+
+[dev-dependencies]
+tekto-widgets.workspace = true
