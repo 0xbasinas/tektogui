@@ -22,6 +22,8 @@ export interface TektoWasmHost {
   setFallbackFont(bytes: Uint8Array): void;
   reset(): void;
   renderPng(width: number, height: number): Uint8Array;
+  clickAt(width: number, height: number, x: number, y: number): number | null;
+  scrollAt(width: number, height: number, x: number, y: number, delta: number): number | null;
   create(kind: string): number;
   setText(id: number, text: string): void;
   setProp(id: number, key: string, value: string): void;

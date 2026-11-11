@@ -162,3 +162,34 @@ export async function paintCanvas(host, canvas, width, height) {
 export function resizeCanvas(host, canvas, width, height) {
   return paintCanvas(host, canvas, width, height);
 }
+
+/** Attach canvas input. Returns a function that removes the listeners. */
+export function attachCanvasInput(host, canvas, repaint = () => paintCanvas(host, canvas)) {
+  function point(event) {
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height || !canvas.width || !canvas.height) return null;
+    return [(event.clientX - rect.left) * canvas.width / rect.width,
+      (event.clientY - rect.top) * canvas.height / rect.height];
+  }
+  function click(event) {
+    if (event.button !== 0) return;
+    const p = point(event);
+    if (p && host.clickAt(canvas.width, canvas.height, ...p) !== null) repaint();
+  }
+  function wheel(event) {
+    const p = point(event);
+    if (!p) return;
+    const rect = canvas.getBoundingClientRect();
+    const delta = event.deltaY * (event.deltaMode === 1 ? 48 : event.deltaMode === 2 ? canvas.height : canvas.height / rect.height);
+    if (host.scrollAt(canvas.width, canvas.height, ...p, delta) !== null) {
+      event.preventDefault();
+      repaint();
+    }
+  }
+  canvas.addEventListener("click", click);
+  canvas.addEventListener("wheel", wheel, { passive: false });
+  return () => {
+    canvas.removeEventListener("click", click);
+    canvas.removeEventListener("wheel", wheel);
+  };
+}
