@@ -1,5 +1,5 @@
 use tekto_js::{apply_ops, HostOp};
-use tekto_tree::{Color, Node, NodeId, Tree};
+use tekto_tree::{Color, Node, NodeId, NodeKind, Tree};
 use tekto_widgets::{button, text_field, window};
 
 fn same_style(rust: &Node, jsx: &Node) {
@@ -58,5 +58,14 @@ fn jsx_controls_match_rust_helpers_and_keep_overrides() {
         assert_eq!(node.layout.padding, 7.0);
         assert_eq!(node.layout.gap, 9.0);
         assert!(!node.layout.column);
+    }
+    let mut bare = Tree::new();
+    for kind in ["rect", "text", "group"] {
+        let bare_id = bare.add(NodeKind::from_name(kind).unwrap(), None).unwrap();
+        let ids = apply_ops(&mut jsx, &[HostOp::Create { kind: kind.into() }]).unwrap();
+        same_style(
+            bare.get(bare_id).unwrap(),
+            jsx.get(NodeId::from_raw(ids[0])).unwrap(),
+        );
     }
 }
