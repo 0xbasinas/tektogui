@@ -1,0 +1,33 @@
+[package]
+name = "tekto-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "WASM build of the Tekto core: tree, layout, text, CPU renderer, and HostOp"
+publish = false
+
+[lib]
+# rlib so host tests can call the op helpers. cdylib is the wasm32 module.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Optional WebGPU paint. Large (wgpu + Vello). Off for the default wasm
+# module, default tests, and PR CI. The host still falls back to the CPU PNG.
+gpu = ["tekto-render/gpu", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
+
+[dependencies]
+tekto-tree = { workspace = true }
+tekto-layout = { workspace = true }
+# CPU renderer. `gpu` adds the same Vello path as desktop, for wasm32 only.
+tekto-render = { workspace = true }
+# HostOp protocol only. Do not enable `quickjs` on this crate.
+tekto-js = { workspace = true }
+tekto-text = { workspace = true }
+serde_json = { workspace = true }
+# Only linked with `--features gpu`. MIT OR Apache-2.0.
+wasm-bindgen = { version = "0.2.130", optional = true }
+wasm-bindgen-futures = { version = "0.4.80", optional = true }
+web-sys = { version = "0.3.107", optional = true, default-features = false, features = ["HtmlCanvasElement"] }

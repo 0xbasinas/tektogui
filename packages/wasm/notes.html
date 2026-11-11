@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Tekto Notes (CPU canvas)</title>
+<p>
+  Host page only. The Notes scene is plain JSX ops. Pixels come from the
+  tiny-skia PNG inside the wasm module, then this page blits them.
+  Serve this folder and place <code>tekto_wasm.wasm</code> next to this file.
+</p>
+<canvas id="view" width="640" height="400" style="border:1px solid #ccc; max-width:100%"></canvas>
+<p>
+  <button id="desk" type="button">640×400</button>
+  <button id="narrow" type="button">393×240</button>
+</p>
+<pre id="log"></pre>
+<script type="module">
+import { mount } from "../jsx-runtime/src/index.js";
+import { connectWasm } from "./src/index.js";
+import { paintCanvas, resizeCanvas, attachCanvasInput } from "./src/canvas.js";
+import { Notes } from "../jsx-runtime/notes-app.js";
+
+const canvas = document.querySelector("#view");
+const log = document.querySelector("#log");
+
+function note(text) {
+  log.textContent = text;
+}
+
+try {
+  const host = await connectWasm("./tekto_wasm.wasm");
+  host.reset();
+  mount(Notes(), host);
+  await paintCanvas(host, canvas, 640, 400);
+  attachCanvasInput(host, canvas);
+  note(`painted ${canvas.width}×${canvas.height}`);
+  document.querySelector("#desk").onclick = async () => {
+    await resizeCanvas(host, canvas, 640, 400);
+    note(`painted ${canvas.width}×${canvas.height}`);
+  };
+  document.querySelector("#narrow").onclick = async () => {
+    await resizeCanvas(host, canvas, 393, 240);
+    note(`painted ${canvas.width}×${canvas.height}`);
+  };
+} catch (err) {
+  note(String(err && err.stack ? err.stack : err));
+}
+</script>

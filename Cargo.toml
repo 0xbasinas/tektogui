@@ -13,8 +13,11 @@ members = [
     "crates/tekto-widgets",
     "crates/tekto",
     "crates/tekto-cli",
+    "crates/tekto-wasm",
     "examples/notes",
+    "examples/notebook",
     "examples/notes-android",
+    "examples/time-travel",
 ]
 
 [workspace.package]
@@ -37,6 +40,7 @@ tekto-js = { path = "crates/tekto-js", version = "0.1.0" }
 tekto-native = { path = "crates/tekto-native", version = "0.1.0" }
 tekto-widgets = { path = "crates/tekto-widgets", version = "0.1.0" }
 tekto = { path = "crates/tekto", version = "0.1.0" }
+tekto-wasm = { path = "crates/tekto-wasm", version = "0.1.0" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -48,6 +52,20 @@ skrifa = "0.44"
 winit = "0.30.13"
 softbuffer = "0.4"
 accesskit = "0.21"
+# Optional GPU path (`tekto` feature `gpu`). Not in the default graph.
+# vello 0.10 (Apache-2.0 OR MIT). wgpu is pinned here so we can leave
+# dx12 off: wgpu-hal 29 does not compile its DX12 backend against the
+# `windows` crate versions cargo selects for `x86_64-pc-windows-gnu`.
+vello = { version = "0.10.0", default-features = false, features = ["wgpu"] }
+# Backends are selected per target in `tekto-render` (Vulkan/GLES/Metal
+# on desktop, WebGPU on wasm32). DX12 stays off.
+wgpu = { version = "29.0.4", default-features = false, features = [
+    "std",
+    "parking_lot",
+    "wgsl",
+] }
+pollster = "0.4"
+png = "0.18"
 accesskit_winit = { version = "0.29.2", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 

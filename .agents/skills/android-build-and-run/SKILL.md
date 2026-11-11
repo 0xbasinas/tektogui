@@ -36,6 +36,27 @@ cargo install cargo-apk2   # 1.5.x; provides `cargo apk2`
 
 The host `notes-android` crate stays CPU-only so `android-activity` does not enter the default Linux graph. On `target_os = "android"` it enables `tekto` features `cpu` + `desktop`.
 
+## GPU (opt-in, CPU is the default)
+
+Do not turn `gpu` on for the default APK or for nightly Android CI. This environment has no `/dev/dri` and must not start the emulator, so Vulkan / GLES drivers are not treated as reliable.
+
+The `gpu` feature compiles the same offscreen wgpu / Vello path used on desktop (readback, then the softbuffer blit). At runtime Android still uses `CpuRenderer` unless `TEKTO_ANDROID_GPU=1`. If adapter or device creation fails, or a later GPU readback fails while the surface epoch is live, the window paints with the CPU renderer. `classify_present_failure` maps "surface lost", "surface outdated", and a destroyed `ANativeWindow` to "do not present". Suspend still drops the softbuffer before the window.
+
+```bash
+cargo check -p notes-android --target aarch64-linux-android
+cargo check -p notes-android --target aarch64-linux-android --features gpu
+cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu,desktop,gpu
+```
+
+Host tests for the policy and the lost-surface classifier (no emulator):
+
+```bash
+cargo test -p tekto-platform --lib gpu_policy
+cargo test -p tekto-render --lib present_failure
+```
+
+A device trial, only when you already have a running emulator or a phone, is `cargo apk2 build -p notes-android --features gpu` and `TEKTO_ANDROID_GPU=1` in the process environment. Leave the default package without that flag.
+
 ## Package
 
 ```bash
@@ -45,12 +66,11 @@ cargo apk2 build -p notes-android
 # or only the AVD ABI:
 cargo apk2 build -p notes-android --target x86_64-linux-android
 
-# Same thing through the CLI (finds the notes.apk under target/):
+# Same thing through the CLI (looks for notes.apk under the Cargo target dir, `CARGO_TARGET_DIR` if set):
 cargo run -p tekto-cli -- build --target android
 ```
 
-The APK is typically at
-`target/<triple>/debug/apk/notes.apk` (or `.../release/apk/` with `--release`).
+Observed: the recorded cargo-apk2 audit log (`/workspace/audit-logs/apk.log`) shows a debug APK at `<target dir>/debug/apk/notes.apk`, with no `<triple>` folder, and only an x86_64 library inside. The log does not record the command line, so it does not show whether `--target` was passed. Not verified: the path for a `--target` build, any `--release` path (`.../release/apk/` is a guess), and the `adb install` examples below for those builds. Check the path cargo-apk2 prints before you install; if `CARGO_TARGET_DIR` is set, `target` in examples means that directory. The emulator was not started for this doc fix.
 Package id: `com.tektogui.notes`. Activity: `android.app.NativeActivity`.
 The activity *must* declare `android.app.lib_name` = `notes_android` (cargo-apk2 does not insert this unless the key is already in the manifest; without it NativeActivity looks for `libmain.so` and crashes).
 
@@ -65,7 +85,7 @@ cargo check -p notes-android --target aarch64-linux-android
 
 Do not put this in PR CI. Do not start the emulator if another heavy build is running, and do not run heavy `cargo test` / compiles in parallel with it. This machine often has `/dev/kvm` but no permission, so you **must** pass `-accel off` (TCG, software). Be patient: a cold boot can take several minutes. `-gpu swiftshader_indirect` is optional.
 
-Build the APK first (see Package), with the emulator stopped. Reuse `target/x86_64-linux-android/debug/apk/notes.apk` when it is already current. `tekto dev --android` rebuilds the APK; do not run it while the emulator is up.
+Build the APK first (see Package), with the emulator stopped. Reuse the debug `notes.apk` (path printed by cargo-apk2; under `$CARGO_TARGET_DIR` if set) when it is already current. `tekto dev --android` rebuilds the APK; do not run it while the emulator is up.
 
 ```bash
 source ~/.android-env.sh
@@ -78,7 +98,10 @@ adb shell getprop sys.boot_completed
 Then install and launch the APK you already built:
 
 ```bash
-adb install -r target/x86_64-linux-android/debug/apk/notes.apk
+# Path below is the debug path seen in one log (see "APK path" note). Use the path cargo-apk2 printed
+# for your build; with CARGO_TARGET_DIR set, it is under that directory, not ./target.
+APK="${CARGO_TARGET_DIR:-target}/debug/apk/notes.apk"
+adb install -r "$APK"
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 adb forward tcp:8474 tcp:8474
 ```
@@ -130,7 +153,25 @@ Judge QuickJS cost on the `.so` / release size delta, not the raw debug APK (deb
 
 `android_main` in `examples/notes-android` calls `tekto::run_android` (or `run_android_with_session` when the `quickjs` feature is on, so `POST /reload` has a hook). That builds the winit event loop with `with_android_app`.
 
-winit turns `InitWindow` into `ApplicationHandler::resumed` and `TerminateWindow` into `suspended`. `resumed` creates the winit window and the softbuffer CPU surface and records one [`SurfaceEpoch`](../../../crates/tekto-platform/src/lifecycle.rs). `suspended` retires that epoch, drops the softbuffer surface, then drops the window. A redraw after suspend returns without `buffer_mut` / `present`. A second `resumed` drops any held surface first so a replaced `ANativeWindow` cannot leak or be locked. IME is later.
+winit turns `InitWindow` into `ApplicationHandler::resumed` and `TerminateWindow` into `suspended`. `resumed` creates the winit window and the softbuffer CPU surface and records one [`SurfaceEpoch`](../../../crates/tekto-platform/src/lifecycle.rs). `suspended` retires that epoch, drops the softbuffer surface, then drops the window. A redraw after suspend returns without `buffer_mut` / `present`. A second `resumed` drops any held surface first so a replaced `ANativeWindow` cannot leak or be locked.
+
+## Text input
+
+Chosen path: a native `EditText` overlay, not winit IME. winit's Android `set_ime_allowed` only shows or hides the soft keyboard. It does not emit `WindowEvent::Ime`. android-activity's `NativeActivity` text-input state is a no-op.
+
+`examples/notes-android/java/com/tektogui/ime/FieldOverlay.java` is compiled by cargo-apk2 (`java_sources = "java"`). When a `text_field` is focused, Rust polls `FieldOverlay.text` / `caret` and writes them with `Tree::set_focused_field_value`. AccessKit and MCP read that `text`. An agent `text` patch is pushed back into the `EditText`. The activity uses `adjustResize`. `FieldOverlay.insets` also reads `WindowInsets` (system bars, display cutout, IME) in physical pixels. Each frame converts them by the window scale and calls `layout_with_insets`. Content is padded by the safe area. The bottom edge is the larger of the safe bottom and the IME, so a keyboard that covers the nav bar is not applied twice. If the focused `text_field` is still under that edge, the nearest scroll parent scrolls it into the remaining band (portrait). No rubber-band. Host tests inject logical insets and do not need a device.
+
+Limits: single-line only. The candidate window is the Android IME's. Tekto does not keep a preedit on this path. The overlay string is the committed value. If the class is missing, the app falls back to key events. A live type-into-field check needs a free emulator or device. Do not start the emulator next to a heavy build.
+
+Host checks (no emulator):
+
+```bash
+cargo test -p tekto-platform --lib android_field
+cargo test -p tekto-platform --lib android_insets
+cargo test -p tekto-tree --lib android_overlay_value
+cargo test -p tekto-a11y --lib android_overlay_value
+cargo check -p notes-android --target aarch64-linux-android
+```
 
 Host-only proof (no emulator):
 
@@ -154,7 +195,10 @@ emulator -avd beddcode30 -no-window -memory 2048 -accel off &
 adb wait-for-device
 until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done
 
-adb install -r target/x86_64-linux-android/debug/apk/notes.apk
+# Path below is the debug path seen in one log (see "APK path" note). Use the path cargo-apk2 printed
+# for your build; with CARGO_TARGET_DIR set, it is under that directory, not ./target.
+APK="${CARGO_TARGET_DIR:-target}/debug/apk/notes.apk"
+adb install -r "$APK"
 adb shell am start -n com.tektogui.notes/android.app.NativeActivity
 sleep 3
 mkdir -p /workspace/tektogui-shots

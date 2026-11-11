@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Tekto WASM smoke</title>
+<p>Optional check that HostOps and render_tree_png bytes round-trip. Not the app API. Serve this folder and place <code>tekto_wasm.wasm</code> next to this file.</p>
+<pre id="log"></pre>
+<img id="out" alt="cpu png">
+<script type="module">
+import { connectWasm } from "./src/index.js";
+
+const log = document.querySelector("#log");
+try {
+  const host = await connectWasm("./tekto_wasm.wasm");
+  const id = host.create("text");
+  host.setText(id, "Hello from WASM");
+  host.setProp(id, "fontSize", "22");
+  const png = host.renderPng(280, 64);
+  document.querySelector("#out").src = URL.createObjectURL(
+    new Blob([png], { type: "image/png" }),
+  );
+  log.textContent = `created ${id}, png ${png.length} bytes`;
+} catch (err) {
+  log.textContent = String(err && err.stack ? err.stack : err);
+}
+</script>

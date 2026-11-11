@@ -1,11 +1,10 @@
-//! Renderer trait, a tiny-skia CPU backend, and a reserved GPU slot.
+//! Renderer trait, a tiny-skia CPU backend, and an optional wgpu / Vello backend.
 //!
 //! The CPU backend is the default. It is also the path used for headless
-//! screenshots, tests, and (later) a canvas2d-style web fallback.
-//! The GPU backend (wgpu / Vello, and WebGPU on the web) is a feature
-//! and is not pulled in until we need it, so everyday builds stay fast.
+//! screenshots and tests. The GPU backend is behind the `gpu` feature so
+//! everyday builds do not compile wgpu or Vello.
 
-use tekto_tree::{Color, Rect, Tree};
+use tekto_tree::{Color, NodeKind, Rect, Tree};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RenderError {
@@ -18,6 +17,34 @@ pub enum RenderError {
 impl RenderError {
     pub fn msg(msg: impl Into<String>) -> Self {
         RenderError::Message(msg.into())
+    }
+}
+
+/// What the window should do when a GPU readback or present fails.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresentFailure {
+    /// The native window or swapchain is gone. Do not lock or present it.
+    SurfaceLost,
+    /// Paint again with the CPU renderer. The window may still be valid.
+    UseCpu,
+}
+
+/// Classify a present or readback error.
+///
+/// `SurfaceLost` covers wgpu's "surface lost" / "surface outdated" and a
+/// destroyed Android `ANativeWindow`. Anything else (no adapter, device
+/// lost, map timeout) is [`PresentFailure::UseCpu`]. The caller must still
+/// skip present when the surface epoch is already retired.
+pub fn classify_present_failure(message: &str) -> PresentFailure {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("surface lost")
+        || lower.contains("surface outdated")
+        || lower.contains("anativewindow")
+        || lower.contains("surface is no longer valid")
+    {
+        PresentFailure::SurfaceLost
+    } else {
+        PresentFailure::UseCpu
     }
 }
 
@@ -55,17 +82,93 @@ pub fn paint_tree<R: Renderer>(renderer: &mut R, tree: &Tree, clear: Color) {
 }
 
 fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId) {
+    paint_node_opacity(renderer, tree, id, 1.0);
+}
+
+fn with_opacity(color: Color, opacity: f32) -> Color {
+    let opacity = opacity.clamp(0.0, 1.0);
+    Color {
+        a: (color.a as f32 * opacity).round() as u8,
+        ..color
+    }
+}
+
+fn paint_node_opacity<R: Renderer>(
+    renderer: &mut R,
+    tree: &Tree,
+    id: tekto_tree::NodeId,
+    parent_opacity: f32,
+) {
     let Some(node) = tree.get(id) else {
         return;
     };
+    let opacity = (node.opacity
+        * parent_opacity
+        * if node.disabled
+            && matches!(
+                node.kind,
+                NodeKind::Button | NodeKind::TextField | NodeKind::Checkbox
+            )
+        {
+            0.5
+        } else {
+            1.0
+        })
+    .clamp(0.0, 1.0);
+    if opacity <= 0.001 {
+        return;
+    }
     if let Some(fill) = node.fill {
-        renderer.fill_rect(node.bounds, fill);
+        renderer.fill_rect(node.bounds, with_opacity(fill, opacity));
+    }
+    if tree.focus == Some(id)
+        && matches!(
+            node.kind,
+            tekto_tree::NodeKind::Button
+                | tekto_tree::NodeKind::Checkbox
+                | tekto_tree::NodeKind::TextField
+        )
+    {
+        let b = node.bounds;
+        let color = with_opacity(
+            Color {
+                r: 42,
+                g: 100,
+                b: 190,
+                a: 255,
+            },
+            opacity,
+        );
+        let thickness = 2.0_f32.min(b.width / 2.0).min(b.height / 2.0).max(0.0);
+        for rect in [
+            Rect::new(b.x, b.y, b.width, thickness),
+            Rect::new(b.x, b.y + b.height - thickness, b.width, thickness),
+            Rect::new(b.x, b.y, thickness, b.height),
+            Rect::new(b.x + b.width - thickness, b.y, thickness, b.height),
+        ] {
+            renderer.fill_rect(rect, color);
+        }
+    }
+    if node.kind == NodeKind::Checkbox {
+        let x = node.bounds.x + node.layout.padding;
+        let y = node.bounds.y + (node.bounds.height - 18.0) / 2.0;
+        let ink = with_opacity(node.color.unwrap_or(Color::INK), opacity);
+        renderer.fill_rect(Rect::new(x, y, 18.0, 18.0), ink);
+        renderer.fill_rect(
+            Rect::new(x + 2.0, y + 2.0, 14.0, 14.0),
+            with_opacity(Color::PAGE, opacity),
+        );
+        if node.checked {
+            renderer.fill_rect(Rect::new(x + 5.0, y + 5.0, 8.0, 8.0), ink);
+        }
     }
     let composed;
+    let mut placeholder = false;
     let text_to_draw = if node.kind == tekto_tree::NodeKind::TextField {
         composed = node.composed_text();
         if composed.is_empty() {
-            None
+            placeholder = true;
+            node.name.as_deref().filter(|name| !name.is_empty())
         } else {
             Some(composed.as_str())
         }
@@ -73,10 +176,14 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
         node.text.as_deref()
     };
     if let Some(text) = text_to_draw {
-        let color = node.color.unwrap_or(Color::INK);
+        let color = with_opacity(
+            node.color.unwrap_or(Color::INK),
+            opacity * if placeholder { 0.55 } else { 1.0 },
+        );
         let inset = if matches!(
             node.kind,
             tekto_tree::NodeKind::Button
+                | tekto_tree::NodeKind::Checkbox
                 | tekto_tree::NodeKind::TextField
                 | tekto_tree::NodeKind::ListItem
         ) {
@@ -85,13 +192,28 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
             0.0
         };
         let max_w = if node.bounds.width > 0.0 {
-            Some((node.bounds.width - 2.0 * inset).max(0.0))
+            Some(
+                (node.bounds.width
+                    - 2.0 * inset
+                    - if node.kind == NodeKind::Checkbox {
+                        28.0
+                    } else {
+                        0.0
+                    })
+                .max(0.0),
+            )
         } else {
             None
         };
         renderer.draw_text(
             text,
-            node.bounds.x + inset,
+            node.bounds.x
+                + inset
+                + if node.kind == NodeKind::Checkbox {
+                    28.0
+                } else {
+                    0.0
+                },
             node.bounds.y + inset,
             node.font_size,
             color,
@@ -111,7 +233,7 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
                 1.0,
                 h,
             ),
-            node.color.unwrap_or(Color::INK),
+            with_opacity(node.color.unwrap_or(Color::INK), opacity),
         );
     }
     let clip = node.kind == tekto_tree::NodeKind::Scroll;
@@ -119,10 +241,43 @@ fn paint_node<R: Renderer>(renderer: &mut R, tree: &Tree, id: tekto_tree::NodeId
         renderer.push_clip(node.bounds);
     }
     for child in &node.children {
-        paint_node(renderer, tree, *child);
+        paint_node_opacity(renderer, tree, *child, opacity);
     }
     if clip {
         renderer.pop_clip();
+    }
+}
+
+#[cfg(test)]
+mod present_failure_tests {
+    use super::{classify_present_failure, PresentFailure};
+
+    #[test]
+    fn lost_surface_is_not_presented() {
+        assert_eq!(
+            classify_present_failure("surface lost"),
+            PresentFailure::SurfaceLost
+        );
+        assert_eq!(
+            classify_present_failure("wgpu: surface outdated"),
+            PresentFailure::SurfaceLost
+        );
+        assert_eq!(
+            classify_present_failure("ANativeWindow was destroyed"),
+            PresentFailure::SurfaceLost
+        );
+    }
+
+    #[test]
+    fn other_gpu_errors_fall_back_to_cpu() {
+        assert_eq!(
+            classify_present_failure("no GPU adapter: not found"),
+            PresentFailure::UseCpu
+        );
+        assert_eq!(
+            classify_present_failure("GPU device: lost"),
+            PresentFailure::UseCpu
+        );
     }
 }
 
@@ -131,9 +286,18 @@ mod cpu;
 #[cfg(feature = "cpu")]
 pub use cpu::CpuRenderer;
 
-/// Placeholder for the wgpu / Vello backend.
+#[cfg(feature = "gpu")]
+mod gpu;
+#[cfg(feature = "gpu")]
+pub use gpu::GpuRenderer;
+#[cfg(all(feature = "gpu", target_arch = "wasm32"))]
+pub use gpu::{paint_tree_webgpu, WebCanvas};
+
+/// Placeholder used when the crate is built without the `gpu` feature.
+#[cfg(not(feature = "gpu"))]
 pub struct GpuRenderer;
 
+#[cfg(not(feature = "gpu"))]
 impl GpuRenderer {
     pub fn new(_width: u32, _height: u32) -> Result<Self, RenderError> {
         Err(RenderError::GpuDisabled)
@@ -175,6 +339,84 @@ mod tests {
     use tekto_tree::{Color, Rect};
 
     #[test]
+    fn animation_frames_differ_and_stay_cheap() {
+        use std::time::Instant;
+        use tekto_tree::{NodeKind, StyleTransition, Tree};
+
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        tree.get_mut(root).unwrap().bounds = Rect::new(0.0, 0.0, 200.0, 120.0);
+        tree.get_mut(root).unwrap().fill = Some(Color::PAGE);
+        let mut ids = Vec::new();
+        for i in 0..3 {
+            let id = tree.add(NodeKind::Rect, Some(root)).unwrap();
+            let node = tree.get_mut(id).unwrap();
+            node.bounds = Rect::new(10.0 + i as f32 * 24.0, 20.0, 20.0, 20.0);
+            node.fill = Some(Color::INK);
+            ids.push(id);
+        }
+        for id in &ids {
+            tree.transition(
+                *id,
+                StyleTransition {
+                    opacity: Some(0.15),
+                    x: Some(tree.get(*id).unwrap().bounds.x + 30.0),
+                    duration_ms: Some(180.0),
+                    ..StyleTransition::default()
+                },
+            )
+            .unwrap();
+        }
+
+        let mut frames = Vec::new();
+        let started = Instant::now();
+        for step in 0..12 {
+            tree.advance(step as f64 * (180.0 / 11.0));
+            let png = render_tree_png(&tree, 200, 120, Color::PAGE).unwrap();
+            assert!(png.starts_with(b"\x89PNG"));
+            frames.push(png);
+        }
+        let elapsed = started.elapsed();
+        eprintln!("cpu animation: 12 frames, 3 rects, 200x120, {:?}", elapsed);
+        // Full tiny-skia paints, no dirty rects. Debug builds still finish
+        // a short scene well under a second on CI. See docs/architecture.md.
+        assert!(
+            elapsed.as_millis() < 2000,
+            "cpu animation cost too high: {elapsed:?}"
+        );
+        assert_ne!(frames[0], frames[6], "mid frame should move");
+        assert_ne!(frames[0], frames[11]);
+
+        let shot_dir = std::path::PathBuf::from("/workspace/tektogui-shots");
+        if shot_dir.is_dir() || std::fs::create_dir_all(&shot_dir).is_ok() {
+            let _ = std::fs::write(shot_dir.join("i38-anim-start.png"), &frames[0]);
+            let _ = std::fs::write(shot_dir.join("i38-anim-mid.png"), &frames[6]);
+            let _ = std::fs::write(shot_dir.join("i38-anim-end.png"), &frames[11]);
+        }
+    }
+
+    #[test]
+    fn focused_controls_have_visible_outline() {
+        use tekto_tree::NodeKind;
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        for kind in [NodeKind::Button, NodeKind::TextField] {
+            let id = tree.add(kind, Some(root)).unwrap();
+            tree.get_mut(id).unwrap().bounds = Rect::new(5.0, 5.0, 40.0, 20.0);
+            let mut renderer = CpuRenderer::new(50, 30).unwrap();
+            paint_tree(&mut renderer, &tree, Color::PAGE);
+            let before = renderer.rgba8().unwrap();
+            tree.set_focus(id).unwrap();
+            paint_tree(&mut renderer, &tree, Color::PAGE);
+            let after = renderer.rgba8().unwrap();
+            let pixel = (5 * 50 + 5) * 4;
+            assert_ne!(&before[pixel..pixel + 4], &after[pixel..pixel + 4]);
+            tree.set_focus(root).unwrap();
+            tree.remove(id).unwrap();
+        }
+    }
+
+    #[test]
     fn paints_logical_rect_at_physical_scale() {
         let mut renderer = CpuRenderer::new(200, 100).unwrap();
         renderer.set_scale(2.0);
@@ -196,5 +438,65 @@ mod tests {
         );
         assert_eq!(renderer.width(), 200);
         assert_eq!(renderer.height(), 100);
+    }
+}
+
+#[cfg(test)]
+mod field_hint_tests {
+    use super::*;
+    use tekto_tree::NodeKind;
+
+    #[derive(Default)]
+    struct Recorder(Vec<(String, Color)>);
+    impl Renderer for Recorder {
+        fn resize(&mut self, _: u32, _: u32) -> Result<(), RenderError> {
+            Ok(())
+        }
+        fn begin_frame(&mut self, _: Color) {}
+        fn fill_rect(&mut self, _: Rect, _: Color) {}
+        fn draw_text(&mut self, text: &str, _: f32, _: f32, _: f32, color: Color, _: Option<f32>) {
+            self.0.push((text.to_owned(), color));
+        }
+        fn to_png(&self) -> Result<Vec<u8>, RenderError> {
+            Ok(Vec::new())
+        }
+        fn width(&self) -> u32 {
+            0
+        }
+        fn height(&self) -> u32 {
+            0
+        }
+        fn rgba8(&self) -> Result<Vec<u8>, RenderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn empty_name_is_quiet_and_value_and_preedit_replace_it() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        let node = tree.get_mut(field).unwrap();
+        node.name = Some("Title".into());
+        node.color = Some(Color::INK);
+        let mut recorder = Recorder::default();
+        paint_tree(&mut recorder, &tree, Color::PAGE);
+        assert_eq!(recorder.0, [("Title".into(), Color::rgba(44, 51, 58, 140))]);
+        tree.get_mut(field).unwrap().text = Some("Hello".into());
+        recorder.0.clear();
+        paint_tree(&mut recorder, &tree, Color::PAGE);
+        assert_eq!(recorder.0, [("Hello".into(), Color::INK)]);
+        let node = tree.get_mut(field).unwrap();
+        node.text = Some(String::new());
+        node.preedit = "あ".into();
+        recorder.0.clear();
+        paint_tree(&mut recorder, &tree, Color::PAGE);
+        assert_eq!(recorder.0, [("あ".into(), Color::INK)]);
+        let node = tree.get_mut(field).unwrap();
+        node.preedit.clear();
+        node.name = None;
+        recorder.0.clear();
+        paint_tree(&mut recorder, &tree, Color::PAGE);
+        assert!(recorder.0.is_empty());
     }
 }

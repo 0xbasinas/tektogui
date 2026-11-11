@@ -2,21 +2,47 @@
 //!
 //! Each capability is a small trait so platforms can be filled in one
 //! at a time (Windows, Linux, Android, later macOS, iOS, and web).
-//! Text clipboard and notifications are implemented on Linux and Windows.
-//! Linux notifications use the freedesktop session bus. The API is
-//! stable for apps and for the JS [`NativeOp`] hook.
+//! Text clipboard, notifications, and open/save dialogs are implemented on
+//! Linux and Windows. macOS also has text clipboard; Android text clipboard
+//! uses `ClipboardManager`.
+//! Android notifications use `NotificationManager`.
+//! Linux notifications use the freedesktop session bus. The system tray is
+//! behind the `tray` feature (StatusNotifierItem on Linux, `Shell_NotifyIconW`
+//! on Windows, no extra crate). Linux and Windows global shortcuts are behind
+//! the `shortcuts` feature (an X11 key grab, or `RegisterHotKey`).
+//! The API is stable for apps and for the JS [`NativeOp`] hook.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[cfg(any(target_os = "android", test))]
+mod android_clipboard;
+#[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+mod android_files;
+#[cfg(any(target_os = "android", test))]
+mod android_notify;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
+mod linux_dialog;
+#[cfg(target_os = "linux")]
 mod linux_notify;
+#[cfg(all(target_os = "linux", feature = "shortcuts"))]
+mod linux_shortcuts;
+#[cfg(all(target_os = "linux", feature = "tray"))]
+mod linux_tray;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(any(target_os = "windows", test))]
+mod windows_dialog;
 #[cfg(target_os = "windows")]
 mod windows_notify;
+#[cfg(all(target_os = "windows", feature = "shortcuts"))]
+mod windows_shortcuts;
+#[cfg(all(target_os = "windows", feature = "tray"))]
+mod windows_tray;
 
 #[derive(Debug, Error)]
 pub enum NativeError {
@@ -46,6 +72,8 @@ pub enum NativeError {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum NativeOp {
+    FilesOpenDialog,
+    FilesSaveDialog,
     ClipboardGetText,
     ClipboardSetText {
         text: String,
@@ -64,12 +92,44 @@ pub enum NativeOp {
         path: String,
         bytes: Vec<u8>,
     },
-    /// Show a plain-text desktop notification. Linux and Windows; other platforms
-    /// return [`NativeError::Unsupported`].
+    /// Show a plain-text notification. Linux, Windows, and Android; other
+    /// platforms return [`NativeError::Unsupported`].
     NotificationsShow {
         title: String,
         body: String,
     },
+    /// Show the tray icon (`tray` feature). `menu` entries are plain labels.
+    /// A click is collected by [`NativeOp::TrayTakeClick`]. Linux and Windows.
+    TrayShow {
+        label: String,
+        menu: Vec<TrayMenuItem>,
+    },
+    /// Hide the tray icon. Already hidden is success.
+    TrayHide,
+    /// Remember the tray tooltip. Updates a visible icon.
+    TraySetLabel {
+        label: String,
+    },
+    /// `Some(id)` is the oldest menu click. `None` means the queue is empty.
+    TrayTakeClick,
+    /// Register an accelerator under a stable application id.
+    ShortcutsRegister {
+        accelerator: String,
+        id: String,
+    },
+    /// Remove a registered accelerator by id.
+    ShortcutsUnregister {
+        id: String,
+    },
+    /// Return the oldest activated shortcut id, if any.
+    ShortcutsTakeActivation,
+}
+
+/// One tray menu row. `id` is what a click reports. `label` is the visible text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrayMenuItem {
+    pub id: String,
+    pub label: String,
 }
 
 /// Run one [`NativeOp`] against [`native`].
@@ -79,6 +139,8 @@ pub enum NativeOp {
 pub fn apply_native_op(op: &NativeOp) -> Result<Option<String>, NativeError> {
     let host = native();
     match op {
+        NativeOp::FilesOpenDialog => host.open_dialog(),
+        NativeOp::FilesSaveDialog => host.save_dialog(),
         NativeOp::ClipboardGetText => host.get_text().map(Some),
         NativeOp::ClipboardSetText { text } => host.set_text(text).map(|()| None),
         NativeOp::FilesReadText { path } => host.read_to_string(path).map(Some),
@@ -95,6 +157,15 @@ pub fn apply_native_op(op: &NativeOp) -> Result<Option<String>, NativeError> {
         }),
         NativeOp::FilesWriteBytes { path, bytes } => host.write_bytes(path, bytes).map(|()| None),
         NativeOp::NotificationsShow { title, body } => host.show(title, body).map(|()| None),
+        NativeOp::TrayShow { label, menu } => host.show_icon(label, menu).map(|()| None),
+        NativeOp::TrayHide => host.hide_icon().map(|()| None),
+        NativeOp::TraySetLabel { label } => host.set_label(label).map(|()| None),
+        NativeOp::TrayTakeClick => host.take_click(),
+        NativeOp::ShortcutsRegister { accelerator, id } => {
+            host.register(accelerator, id).map(|()| None)
+        }
+        NativeOp::ShortcutsUnregister { id } => host.unregister(id).map(|()| None),
+        NativeOp::ShortcutsTakeActivation => host.take_activation(),
     }
 }
 
@@ -162,11 +233,35 @@ pub trait Notifications {
 }
 
 pub trait SystemTray {
+    /// Tooltip text. With the `tray` feature this is stored even when the
+    /// icon is hidden, and pushed to a visible icon. Linux and Windows.
     fn set_label(&self, label: &str) -> Result<(), NativeError>;
+    /// Show a tray icon and a simple menu. A click is queued for
+    /// [`Self::take_click`] and also passed to the [`Self::set_on_click`] hook.
+    fn show_icon(&self, label: &str, menu: &[TrayMenuItem]) -> Result<(), NativeError>;
+    /// Remove the tray icon.
+    fn hide_icon(&self) -> Result<(), NativeError>;
+    /// Oldest queued menu click, if any.
+    fn take_click(&self) -> Result<Option<String>, NativeError>;
+    /// `fn` called on the tray thread when a menu row is clicked.
+    /// The hook must return quickly and must not call back into the tray
+    /// on that same thread (`hide_icon` from the hook is safe; blocking
+    /// on the hook is not).
+    fn set_on_click(&self, on_click: Option<fn(&str)>) -> Result<(), NativeError>;
 }
 
 pub trait GlobalShortcuts {
+    /// Bind `accelerator` (for example `Ctrl+K` or `Ctrl+Shift+F1`) to `id`.
+    /// Needs the `shortcuts` feature. Linux also needs an X11 display.
+    /// Windows uses `RegisterHotKey` on a background thread.
     fn register(&self, accelerator: &str, id: &str) -> Result<(), NativeError>;
+    /// Drop the binding for `id`. A missing id is success.
+    fn unregister(&self, id: &str) -> Result<(), NativeError>;
+    /// Oldest shortcut id that fired, if any.
+    fn take_activation(&self) -> Result<Option<String>, NativeError>;
+    /// Called on the shortcut thread when a chord fires. It must return
+    /// quickly and must not call `register` or `unregister`.
+    fn set_on_activation(&self, on_activation: Option<fn(&str)>) -> Result<(), NativeError>;
 }
 
 /// Default stub used until a platform plugin is filled in.
@@ -187,11 +282,15 @@ impl Files for StubNative {
         {
             linux::read_file(path)
         }
+        #[cfg(target_os = "android")]
+        {
+            android_files::read_file(path)
+        }
         #[cfg(target_os = "windows")]
         {
             windows::read_file(path)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
         {
             let _ = path;
             Err(unsupported("files.read"))
@@ -203,11 +302,15 @@ impl Files for StubNative {
         {
             linux::write_file(path, contents)
         }
+        #[cfg(target_os = "android")]
+        {
+            android_files::write_file(path, contents)
+        }
         #[cfg(target_os = "windows")]
         {
             windows::write_file(path, contents)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
         {
             let _ = (path, contents);
             Err(unsupported("files.write"))
@@ -215,11 +318,33 @@ impl Files for StubNative {
     }
 
     fn open_dialog(&self) -> Result<Option<String>, NativeError> {
-        Err(unsupported("files.open_dialog"))
+        #[cfg(target_os = "linux")]
+        {
+            linux_dialog::show(false)
+        }
+        #[cfg(target_os = "windows")]
+        {
+            windows_dialog::show(false)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            Err(unsupported("files.open_dialog"))
+        }
     }
 
     fn save_dialog(&self) -> Result<Option<String>, NativeError> {
-        Err(unsupported("files.save_dialog"))
+        #[cfg(target_os = "linux")]
+        {
+            linux_dialog::show(true)
+        }
+        #[cfg(target_os = "windows")]
+        {
+            windows_dialog::show(true)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            Err(unsupported("files.save_dialog"))
+        }
     }
 }
 
@@ -233,7 +358,20 @@ impl Clipboard for StubNative {
         {
             windows::get_text()
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "macos")]
+        {
+            macos::get_text()
+        }
+        #[cfg(target_os = "android")]
+        {
+            android_clipboard::get_text()
+        }
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "android",
+            target_os = "macos"
+        )))]
         {
             Err(unsupported("clipboard.get"))
         }
@@ -247,7 +385,20 @@ impl Clipboard for StubNative {
         {
             windows::set_text(text)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "macos")]
+        {
+            macos::set_text(text)
+        }
+        #[cfg(target_os = "android")]
+        {
+            android_clipboard::set_text(text)
+        }
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "android",
+            target_os = "macos"
+        )))]
         {
             let _ = text;
             Err(unsupported("clipboard.set"))
@@ -265,7 +416,11 @@ impl Notifications for StubNative {
         {
             windows_notify::show(title, body)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "android")]
+        {
+            android_notify::show(title, body)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
         {
             let _ = (title, body);
             Err(unsupported("notifications.show"))
@@ -274,14 +429,171 @@ impl Notifications for StubNative {
 }
 
 impl SystemTray for StubNative {
-    fn set_label(&self, _label: &str) -> Result<(), NativeError> {
-        Err(unsupported("tray.set_label"))
+    fn set_label(&self, label: &str) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "tray"))]
+        {
+            linux_tray::set_label(label)
+        }
+        #[cfg(all(target_os = "windows", feature = "tray"))]
+        {
+            windows_tray::set_label(label)
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "tray"),
+            all(target_os = "windows", feature = "tray")
+        )))]
+        {
+            let _ = label;
+            Err(unsupported("tray.set_label"))
+        }
+    }
+
+    fn show_icon(&self, label: &str, menu: &[TrayMenuItem]) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "tray"))]
+        {
+            linux_tray::show_icon(label, menu)
+        }
+        #[cfg(all(target_os = "windows", feature = "tray"))]
+        {
+            windows_tray::show_icon(label, menu)
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "tray"),
+            all(target_os = "windows", feature = "tray")
+        )))]
+        {
+            let _ = (label, menu);
+            Err(unsupported("tray.show"))
+        }
+    }
+
+    fn hide_icon(&self) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "tray"))]
+        {
+            linux_tray::hide_icon()
+        }
+        #[cfg(all(target_os = "windows", feature = "tray"))]
+        {
+            windows_tray::hide_icon()
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "tray"),
+            all(target_os = "windows", feature = "tray")
+        )))]
+        {
+            Err(unsupported("tray.hide"))
+        }
+    }
+
+    fn take_click(&self) -> Result<Option<String>, NativeError> {
+        #[cfg(all(target_os = "linux", feature = "tray"))]
+        {
+            linux_tray::take_click()
+        }
+        #[cfg(all(target_os = "windows", feature = "tray"))]
+        {
+            windows_tray::take_click()
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "tray"),
+            all(target_os = "windows", feature = "tray")
+        )))]
+        {
+            Err(unsupported("tray.take_click"))
+        }
+    }
+
+    fn set_on_click(&self, on_click: Option<fn(&str)>) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "tray"))]
+        {
+            linux_tray::set_on_click(on_click)
+        }
+        #[cfg(all(target_os = "windows", feature = "tray"))]
+        {
+            windows_tray::set_on_click(on_click)
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "tray"),
+            all(target_os = "windows", feature = "tray")
+        )))]
+        {
+            let _ = on_click;
+            Err(unsupported("tray.on_click"))
+        }
     }
 }
 
 impl GlobalShortcuts for StubNative {
-    fn register(&self, _accelerator: &str, _id: &str) -> Result<(), NativeError> {
-        Err(unsupported("shortcuts.register"))
+    fn register(&self, accelerator: &str, id: &str) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        {
+            linux_shortcuts::register(accelerator, id)
+        }
+        #[cfg(all(target_os = "windows", feature = "shortcuts"))]
+        {
+            windows_shortcuts::register(accelerator, id)
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "shortcuts"),
+            all(target_os = "windows", feature = "shortcuts")
+        )))]
+        {
+            let _ = (accelerator, id);
+            Err(unsupported("shortcuts.register"))
+        }
+    }
+    fn unregister(&self, id: &str) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        {
+            linux_shortcuts::unregister(id)
+        }
+        #[cfg(all(target_os = "windows", feature = "shortcuts"))]
+        {
+            windows_shortcuts::unregister(id)
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "shortcuts"),
+            all(target_os = "windows", feature = "shortcuts")
+        )))]
+        {
+            let _ = id;
+            Err(unsupported("shortcuts.unregister"))
+        }
+    }
+    fn take_activation(&self) -> Result<Option<String>, NativeError> {
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        {
+            linux_shortcuts::take_activation()
+        }
+        #[cfg(all(target_os = "windows", feature = "shortcuts"))]
+        {
+            windows_shortcuts::take_activation()
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "shortcuts"),
+            all(target_os = "windows", feature = "shortcuts")
+        )))]
+        {
+            Err(unsupported("shortcuts.take_activation"))
+        }
+    }
+    fn set_on_activation(&self, on_activation: Option<fn(&str)>) -> Result<(), NativeError> {
+        #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+        {
+            linux_shortcuts::set_on_activation(on_activation)
+        }
+        #[cfg(all(target_os = "windows", feature = "shortcuts"))]
+        {
+            windows_shortcuts::set_on_activation(on_activation)
+        }
+        #[cfg(not(any(
+            all(target_os = "linux", feature = "shortcuts"),
+            all(target_os = "windows", feature = "shortcuts")
+        )))]
+        {
+            let _ = on_activation;
+            Err(unsupported("shortcuts.on_activation"))
+        }
     }
 }
 
@@ -291,6 +603,183 @@ pub fn native() -> StubNative {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shortcut_ops_round_trip() {
+        use super::*;
+        let op: NativeOp = serde_json::from_str(
+            r#"{"op":"shortcutsRegister","accelerator":"Ctrl+K","id":"search"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<NativeOp>(&serde_json::to_string(&op).unwrap()).unwrap(),
+            op
+        );
+        let op: NativeOp =
+            serde_json::from_str(r#"{"op":"shortcutsUnregister","id":"search"}"#).unwrap();
+        assert_eq!(
+            op,
+            NativeOp::ShortcutsUnregister {
+                id: "search".into()
+            }
+        );
+        let op: NativeOp = serde_json::from_str(r#"{"op":"shortcutsTakeActivation"}"#).unwrap();
+        assert_eq!(op, NativeOp::ShortcutsTakeActivation);
+    }
+
+    /// Without the `shortcuts` feature the calls stay `Unsupported`.
+    #[cfg(not(any(
+        all(target_os = "linux", feature = "shortcuts"),
+        all(target_os = "windows", feature = "shortcuts")
+    )))]
+    #[test]
+    fn shortcut_ops_report_unsupported() {
+        use super::*;
+        let op: NativeOp = serde_json::from_str(
+            r#"{"op":"shortcutsRegister","accelerator":"Ctrl+K","id":"search"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            apply_native_op(&op),
+            Err(NativeError::Unsupported {
+                capability: "shortcuts.register",
+                ..
+            })
+        ));
+        let op: NativeOp =
+            serde_json::from_str(r#"{"op":"shortcutsUnregister","id":"search"}"#).unwrap();
+        assert!(matches!(
+            apply_native_op(&op),
+            Err(NativeError::Unsupported {
+                capability: "shortcuts.unregister",
+                ..
+            })
+        ));
+        let op: NativeOp = serde_json::from_str(r#"{"op":"shortcutsTakeActivation"}"#).unwrap();
+        assert!(matches!(
+            apply_native_op(&op),
+            Err(NativeError::Unsupported {
+                capability: "shortcuts.take_activation",
+                ..
+            })
+        ));
+        let err = native().set_on_activation(None).expect_err("no shortcuts");
+        assert!(matches!(
+            err,
+            NativeError::Unsupported {
+                capability: "shortcuts.on_activation",
+                ..
+            }
+        ));
+    }
+
+    #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+    fn assert_headless_shortcut_error() {
+        let err = native()
+            .register("Ctrl+K", "search")
+            .expect_err("no display");
+        assert!(
+            matches!(
+                err,
+                NativeError::Unavailable {
+                    capability: "shortcuts.register",
+                    reason: "no X11 display",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        let via = apply_native_op(&NativeOp::ShortcutsRegister {
+            accelerator: "Ctrl+K".into(),
+            id: "search".into(),
+        })
+        .expect_err("op");
+        assert!(
+            matches!(
+                via,
+                NativeError::Unavailable {
+                    capability: "shortcuts.register",
+                    ..
+                }
+            ),
+            "{via}"
+        );
+        native()
+            .unregister("search")
+            .expect("unregister without a grab");
+        assert_eq!(native().take_activation().unwrap(), None);
+    }
+
+    #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+    fn assert_wayland_only_error() {
+        let err = native()
+            .register("Ctrl+K", "search")
+            .expect_err("wayland only");
+        let msg = err.to_string();
+        assert!(
+            matches!(err, NativeError::Unavailable { .. }) && msg.contains("Wayland"),
+            "{msg}"
+        );
+    }
+
+    /// Default run never grabs a key and never opens displays `:1` or `:2`.
+    /// The child with no `DISPLAY` must return [`NativeError::Unavailable`].
+    /// Set `TEKTO_SHORTCUTS_LIVE=1` to grab and release `Ctrl+Shift+F24`.
+    #[cfg(all(target_os = "linux", feature = "shortcuts"))]
+    #[test]
+    fn shortcuts_missing_display_or_opt_in() {
+        let bad = native().register("Nope", "search").expect_err("bad chord");
+        assert!(matches!(bad, NativeError::Message(_)), "{bad}");
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let reserved = linux_shortcuts::display_is_reserved(&display);
+        assert!(
+            !reserved || std::env::var_os("TEKTO_SHORTCUTS_LIVE").is_none(),
+            "refusing shortcuts on reserved display {display}"
+        );
+        if std::env::var_os("TEKTO_SHORTCUTS_HEADLESS_CHILD").is_some() {
+            assert_headless_shortcut_error();
+            return;
+        }
+        if std::env::var_os("TEKTO_SHORTCUTS_WAYLAND_CHILD").is_some() {
+            assert_wayland_only_error();
+            return;
+        }
+        if std::env::var_os("TEKTO_SHORTCUTS_LIVE").is_some()
+            && !linux_shortcuts::skip_live_shortcuts()
+        {
+            native()
+                .register("Ctrl+Shift+F24", "probe")
+                .expect("live grab");
+            native().unregister("probe").expect("live ungrab");
+            return;
+        }
+        let exe = std::env::current_exe().expect("test exe");
+        let headless = std::process::Command::new(&exe)
+            .args(["tests::shortcuts_missing_display_or_opt_in", "--exact"])
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env("TEKTO_SHORTCUTS_HEADLESS_CHILD", "1")
+            .output()
+            .expect("spawn headless shortcut test");
+        let stdout = String::from_utf8_lossy(&headless.stdout);
+        let stderr = String::from_utf8_lossy(&headless.stderr);
+        assert!(
+            headless.status.success() && stdout.contains("1 passed"),
+            "headless shortcut child failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        let wayland = std::process::Command::new(&exe)
+            .args(["tests::shortcuts_missing_display_or_opt_in", "--exact"])
+            .env_remove("DISPLAY")
+            .env("WAYLAND_DISPLAY", "wayland-0")
+            .env("TEKTO_SHORTCUTS_WAYLAND_CHILD", "1")
+            .output()
+            .expect("spawn wayland shortcut test");
+        let stdout = String::from_utf8_lossy(&wayland.stdout);
+        let stderr = String::from_utf8_lossy(&wayland.stderr);
+        assert!(
+            wayland.status.success() && stdout.contains("1 passed"),
+            "wayland shortcut child failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+    }
     use super::*;
 
     #[cfg(target_os = "linux")]
@@ -479,7 +968,7 @@ mod tests {
             );
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         {
             let err = native().get_text().expect_err("stub");
             assert!(matches!(
@@ -592,7 +1081,23 @@ mod tests {
             );
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "android")]
+        {
+            let err = native().show("Tekto", "body").expect_err("no activity");
+            assert!(
+                matches!(
+                    err,
+                    NativeError::Unavailable {
+                        capability: "notifications.show",
+                        platform: "android",
+                        ..
+                    }
+                ),
+                "{err}"
+            );
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
         {
             let err = native().show("Tekto", "body").expect_err("stub");
             assert!(matches!(
@@ -602,6 +1107,102 @@ mod tests {
                     ..
                 }
             ));
+        }
+    }
+
+    #[test]
+    fn tray_op_json_roundtrip() {
+        let op = NativeOp::TrayShow {
+            label: "Tekto".into(),
+            menu: vec![TrayMenuItem {
+                id: "quit".into(),
+                label: "Quit".into(),
+            }],
+        };
+        let json = serde_json::to_string(&op).unwrap();
+        assert_eq!(
+            json,
+            r#"{"op":"trayShow","label":"Tekto","menu":[{"id":"quit","label":"Quit"}]}"#
+        );
+        assert_eq!(serde_json::from_str::<NativeOp>(&json).unwrap(), op);
+        let hide = r#"{"op":"trayHide"}"#;
+        assert_eq!(
+            serde_json::from_str::<NativeOp>(hide).unwrap(),
+            NativeOp::TrayHide
+        );
+        let set = NativeOp::TraySetLabel {
+            label: "Notes".into(),
+        };
+        let set_json = serde_json::to_string(&set).unwrap();
+        assert_eq!(set_json, r#"{"op":"traySetLabel","label":"Notes"}"#);
+        assert_eq!(
+            serde_json::from_str::<NativeOp>(r#"{"op":"trayTakeClick"}"#).unwrap(),
+            NativeOp::TrayTakeClick
+        );
+    }
+
+    /// Without the `tray` feature the icon stays out of the binary and the
+    /// call is a clear `Unsupported` error.
+    #[cfg(not(any(
+        all(target_os = "linux", feature = "tray"),
+        all(target_os = "windows", feature = "tray")
+    )))]
+    #[test]
+    fn tray_without_feature_is_unsupported() {
+        let err = native()
+            .show_icon(
+                "Tekto",
+                &[TrayMenuItem {
+                    id: "quit".into(),
+                    label: "Quit".into(),
+                }],
+            )
+            .expect_err("no tray");
+        assert!(
+            matches!(
+                err,
+                NativeError::Unsupported {
+                    capability: "tray.show",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        let via = apply_native_op(&NativeOp::TrayHide).expect_err("op");
+        assert!(
+            matches!(
+                via,
+                NativeError::Unsupported {
+                    capability: "tray.hide",
+                    ..
+                }
+            ),
+            "{via}"
+        );
+    }
+
+    /// Opt-in live registration. Off unless `TEKTO_TRAY_LIVE=1`. Never uses
+    /// displays `:1` or `:2`.
+    #[cfg(all(target_os = "linux", feature = "tray"))]
+    #[test]
+    fn tray_live_is_opt_in() {
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let reserved = matches!(display.as_str(), ":1" | ":2" | ":1.0" | ":2.0");
+        assert!(
+            !reserved || std::env::var_os("TEKTO_TRAY_LIVE").is_none(),
+            "refusing tray on reserved display {display}"
+        );
+        if std::env::var_os("TEKTO_TRAY_LIVE").is_some() && !linux_tray::skip_live_tray() {
+            native()
+                .show_icon(
+                    "Tekto",
+                    &[TrayMenuItem {
+                        id: "quit".into(),
+                        label: "Quit".into(),
+                    }],
+                )
+                .expect("live tray");
+            native().hide_icon().expect("hide live tray");
         }
     }
 }

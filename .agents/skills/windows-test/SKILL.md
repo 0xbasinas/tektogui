@@ -34,7 +34,7 @@ From the repo root in PowerShell, follow `docs/windows-handoff.md`:
 - Clipboard text is stored as given. Lone `\n` is not rewritten to CRLF.
 - `set_text` puts by-value `CF_UNICODETEXT` on the clipboard, then closes the clipboard and destroys the owner window before it returns. Confirm the text is still readable after the probe exits.
 - The probe leaves `windows-probe.txt` and `windows-probe.bin` under `%LOCALAPPDATA%\tekto` (or `%USERPROFILE%\AppData\Local\tekto`).
-- Dialogs, tray, and shortcuts stay unsupported. Windows notifications use `Shell_NotifyIconW` but are runtime untested.
+- Windows dialogs are implemented; tray and shortcuts are optional features. Their live Windows checks and Windows notifications remain open.
 - `cargo test` on Windows runs `windows::tests::file_roundtrip_in_isolated_app_data`. Linux CI does not compile that module.
 
 ## Verify

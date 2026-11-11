@@ -76,6 +76,39 @@ impl Drop for DevServer {
 }
 
 #[test]
+fn ipv6_dev_server_cli_flow() {
+    if std::net::TcpListener::bind("[::1]:0").is_err() {
+        eprintln!("IPv6 loopback unavailable; skipping");
+        return;
+    }
+    let dir = unique_dir();
+    let dev_file = dir.join("endpoint.json");
+    let child = Command::new(tekto_bin())
+        .args(["dev", "--headless", "--out"])
+        .arg(dir.join("headless.png"))
+        .env("TEKTO_DEV_FILE", &dev_file)
+        .env("TEKTO_DEV_HOST", "::1")
+        .env("TEKTO_DEV_PORT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let _server = DevServer { child };
+    wait_for_endpoint(&dev_file, Duration::from_secs(30));
+    let inspect = run_tekto(&dev_file, &["inspect"]);
+    assert!(inspect.status.success());
+    assert!(String::from_utf8_lossy(&inspect.stdout).starts_with("http://[::1]:"));
+    let tree = run_tekto(&dev_file, &["tree"]);
+    assert!(
+        tree.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tree.stderr)
+    );
+    assert!(String::from_utf8_lossy(&tree.stdout).contains("Hello from Tekto"));
+}
+
+#[test]
 fn tree_screenshot_and_patch_against_dev_server() {
     let dir = unique_dir();
     let dev_file = dir.join("tekto-dev.json");
@@ -159,6 +192,20 @@ fn tree_screenshot_and_patch_against_dev_server() {
         "screenshot was not a PNG ({} bytes)",
         png.len()
     );
+
+    let out = run_tekto(&dev_file, &["scroll", "1", "--by", "10"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not a scroll container"));
+    let mut mcp = Command::new(tekto_bin())
+        .arg("mcp")
+        .env("TEKTO_DEV_FILE", &dev_file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    mcp.stdin.take().unwrap().write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"ui.scroll\",\"arguments\":{\"id\":1,\"delta\":10}}}\n").unwrap();
+    let response = mcp.wait_with_output().unwrap();
+    assert!(String::from_utf8_lossy(&response.stdout).contains("not a scroll container"));
 
     let body_id = id_for(&tree, "Hello from Tekto");
     let banner_id = id_for(&tree, "banner");

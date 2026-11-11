@@ -1,0 +1,287 @@
+{
+  "version": 1,
+  "description": "JSX components an agent can mount. Kinds match NodeKind and tekto-widgets. Each kind lists every prop the host setProp accepts, because JSX forwards that set on every kind. title, font_size, and justify_center are aliases (see propAliases). Button onClick, text_field onInput and text-node reactive text need a retained QuickJS host; desktop QuickJS delivers button actions and committed field input; web parity is not supported.",
+  "propAliases": {
+    "title": "name",
+    "font_size": "fontSize",
+    "justify_center": "justifyCenter"
+  },
+  "components": [
+    {
+      "name": "window",
+      "description": "Root window. Defaults to page fill, padding, and gap, like tekto::window.",
+      "props": [
+        {"name": "checked", "type": "boolean"},
+        {"name": "name", "type": "string", "description": "Accessible name. JSX title is an alias."},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string", "description": "#rrggbb or #rrggbbaa."},
+        {"name": "color", "type": "string", "description": "#rrggbb or #rrggbbaa."},
+        {"name": "fontSize", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ]
+    },
+    {
+      "name": "group",
+      "description": "Layout box with no paint of its own.",
+      "props": [
+        {"name": "checked", "type": "boolean"},
+        {"name": "name", "type": "string"},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ]
+    },
+    {
+      "name": "rect",
+      "description": "Filled rectangle. The Rust banner() helper is a rect named banner, not a separate kind.",
+      "props": [
+        {"name": "checked", "type": "boolean"},
+        {"name": "name", "type": "string"},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ]
+    },
+    {
+      "name": "text",
+      "description": "Text leaf. A string child becomes the text. The text prop may be a function on a retained QuickJS host.",
+      "props": [
+        {"name": "checked", "type": "boolean"},
+        {"name": "name", "type": "string"},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ]
+    },
+    {
+      "name": "button",
+      "jsxProps": [{"name": "onClick", "type": "function", "description": "No-argument callback on a retained QuickJS host."}],
+      "description": "Labeled button. Defaults to the same fill, color, font size, and padding as Rust button().",
+      "props": [
+        {"name": "checked", "type": "boolean"},
+        {"name": "disabled", "type": "boolean"},
+        {"name": "name", "type": "string", "description": "Accessible label. Defaults from the text child when unset."},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "Agent click delivers the button callback in desktop QuickJS; web parity is not supported."}
+      ]
+    },
+    {
+      "name": "checkbox",
+      "description": "Labeled checkbox with an initial checked state.",
+      "props": [
+        {
+          "name": "disabled",
+          "type": "boolean"
+        },
+        {
+          "name": "checked",
+          "type": "boolean"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "description": "Accessible label. Defaults from the text child when unset."
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "description": "Alias of name."
+        },
+        {
+          "name": "text",
+          "type": "string"
+        },
+        {
+          "name": "width",
+          "type": "number"
+        },
+        {
+          "name": "height",
+          "type": "number"
+        },
+        {
+          "name": "fill",
+          "type": "string"
+        },
+        {
+          "name": "color",
+          "type": "string"
+        },
+        {
+          "name": "fontSize",
+          "type": "number"
+        },
+        {
+          "name": "padding",
+          "type": "number"
+        },
+        {
+          "name": "gap",
+          "type": "number"
+        },
+        {
+          "name": "column",
+          "type": "boolean"
+        },
+        {
+          "name": "justifyCenter",
+          "type": "boolean"
+        }
+      ],
+      "events": [
+        {
+          "name": "click",
+          "description": "Toggles the checkbox."
+        }
+      ]
+    },
+    {
+      "name": "text_field",
+      "jsxProps": [{"name": "onInput", "type": "function", "description": "Receives the committed value on a retained QuickJS host."}],
+      "description": "Single-line field with the same style defaults as Rust text_field(). name is the label. text is the committed value.",
+      "props": [
+        {"name": "checked", "type": "boolean"},
+        {"name": "disabled", "type": "boolean"},
+        {"name": "name", "type": "string", "description": "Accessible label."},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "description": "Committed value."},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "Focuses the field, moves the caret to the end, and clears a preedit."},
+        {"name": "type", "description": "ui.type inserts plain characters at the caret. Not an IME and not Backspace."},
+        {"name": "key", "description": "Desktop Backspace and printable keys on the focused field."},
+        {"name": "ime", "description": "Desktop IME preedit and commit. AccessKit value includes the preedit."}
+      ]
+    },
+    {
+      "name": "scroll",
+      "description": "Vertical viewport. Children keep their height. Paint is clipped. scroll_y shifts them.",
+      "props": [
+        {"name": "checked", "type": "boolean"},
+        {"name": "name", "type": "string"},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."},
+        {"name": "scroll", "description": "Wheel (48px per notch) and pointer drag change scroll_y. Clamped, no rubber-band."}
+      ]
+    },
+    {
+      "name": "list",
+      "description": "Column of list_item rows. JSX does not add a scroll parent; wrap the list in scroll when it should clip. The Rust list() helper may insert that scroll.",
+      "props": [
+        {"name": "checked", "type": "boolean"},
+        {"name": "name", "type": "string"},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number", "description": "Layout height. The Rust helper also stores a viewport height separately when it wraps the list in scroll."},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ]
+    },
+    {
+      "name": "list_item",
+      "description": "One list row. name and text are the label.",
+      "props": [
+        {"name": "checked", "type": "boolean"},
+        {"name": "name", "type": "string"},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "Pointer click. Agents use ui.click with the row id."}
+      ]
+    }
+  ]
+}

@@ -354,3 +354,158 @@ fn keyboard_text_during_preedit_does_not_commit_and_focus_clears_it() {
     assert_eq!(ak.value.as_deref(), Some("Hi"));
     assert_eq!(dump.focus, button.raw());
 }
+
+#[test]
+fn empty_field_hint_is_visible_without_becoming_a_value() {
+    let mut tree = tekto::Tree::new();
+    let root = tekto::window(&mut tree, "Fields", 320.0, 200.0).unwrap();
+    let empty = tekto::text_field(&mut tree, root, "Title", "").unwrap();
+    let filled = tekto::text_field(&mut tree, root, "Notes", "Milk").unwrap();
+    layout_tree(&mut tree, 320.0, 200.0);
+    let dir = shot_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let image =
+        render_headless_to_file(&tree, 320, 200, Some(&dir.join("text-field-hints.png"))).unwrap();
+    let dump = accesskit_dump(&tree).unwrap();
+    for (id, label, value) in [(empty, "Title", ""), (filled, "Notes", "Milk")] {
+        let node = tree.node_dump(id).unwrap();
+        assert_eq!(node.name.as_deref(), Some(label));
+        assert_eq!(node.text.as_deref(), Some(value));
+        let accessible = dump.nodes.iter().find(|n| n.id == id.raw()).unwrap();
+        assert_eq!(accessible.role, "TextInput");
+        assert_eq!(accessible.label.as_deref(), Some(label));
+        assert_eq!(accessible.value.as_deref(), Some(value));
+    }
+    // With fixed bounds, removing the label must remove visible pixels.
+    tree.get_mut(empty).unwrap().name = None;
+    let without_hint = render_headless_to_file(&tree, 320, 200, None).unwrap();
+    assert_ne!(image, without_hint);
+    tree.get_mut(empty).unwrap().name = Some("Title".into());
+    tree.patch(
+        empty,
+        tekto::NodePatch {
+            text: Some("Typed".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let with_value = render_headless_to_file(&tree, 320, 200, None).unwrap();
+    tree.get_mut(empty).unwrap().name = Some("Different label".into());
+    assert_eq!(
+        with_value,
+        render_headless_to_file(&tree, 320, 200, None).unwrap()
+    );
+    let dump = accesskit_dump(&tree).unwrap();
+    let node = dump.nodes.iter().find(|n| n.id == empty.raw()).unwrap();
+    assert_eq!(node.label.as_deref(), Some("Different label"));
+    assert_eq!(node.value.as_deref(), Some("Typed"));
+}
+
+#[test]
+fn jsx_field_ops_render_the_same_hint_as_rust() {
+    use tekto_js::{apply_ops, HostOp};
+    let mut rust_tree = tekto::Tree::new();
+    let rust_root = tekto::window(&mut rust_tree, "Fields", 320.0, 120.0).unwrap();
+    let rust_field = tekto::text_field(&mut rust_tree, rust_root, "Title", "").unwrap();
+    let mut jsx_tree = tekto::Tree::new();
+    let jsx_root = tekto::window(&mut jsx_tree, "Fields", 320.0, 120.0).unwrap();
+    let field_id = jsx_root.raw() + 1;
+    apply_ops(
+        &mut jsx_tree,
+        &[
+            HostOp::Create {
+                kind: "text_field".into(),
+            },
+            HostOp::SetProp {
+                id: field_id,
+                key: "name".into(),
+                value: "Title".into(),
+            },
+            HostOp::Append {
+                parent: jsx_root.raw(),
+                child: field_id,
+            },
+        ],
+    )
+    .unwrap();
+    let jsx_field = tekto::NodeId::from_raw(field_id);
+    let style = rust_tree.get(rust_field).unwrap();
+    let node = jsx_tree.get_mut(jsx_field).unwrap();
+    node.fill = style.fill;
+    node.color = style.color;
+    node.font_size = style.font_size;
+    node.layout = style.layout;
+    layout_tree(&mut rust_tree, 320.0, 120.0);
+    layout_tree(&mut jsx_tree, 320.0, 120.0);
+    assert_eq!(
+        render_headless_to_file(&rust_tree, 320, 120, None).unwrap(),
+        render_headless_to_file(&jsx_tree, 320, 120, None).unwrap()
+    );
+    let dump = accesskit_dump(&jsx_tree).unwrap();
+    let field = dump.nodes.iter().find(|n| n.id == field_id).unwrap();
+    assert_eq!(field.label.as_deref(), Some("Title"));
+    assert_eq!(field.value.as_deref(), Some(""));
+}
+
+#[test]
+fn checkbox_headless() {
+    use std::sync::{Arc, Mutex};
+    use tekto::{checkbox, window, NodePatch, Tree};
+    use tekto_tree::{route_named_key, NamedActionKey, TreeEvent};
+    let mut tree = Tree::new();
+    let root = window(&mut tree, "Checkbox", 240.0, 100.0).unwrap();
+    let id = checkbox(&mut tree, root, "Remember", false).unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    tree.set_event_handler(move |_, event| captured.lock().unwrap().push(event));
+    layout_tree(&mut tree, 240.0, 100.0);
+    assert!(tree.to_pretty_text().contains("checked=false"));
+    let dump = accesskit_dump(&tree).unwrap();
+    let node = dump.nodes.iter().find(|n| n.id == id.raw()).unwrap();
+    assert_eq!(node.role, "CheckBox");
+    assert_eq!(node.toggled, Some(false));
+    let png = render_headless_to_file(&tree, 240, 100, None).unwrap();
+    compare_png(
+        &png,
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots/checkbox.png"),
+    );
+    assert!(tree.traverse_focus(false));
+    assert_eq!(tree.focus, Some(id));
+    let bounds = tree.get(id).unwrap().bounds;
+    assert_eq!(tree.click_at(bounds.x + 5.0, bounds.y + 5.0), Some(id));
+    assert!(tree.get(id).unwrap().checked);
+    assert_eq!(
+        accesskit_dump(&tree)
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == id.raw())
+            .unwrap()
+            .toggled,
+        Some(true)
+    );
+    tree.click(id).unwrap();
+    assert!(!tree.get(id).unwrap().checked);
+    let (_, action) = route_named_key(&mut tree, NamedActionKey::Space, false);
+    tree.click(action.unwrap()).unwrap();
+    assert!(tree.get(id).unwrap().checked);
+    assert_eq!(
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| **e == TreeEvent::Changed(id))
+            .count(),
+        3
+    );
+    tree.patch(
+        id,
+        NodePatch {
+            disabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(tree.click(id).is_err());
+    assert!(!tree.traverse_focus(false));
+}

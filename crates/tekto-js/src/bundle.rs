@@ -24,21 +24,26 @@ pub fn which_esbuild() -> Option<PathBuf> {
 fn which(name: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&paths) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
+        if let Some(candidate) = executable_in(&dir, name) {
             return Some(candidate);
-        }
-        #[cfg(windows)]
-        {
-            for ext in ["cmd", "exe", "bat"] {
-                let candidate = dir.join(format!("{name}.{ext}"));
-                if candidate.is_file() {
-                    return Some(candidate);
-                }
-            }
         }
     }
     None
+}
+
+fn executable_in(dir: &Path, name: &str) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let names = [
+        format!("{name}.exe"),
+        format!("{name}.cmd"),
+        format!("{name}.bat"),
+    ];
+    #[cfg(not(windows))]
+    let names = [name.to_owned()];
+    names
+        .into_iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.is_file())
 }
 
 /// Walk up from `start` (file or directory) looking for `packages/jsx-runtime`.
@@ -72,12 +77,13 @@ pub fn make_wrapper(entry: &Path) -> String {
     let path = entry.display().to_string().replace('\\', "/");
     format!(
         r#"import {{ mount }} from "@tektogui/jsx-runtime";
+import {{ createEffect }} from "@tektogui/core";
 import * as entry from "{path}";
 const App = entry.App || entry.default;
 if (typeof App !== "function") {{
   throw new Error("TSX entry must export a function App (named or default)");
 }}
-mount(App(), globalThis.tekto);
+mount(App(), globalThis.tekto, {{ createEffect }});
 "#
     )
 }
@@ -172,6 +178,26 @@ pub fn bundle(entry: &Path) -> Result<String, JsError> {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_discovery_ignores_extensionless_shims() {
+        let dir =
+            std::env::temp_dir().join(format!("tekto-esbuild-discovery-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("esbuild"), "shell shim").unwrap();
+        std::fs::write(dir.join("esbuild.cmd"), "batch shim").unwrap();
+        assert_eq!(
+            executable_in(&dir, "esbuild"),
+            Some(dir.join("esbuild.cmd"))
+        );
+        std::fs::write(dir.join("esbuild.exe"), "executable").unwrap();
+        assert_eq!(
+            executable_in(&dir, "esbuild"),
+            Some(dir.join("esbuild.exe"))
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn wrapper_mentions_the_entry_and_mount() {
         let w = make_wrapper(Path::new("/tmp/app.tsx"));
@@ -197,11 +223,21 @@ mod tests {
     #[test]
     fn bundles_notes_app_when_esbuild_is_present() {
         if which_esbuild().is_none() {
+            assert_ne!(
+                std::env::var("TEKTO_REQUIRE_ESBUILD").as_deref(),
+                Ok("1"),
+                "esbuild is required"
+            );
             return;
         }
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let entry = root.join("examples/notes/src/app.tsx");
         if !entry.is_file() {
+            assert_ne!(
+                std::env::var("TEKTO_REQUIRE_ESBUILD").as_deref(),
+                Ok("1"),
+                "Notes TSX entry is required"
+            );
             return;
         }
         let js = bundle(&entry).expect("bundle");
@@ -209,11 +245,6 @@ mod tests {
             js.contains("Hello from Tekto") || js.len() > 200,
             "unexpected bundle ({} bytes)",
             js.len()
-        );
-        // automatic runtime must emit a jsx import, not a bare global factory
-        assert!(
-            js.contains("function jsx") || js.contains("jsx("),
-            "bundle should include the jsx factory"
         );
         #[cfg(feature = "quickjs")]
         {

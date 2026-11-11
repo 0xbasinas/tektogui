@@ -26,6 +26,14 @@ Windowed, on Linux or Windows:
 cargo run -p notes
 ```
 
+GPU paint (wgpu / Vello, off by default, not used for headless PNGs):
+
+```bash
+cargo run -p notes --features gpu
+```
+
+If the machine has no usable adapter, that window prints a line and paints with the CPU renderer instead. Headless `--out` screenshots stay on the CPU path either way.
+
 
 The window layouts in logical pixels and paints at the current scale factor (HiDPI text stays sharp). Resize relayouts the tree. Closing the window shuts down the dev server (the `tekto-dev.json` endpoint file is removed).
 
@@ -42,7 +50,7 @@ cargo run -p tekto-cli -- patch 4 --text "Hello from an agent"
 
 ## Start a new app
 
-From the tektogui repo (or any folder, if `TEKTO_ROOT` points at it):
+From the tektogui checkout (run it with the checkout as your current folder; `cargo run -p` needs the workspace manifest, and `TEKTO_ROOT` does not change that). To scaffold from another folder, see the built-binary example below:
 
 ```bash
 cargo run -p tekto-cli -- new hello
@@ -52,7 +60,29 @@ cargo run -- --headless --out hello.png
 
 That writes a compiling Rust app, a `src/app.tsx` sketch, and a README. The app depends on this checkout by path, so you only need a Rust toolchain.
 
-`npm create tektogui hello` (or `npx create-tektogui hello`) does the same thing by calling `tekto new`.
+`create-tektogui` is not a standalone installer. It uses `TEKTO_ROOT` when set, or finds the checkout from the installed package location. It runs the checkout's Rust CLI with the workspace manifest and creates the app in your current folder. Set `TEKTO_ROOT` to a complete checkout to run a locally installed package from another folder; relative paths are resolved from that folder. The name must be one directory name, not a path. Run `create-tektogui --help` for usage.
+
+From the checkout:
+
+```bash
+node packages/create-tektogui/src/index.js hello
+```
+
+The package is not published. `npm create tektogui` and `npx create-tektogui` from the registry are unsupported; a local tarball still needs a checkout and Rust toolchain.
+
+To scaffold somewhere else, build the CLI once and call it with `TEKTO_ROOT`:
+
+```bash
+cd /path/to/tektogui
+cargo build -p tekto-cli
+# Resolve the binary path here, before the next cd. A relative CARGO_TARGET_DIR is relative to this folder.
+TEKTO_BIN="$(realpath -m "${CARGO_TARGET_DIR:-target}")/debug/tekto"
+TEKTO_ROOT="$PWD"
+cd /some/other/folder
+TEKTO_ROOT="$TEKTO_ROOT" "$TEKTO_BIN" new hello
+```
+
+This assumes the default Cargo target layout. If you set `build.target-dir` in a Cargo config file instead of `CARGO_TARGET_DIR`, use the path Cargo uses for that setting. This was not run here.
 
 ## Write a tiny Rust app
 
@@ -66,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-You can also build a tree yourself with `tekto::window`, `tekto::banner`, `tekto::text`, `tekto::button`, `tekto::text_field`, `tekto::scroll`, and `tekto::list`. `list(&mut tree, parent, width, viewport_height, rows)` stacks variable-height `ListRow`s. Each row keeps a stable id. When the rows are taller than `viewport_height`, the list sits in a `scroll` container; a shorter list does not. Rows are not virtualized. JSX is `<list><list_item height={80}>Tall</list_item></list>` inside `<scroll>` when the app wants a viewport (the helper decides that in Rust; JSX does not). `scroll(&mut tree, parent, width, height)` clips its children to that viewport. `Tree::scroll_by` / `set_scroll_y` move them in logical pixels (clamped, no bounce). On the desktop, the wheel and a pointer drag do the same. `button(&mut tree, parent, "Save")` returns the button node id for clicks and accessibility. `text_field(&mut tree, parent, "Title", "Hello")` is a single-line field: `name` is the label, `text` is the value (read and set it with `ui.patch`). JSX also accepts `<button>Save</button>` and `<text_field name="Title">Hello</text_field>`; set style properties explicitly. The field takes printable keys and Backspace on the desktop when it is focused. Those keys are ignored while a preedit is showing. Linux and Windows also take winit IME preedit and commit (accents, and CJK when an input method is running). The AccessKit value includes the preedit until it is committed or focus leaves the field. A commit echo is dropped only in that event burst. Still missing: a candidate-window UI of our own (the OS draws it; we only pass the caret spot), selection, copy and paste, arrow keys, a Windows runtime check, and the Android soft keyboard.
+You can also build a tree yourself with `tekto::window`, `tekto::banner`, `tekto::text`, `tekto::button`, `tekto::text_field`, `tekto::scroll`, and `tekto::list`. `list(&mut tree, parent, width, viewport_height, rows)` stacks variable-height `ListRow`s. Each row keeps a stable id. When the rows are taller than `viewport_height`, the list sits in a `scroll` container; a shorter list does not. Layout lays out and paints the visible rows plus a 64px overscan. A jump in `scroll_y` stays on the same part of the full list. JSX is `<list><list_item height={80}>Tall</list_item></list>` inside `<scroll>` when the app wants a viewport (the helper decides that in Rust; JSX does not). `scroll(&mut tree, parent, width, height)` clips its children to that viewport. `Tree::scroll_by` / `set_scroll_y` move them in logical pixels (clamped, no bounce). On the desktop, the wheel, a pointer drag, and a touch do the same. A fast touch lift coasts and stops at the edge; a new press stops that coast. There is no bounce. `button(&mut tree, parent, "Save")` returns the button node id for clicks and accessibility. `text_field(&mut tree, parent, "Title", "Hello")` is a single-line field: `name` is the label, `text` is the value (read and set it with `ui.patch`). When the value and IME preedit are empty, the field draws its name quietly as a hint; the name is not stored as a value. JSX also accepts `<window>`, `<button>Save</button>`, and `<text_field name="Title">Hello</text_field>`; those three get the same style defaults as the Rust helpers. Explicit style props override the defaults. The field takes printable keys and Backspace on the desktop when it is focused. Those keys are ignored while a preedit is showing. Linux and Windows also take winit IME preedit and commit (accents, and CJK when an input method is running). The AccessKit value includes the preedit until it is committed or focus leaves the field. A commit echo is dropped only in that event burst. Desktop pointer clicks place the caret at the nearest painted character. Agent `ui.click` and `Tree::click(id)` place it at the end. The WASM/browser `click_at` path is not covered by this change. Still missing: a candidate-window UI of our own (the OS draws it; we only pass the caret spot), selection, copy and paste, a Windows runtime check, and the Android soft keyboard.
 
 ## TypeScript
 
@@ -77,6 +107,10 @@ cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx
 ```
 
 Saving the `.tsx` rebuilds the JS bundle and swaps it into the running QuickJS runtime. The Rust core stays up. JS remounts from source, so signal state resets. The same entry can run on a device or AVD with `cargo run -p tekto-cli -- dev --js examples/notes/src/app.tsx --android` (the APK is built with `-F quickjs`; the host CLI does not need that feature).
+
+For an interactive desktop TSX app, run the separate [counter example](tsx-events.md)
+with QuickJS and esbuild. That guide covers tree inspection, clicks, keyboard
+activation, reload, and the current web limitations.
 
 ## Tests
 
@@ -121,10 +155,34 @@ A script can create nodes with `tekto.create` / `tekto.setText` / `tekto.append`
   rustup target add aarch64-linux-android x86_64-linux-android
   cargo check -p tekto --target aarch64-linux-android --no-default-features --features cpu
   cargo check -p notes-android --target aarch64-linux-android
+  # Optional GPU compile (still CPU at runtime unless TEKTO_ANDROID_GPU=1):
+  cargo check -p notes-android --target aarch64-linux-android --features gpu
   cargo apk2 build -p notes-android
   # or: cargo run -p tekto-cli -- build --target android
   # run on a device/AVD: cargo run -p tekto-cli -- dev --android
   ```
 
   SDK root is `~/Android/Sdk` (or `$ANDROID_HOME`). This repo uses NDK `27.1.12297006`. `android_main` starts the windowed Notes app; the surface is created on resume and dropped on suspend. Details: [examples/notes-android/README.md](../examples/notes-android/README.md) and [the android-build-and-run skill](../.agents/skills/android-build-and-run/SKILL.md).
-- Web: not built yet; the platform and JS layers are shaped so a WASM + canvas / WebGPU backend can plug in.
+- Web: the core builds to WASM. The host blits the CPU PNG to a canvas (`packages/wasm/notes.html`). Check and smoke:
+
+  ```bash
+  rustup target add wasm32-unknown-unknown
+  cargo check -p tekto-wasm --target wasm32-unknown-unknown
+  cargo check -p tekto --target wasm32-unknown-unknown --no-default-features --features cpu,js
+  cargo build -p tekto-wasm --target wasm32-unknown-unknown
+  node --test packages/wasm/test.js
+  ```
+
+  One command serves the Notes TSX sketch in the browser (esbuild on `PATH`, no QuickJS):
+
+  ```bash
+  node packages/wasm/dev.js
+  ```
+
+  Open the printed URL. Saving `examples/notes/src/app.tsx` reloads the page. `POST /patch` on that server is live `ui.patch`. Set `TEKTO_DEV_URL` to a desktop dev server to forward writeback. A Node check of the same sketch is `node --test packages/wasm/tsx-test.js`.
+
+  Commands and the optional `packages/wasm/smoke.html` and `gpu.html` pages are in [the web-build skill](../.agents/skills/web-build/SKILL.md). Do not enable `quickjs` or `gpu` for the default wasm check. `gpu` is a separate, large wasm build.
+
+Buttons and text fields can be disabled with `tree.patch(id, NodePatch { disabled: Some(true), ..Default::default() })` in Rust or `disabled={true}` in TSX. Disabling a focused control returns focus to the window root and discards any unfinished text composition. Set `disabled` to `false` to enable it again.
+
+Use `checkbox(&mut tree, parent, "Remember", false)` or `<checkbox checked={false}>Remember</checkbox>` for a labeled toggle. Rust apps receive `TreeEvent::Changed(id)` after a user toggles it and can read `node.checked`.
