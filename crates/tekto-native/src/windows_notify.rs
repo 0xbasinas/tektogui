@@ -1,153 +1,148 @@
-//! Windows Shell_NotifyIconW balloon notifications (Windows Vista and later).
+//! Windows toast notifications (WinRT `ToastNotificationManager`).
+//!
+//! Toasts need an AppUserModelID. We set one for the process and register it
+//! under `HKCU\Software\Classes\AppUserModelId` so Windows can show a name and
+//! so Do not disturb priority rules have a stable app identity to match.
 use crate::NativeError;
-use std::ffi::c_void;
-use std::ptr;
-use std::sync::mpsc;
-use std::time::Duration;
+use windows::core::{w, HSTRING, PCWSTR};
+use windows::Data::Xml::Dom::XmlDocument;
+use windows::Win32::Foundation::ERROR_SUCCESS;
+use windows::Win32::System::Registry::{
+    RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_WRITE,
+    REG_OPTION_NON_VOLATILE, REG_SZ,
+};
+use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
 
-type Handle = *mut c_void;
+/// Stable id for apps built on Tekto. Priority rules match on this.
+const APP_ID: &str = "Tekto.App";
 
-#[repr(C)]
-struct Guid {
-    data1: u32,
-    data2: u16,
-    data3: u16,
-    data4: [u8; 8],
-}
-
-#[repr(C)]
-struct NotifyIconData {
-    size: u32,
-    window: Handle,
-    id: u32,
-    flags: u32,
-    callback: u32,
-    icon: Handle,
-    tip: [u16; 128],
-    state: u32,
-    state_mask: u32,
-    info: [u16; 256],
-    timeout_or_version: u32,
-    info_title: [u16; 64],
-    info_flags: u32,
-    guid: Guid,
-    balloon_icon: Handle,
-}
-
-#[link(name = "user32")]
-extern "system" {
-    fn CreateWindowExW(
-        ex_style: u32,
-        class: *const u16,
-        name: *const u16,
-        style: u32,
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
-        parent: Handle,
-        menu: Handle,
-        instance: Handle,
-        param: Handle,
-    ) -> Handle;
-    fn DestroyWindow(window: Handle) -> i32;
-    fn LoadIconW(instance: Handle, name: *const u16) -> Handle;
-}
-#[link(name = "shell32")]
-extern "system" {
-    fn Shell_NotifyIconW(message: u32, data: *const NotifyIconData) -> i32;
-}
-
-fn text<const N: usize>(value: &str, field: &str) -> Result<[u16; N], NativeError> {
-    let encoded: Vec<u16> = value.encode_utf16().collect();
-    if encoded.contains(&0) || encoded.len() >= N {
-        return Err(NativeError::Message(format!(
-            "notifications.show: {field} must contain no NUL and fit in {} UTF-16 units",
-            N - 1
-        )));
-    }
-    let mut result = [0; N];
-    result[..encoded.len()].copy_from_slice(&encoded);
-    Ok(result)
-}
-
-fn unavailable() -> NativeError {
+fn unavailable(reason: &'static str) -> NativeError {
     NativeError::Unavailable {
         capability: "notifications.show",
         platform: "windows",
-        reason: "Windows shell notification area is unavailable",
+        reason,
     }
 }
 
-pub(crate) fn show(title: &str, body: &str) -> Result<(), NativeError> {
-    let title = text(title, "title")?;
-    let body = text(body, "body")?;
-    let (sender, receiver) = mpsc::sync_channel(1);
-    std::thread::Builder::new()
-        .name("tekto-notification".into())
-        .spawn(move || {
-            // A hidden top-level window owns the icon until the balloon has time to display.
-            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
-            // SAFETY: pointers are valid for the calls; the window is destroyed on this thread.
-            unsafe {
-                let window = CreateWindowExW(
-                    0,
-                    class.as_ptr(),
-                    class.as_ptr(),
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    ptr::null_mut(),
-                    ptr::null_mut(),
-                    ptr::null_mut(),
-                    ptr::null_mut(),
-                );
-                if window.is_null() {
-                    let _ = sender.send(false);
-                    return;
-                }
-                let mut data: NotifyIconData = std::mem::zeroed();
-                data.size = std::mem::size_of::<NotifyIconData>() as u32;
-                data.window = window;
-                data.id = 1;
-                data.icon = LoadIconW(ptr::null_mut(), 32512usize as *const u16); // IDI_APPLICATION
-                if data.icon.is_null() {
-                    let _ = sender.send(false);
-                    DestroyWindow(window);
-                    return;
-                }
-                data.flags = 0x12; // NIF_ICON | NIF_INFO
-                data.info = body;
-                data.info_title = title;
-                data.info_flags = 1; // NIIF_INFO
-                let added = Shell_NotifyIconW(0, &data) != 0; // NIM_ADD
-                let _ = sender.send(added);
-                if added {
-                    std::thread::sleep(Duration::from_secs(30));
-                    Shell_NotifyIconW(2, &data); // NIM_DELETE
-                }
-                DestroyWindow(window);
-            }
-        })
-        .map_err(|_| unavailable())?;
-    if receiver.recv().unwrap_or(false) {
-        Ok(())
-    } else {
-        Err(unavailable())
+fn escape(value: &str) -> Result<String, NativeError> {
+    if value.contains('\0') {
+        return Err(NativeError::Message(
+            "notifications.show: text must contain no NUL".into(),
+        ));
     }
+    Ok(value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;"))
+}
+
+fn toast_xml(title: &str, body: &str) -> Result<String, NativeError> {
+    Ok(format!(
+        "<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>",
+        escape(title)?,
+        escape(body)?
+    ))
+}
+
+fn register_app_id() -> bool {
+    let mut key = HKEY::default();
+    let path = HSTRING::from(format!(r"Software\Classes\AppUserModelId\{APP_ID}"));
+    // SAFETY: all pointers are valid for the calls; the key is closed below.
+    unsafe {
+        if RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            &path,
+            None,
+            PCWSTR::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            None,
+            &mut key,
+            None,
+        ) != ERROR_SUCCESS
+        {
+            return false;
+        }
+        let name: Vec<u16> = "Tekto".encode_utf16().chain(Some(0)).collect();
+        let bytes = std::slice::from_raw_parts(name.as_ptr().cast::<u8>(), name.len() * 2);
+        let ok = RegSetValueExW(key, w!("DisplayName"), None, REG_SZ, Some(bytes)) == ERROR_SUCCESS;
+        let _ = RegCloseKey(key);
+        ok
+    }
+}
+
+/// Create `Start Menu\Programs\Tekto.lnk` carrying the app id, if missing.
+/// Windows lists an unpackaged app in Notification settings (and so allows a
+/// priority rule) only when a shortcut with its AppUserModelID exists.
+fn ensure_shortcut() -> windows::core::Result<()> {
+    use windows::core::Interface;
+    use windows::core::GUID;
+    use windows::Win32::Foundation::PROPERTYKEY;
+    use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+    const PKEY_APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0x9F4C2855_9F79_4B39_A8D0_E1D42DE1D5F3),
+        pid: 5,
+    };
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+
+    let appdata = std::env::var_os("APPDATA").ok_or_else(windows::core::Error::empty)?;
+    let lnk =
+        std::path::Path::new(&appdata).join(r"Microsoft\Windows\Start Menu\Programs\Tekto.lnk");
+    if lnk.exists() {
+        return Ok(());
+    }
+    let exe = std::env::current_exe().map_err(|_| windows::core::Error::empty())?;
+    // SAFETY: COM calls with valid arguments; interfaces drop before return.
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+        link.SetPath(&HSTRING::from(exe.as_os_str()))?;
+        let store: IPropertyStore = link.cast()?;
+        store.SetValue(&PKEY_APP_USER_MODEL_ID, &PROPVARIANT::from(APP_ID))?;
+        store.Commit()?;
+        let file: IPersistFile = link.cast()?;
+        file.Save(&HSTRING::from(lnk.as_os_str()), true)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn show(title: &str, body: &str) -> Result<(), NativeError> {
+    let xml = toast_xml(title, body)?;
+    if !register_app_id() {
+        return Err(unavailable("could not register the app id"));
+    }
+    ensure_shortcut().map_err(|_| unavailable("could not create the Start Menu shortcut"))?;
+    // SAFETY: plain call with a valid string.
+    unsafe { SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(APP_ID)) }
+        .map_err(|_| unavailable("could not set the app id"))?;
+    let doc = XmlDocument::new().map_err(|_| unavailable("XML unavailable"))?;
+    doc.LoadXml(&HSTRING::from(xml))
+        .map_err(|_| unavailable("invalid toast XML"))?;
+    let toast = ToastNotification::CreateToastNotification(&doc)
+        .map_err(|_| unavailable("toast creation failed"))?;
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))
+        .map_err(|_| unavailable("toast notifier unavailable"))?;
+    notifier
+        .Show(&toast)
+        .map_err(|_| unavailable("Windows refused the toast"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::text;
+    use super::{escape, toast_xml};
 
     #[test]
-    fn notification_text_checks_utf16_limits_and_nul() {
-        assert!(text::<4>("abc", "title").is_ok());
-        assert!(text::<4>("abcd", "title").is_err());
-        assert!(text::<4>("a\0b", "title").is_err());
-        assert!(text::<4>("😀😀", "title").is_err());
+    fn toast_text_is_escaped_and_rejects_nul() {
+        assert_eq!(escape("a<b&\"'").unwrap(), "a&lt;b&amp;&quot;&apos;");
+        assert!(escape("a\0b").is_err());
+        assert!(toast_xml("t", "<x>").unwrap().contains("&lt;x&gt;"));
     }
 }
