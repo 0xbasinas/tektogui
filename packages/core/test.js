@@ -100,3 +100,12 @@ test("keyed signals restore compatible JSON and report changes", async () => {
   assert.deepEqual(JSON.parse(globalThis.__tektoSnapshotSignals()), { count: 7, old: 42, fresh: "new" });
   delete globalThis.__tektoReloadState;
 });
+
+test("keyed signals reject sparse arrays without changing their value", () => {
+  assert.throws(() => createSignal([, 1], { key: "sparse-initial" }), /sparse arrays/);
+  const [get, set] = createSignal({ rows: [1, 2] }, { key: "sparse-update" });
+  assert.throws(() => set({ rows: [1, , 3] }), /sparse arrays/);
+  assert.deepEqual(get(), { rows: [1, 2] });
+  set({ rows: [1, null, 3] });
+  assert.deepEqual(get(), { rows: [1, null, 3] });
+});
