@@ -9,7 +9,7 @@
   "components": [
     {
       "name": "window",
-      "description": "Root window. Rust helper tekto::window sets page fill, padding, and gap. JSX does not.",
+      "description": "Root window. Defaults to page fill, padding, and gap, like tekto::window.",
       "props": [
         {"name": "name", "type": "string", "description": "Accessible name. JSX title is an alias."},
         {"name": "title", "type": "string", "description": "Alias of name."},
@@ -94,7 +94,7 @@
     {
       "name": "button",
       "jsxProps": [{"name": "onClick", "type": "function", "description": "No-argument callback on a retained QuickJS host."}],
-      "description": "Labeled button. Rust button() sets fill, color, font size, and padding. JSX does not, so set those props when the sketch should match.",
+      "description": "Labeled button. Defaults to the same fill, color, font size, and padding as Rust button().",
       "props": [
         {"name": "name", "type": "string", "description": "Accessible label. Defaults from the text child when unset."},
         {"name": "title", "type": "string", "description": "Alias of name."},
@@ -115,7 +115,7 @@
     },
     {
       "name": "text_field",
-      "description": "Single-line field. name is the label. text is the committed value.",
+      "description": "Single-line field with the same style defaults as Rust text_field(). name is the label. text is the committed value.",
       "props": [
         {"name": "name", "type": "string", "description": "Accessible label."},
         {"name": "title", "type": "string", "description": "Alias of name."},

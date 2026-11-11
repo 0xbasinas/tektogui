@@ -327,6 +327,13 @@ impl LayoutStyle {
     }
 }
 
+/// Default window padding.
+pub const PAGE_PADDING: f32 = 24.0;
+/// Default space between window children.
+pub const STACK_GAP: f32 = 20.0;
+/// Default control text size.
+pub const BODY_SIZE: f32 = 20.0;
+
 /// A node in the scene tree.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Node {
@@ -442,6 +449,31 @@ impl Node {
             list_pad_top: 0,
             list_pad_bottom: 0,
             opacity: 1.0,
+        }
+    }
+
+    /// Apply the built-in defaults for a window or control before setting props.
+    pub fn apply_widget_defaults(&mut self) {
+        match self.kind {
+            NodeKind::Window => {
+                self.fill = Some(Color::PAGE);
+                self.layout.padding = PAGE_PADDING;
+                self.layout.gap = STACK_GAP;
+                self.layout.column = true;
+            }
+            NodeKind::Button => {
+                self.fill = Some(Color::BANNER);
+                self.color = Some(Color::ON_BANNER);
+                self.font_size = BODY_SIZE;
+                self.layout.padding = 12.0;
+            }
+            NodeKind::TextField => {
+                self.fill = Some(Color::FIELD);
+                self.color = Some(Color::INK);
+                self.font_size = BODY_SIZE;
+                self.layout.padding = 10.0;
+            }
+            _ => {}
         }
     }
 

@@ -128,6 +128,9 @@ pub fn apply_ops(tree: &mut Tree, ops: &[HostOp]) -> Result<Vec<u64>, JsError> {
                 let kind = NodeKind::from_name(kind)
                     .ok_or_else(|| JsError::Message(format!("unknown node kind `{kind}`")))?;
                 let id = tree.add(kind, None)?;
+                if let Some(node) = tree.get_mut(id) {
+                    node.apply_widget_defaults();
+                }
                 created.push(id.raw());
             }
             HostOp::SetText { id, text } => {
