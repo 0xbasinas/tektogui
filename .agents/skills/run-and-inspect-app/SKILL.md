@@ -34,6 +34,7 @@ cargo run -p tekto-cli -- inspect   # prints http://127.0.0.1:PORT/inspector
 cargo run -p tekto-cli -- tree
 cargo run -p tekto-cli -- click 1
 cargo run -p tekto-cli -- key Tab
+cargo run -p tekto-cli -- scroll 1 --by 48
 cargo run -p tekto-cli -- screenshot /tmp/shot.png
 cargo run -p tekto-cli -- patch 4 --text "Hello from a patch"
 cargo run -p tekto-cli -- patch 4 --color "#2c333a" --fill "#f4f3f0" --font-size 20 --padding 24
@@ -66,10 +67,11 @@ curl -s -X POST http://127.0.0.1:PORT/patch \
 - `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb","fontSize":20,"padding":24,"gap":20}` — response is `{ "ok": true, "node": { ... }, "writeback": { ... } }` or an error
 - `POST /click` `{"id":1}`
 - `POST /key` `{"name":"Tab"}` presses `Tab`, `Shift+Tab`, `Enter`, `Space`, or `Backspace` on the focused node.
+- `POST /scroll` `{"id":N,"delta":N}` scrolls a scroll container by logical pixels and returns the clamped `offset`.
 - `POST /type` `{"id":N,"text":"typed"}` inserts plain characters into a `text_field` (errors if the node is not one). Use `POST /key` for Backspace. No IME.
 - `POST /reload` raw JS bundle, or `{"js":"…"}`
 
-Stdio MCP (`cargo run -p tekto-cli -- mcp`) proxies these tools to the running dev server: `ui.tree`, `ui.accesskit`, `ui.screenshot`, `ui.click`, `ui.key`, `ui.type`, `ui.patch`, `app.state`, `app.states`, `app.restore`, `app.logs`. `app.components` is the exception: the MCP server answers it locally from the bundled `components.json` and needs no running app. `GET /components` is the dev-server route for the same file, so it needs a running dev server.
+Stdio MCP (`cargo run -p tekto-cli -- mcp`) proxies these tools to the running dev server: `ui.tree`, `ui.accesskit`, `ui.screenshot`, `ui.click`, `ui.key`, `ui.scroll`, `ui.type`, `ui.patch`, `app.state`, `app.states`, `app.restore`, `app.logs`. `app.components` is the exception: the MCP server answers it locally from the bundled `components.json` and needs no running app. `GET /components` is the dev-server route for the same file, so it needs a running dev server.
 
 Live patches change the running tree immediately (no reload). If the old text or a simple style literal is unique in the app project, the same edit is written back to source; the response includes a `writeback` field (`status`, `files`, `skipped`). If the match is ambiguous, or the source uses a named constant, the runtime change stays and `writeback` explains why. Never writes outside the app project (`TEKTO_APP_ROOT`, or the folder of `tekto dev --js`). Hot reload of TS is not a substitute for `ui.patch`.
 

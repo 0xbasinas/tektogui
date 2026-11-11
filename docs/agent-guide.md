@@ -52,6 +52,7 @@ Tools in the first slice:
 | `ui.accesskit` | Dump AccessKit roles, labels, bounds, and focus (same ids) |
 | `ui.screenshot` | CPU-rendered PNG |
 | `ui.click` | Click a node id (focus + last_click; a real window click uses the same hit test) |
+| `ui.scroll` | Scroll a container by logical pixels (`{"id":N,"delta":120}`); returns the clamped `offset`. Also `POST /scroll` and `tekto scroll N --by 120` |
 | `ui.key` | Press `Tab`, `Shift+Tab`, `Enter`, `Space`, or `Backspace` on the focused node (`{"name":"Tab"}`). Also available as `POST /key` and `tekto key Tab` |
 | `ui.type` | Insert plain characters at the caret of a text field and focus it. Not an IME |
 | `ui.patch` | Live-edit text, name, fill, color, or fontSize on a running node. Returns `{ ok, node }`. |
