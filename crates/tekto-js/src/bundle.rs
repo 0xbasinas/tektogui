@@ -7,10 +7,13 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::JsError;
 
+/// Find an esbuild that actually runs. A leftover package-manager shim that
+/// points at a deleted install is skipped instead of failing every build.
 pub fn which_esbuild() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("ESBUILD") {
         let p = PathBuf::from(p);
@@ -18,14 +21,27 @@ pub fn which_esbuild() -> Option<PathBuf> {
             return Some(p);
         }
     }
-    which("esbuild")
+    which("esbuild", esbuild_runs)
 }
 
-fn which(name: &str) -> Option<PathBuf> {
+fn esbuild_runs(path: &Path) -> bool {
+    use std::process::{Command, Stdio};
+    Command::new(path)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn which(name: &str, usable: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&paths) {
         if let Some(candidate) = executable_in(&dir, name) {
-            return Some(candidate);
+            if usable(&candidate) {
+                return Some(candidate);
+            }
         }
     }
     None
@@ -72,19 +88,28 @@ fn looks_like_root(dir: &Path) -> bool {
         && dir.join("packages/core/src/index.js").is_file()
 }
 
+fn build_spec() -> &'static serde_json::Value {
+    static SPEC: OnceLock<serde_json::Value> = OnceLock::new();
+    SPEC.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../packages/build/src/build-spec.json"))
+            .expect("valid shared build specification")
+    })
+}
+
 /// Virtual entry that mounts `App` from the user's file onto `globalThis.tekto`.
 pub fn make_wrapper(entry: &Path) -> String {
     let path = entry.display().to_string().replace('\\', "/");
+    let path = if let Some(unc) = path.strip_prefix("//?/UNC/") {
+        format!("//{unc}")
+    } else {
+        path.strip_prefix("//?/").unwrap_or(&path).to_owned()
+    };
+    let spec = build_spec();
     format!(
-        r#"import {{ mount }} from "@tektogui/jsx-runtime";
-import {{ createEffect }} from "@tektogui/core";
-import * as entry from "{path}";
-const App = entry.App || entry.default;
-if (typeof App !== "function") {{
-  throw new Error("TSX entry must export a function App (named or default)");
-}}
-mount(App(), globalThis.tekto, {{ createEffect }});
-"#
+        "{}import * as entry from {};\n{}",
+        spec["imports"].as_str().expect("build imports"),
+        serde_json::to_string(&path).expect("encode entry path"),
+        spec["desktop"].as_str().expect("desktop wrapper")
     )
 }
 
@@ -132,14 +157,13 @@ pub fn bundle(entry: &Path) -> Result<String, JsError> {
         )));
     }
 
-    let output = Command::new(&esbuild)
-        .arg(&wrapper_path)
-        .arg("--bundle")
-        .arg("--format=iife")
-        .arg("--platform=neutral")
-        .arg("--target=es2020")
-        .arg("--jsx=automatic")
-        .arg("--jsx-import-source=@tektogui/jsx-runtime")
+    let flags = build_spec()["flags"].as_array().expect("build flags");
+    let mut command = Command::new(&esbuild);
+    command.arg(&wrapper_path).arg("--format=iife");
+    for flag in flags {
+        command.arg(flag.as_str().expect("build flag"));
+    }
+    let output = command
         .arg(format!("--alias:@tektogui/core={}", core.display()))
         .arg(format!("--alias:@tektogui/jsx-runtime={}", jsx.display()))
         .arg(format!(
@@ -151,7 +175,6 @@ pub fn bundle(entry: &Path) -> Result<String, JsError> {
             jsx.display()
         ))
         .arg(format!("--outfile={}", out_path.display()))
-        .arg("--log-level=warning")
         .output();
 
     let output = match output {
@@ -204,6 +227,8 @@ mod tests {
         assert!(w.contains("/tmp/app.tsx"), "{w}");
         assert!(w.contains("mount(App()"), "{w}");
         assert!(w.contains("@tektogui/jsx-runtime"), "{w}");
+        let quoted = make_wrapper(Path::new("/tmp/a\"b.tsx"));
+        assert!(quoted.contains("a\\\"b.tsx"), "{quoted}");
     }
 
     #[test]

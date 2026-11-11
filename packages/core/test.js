@@ -58,3 +58,19 @@ test("nested effects restore outer tracking and dispose independently", () => {
   setAfter(2); setInner(2);
   assert.equal(seen.length, 8);
 });
+
+
+test("keyed signals restore compatible JSON and report changes", async () => {
+  globalThis.__tektoReloadState = { count: 7, old: "text", removed: true };
+  const core = await import(`./src/index.js?reload-test=${Date.now()}`);
+  const [count, setCount] = core.createSignal(0, { key: "count" });
+  const [old] = core.createSignal(42, { key: "old" });
+  const [fresh] = core.createSignal("new", { key: "fresh" });
+  assert.equal(count(), 7); assert.equal(old(), 42); assert.equal(fresh(), "new");
+  assert.throws(() => core.createSignal(0, { key: "count" }), /duplicate/);
+  assert.throws(() => setCount(Infinity), /JSON serializable/);
+  const report = JSON.parse(globalThis.__tektoSignalReloadReport());
+  assert.deepEqual(report, { restored: ["count"], reset: ["old", "fresh"], removed: ["removed"] });
+  assert.deepEqual(JSON.parse(globalThis.__tektoSnapshotSignals()), { count: 7, old: 42, fresh: "new" });
+  delete globalThis.__tektoReloadState;
+});

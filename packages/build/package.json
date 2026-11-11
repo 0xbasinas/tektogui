@@ -1,0 +1,12 @@
+{
+  "name": "@tektogui/build",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Bundle Tekto TSX apps for web or desktop hosts",
+  "bin": { "tekto-build": "./src/cli.js" },
+  "exports": { ".": { "types": "./src/index.d.ts", "import": "./src/index.js" } },
+  "files": ["src"],
+  "dependencies": { "@tektogui/core": "file:../core", "@tektogui/jsx-runtime": "file:../jsx-runtime" },
+  "scripts": { "test": "node --test test.js" }
+}

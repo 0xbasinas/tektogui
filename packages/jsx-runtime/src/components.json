@@ -1,25 +1,32 @@
 {
   "version": 1,
-  "description": "JSX components an agent can mount. Kinds match NodeKind and tekto-widgets. Each kind lists every prop the host setProp accepts, because JSX forwards that set on every kind. title, font_size, and justify_center are aliases (see propAliases). Button onClick, text_field onInput and text-node reactive text need a retained QuickJS host; desktop QuickJS delivers button actions and committed field input; web parity is not supported.",
+  "description": "JSX components an agent can mount. Kinds match NodeKind and tekto-widgets. Each kind lists every prop the host setProp accepts, because JSX forwards that set on every kind. title, font_size, and justify_center are aliases (see propAliases). Button onClick, text_field onInput and text-node reactive text need a retained host. Desktop QuickJS and the WASM host support these callbacks.",
   "propAliases": {
     "title": "name",
     "font_size": "fontSize",
-    "justify_center": "justifyCenter"
+    "justify_center": "justifyCenter",
+    "border_color": "borderColor",
+    "border_width": "borderWidth"
   },
   "components": [
     {
       "name": "window",
       "description": "Root window. Defaults to page fill, padding, and gap, like tekto::window.",
       "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
         {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
         {"name": "name", "type": "string", "description": "Accessible name. JSX title is an alias."},
         {"name": "title", "type": "string", "description": "Alias of name."},
-        {"name": "text", "type": "string"},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
         {"name": "width", "type": "number"},
         {"name": "height", "type": "number"},
         {"name": "fill", "type": "string", "description": "#rrggbb or #rrggbbaa."},
         {"name": "color", "type": "string", "description": "#rrggbb or #rrggbbaa."},
         {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
@@ -27,21 +34,29 @@
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
       ]
     },
     {
       "name": "group",
       "description": "Layout box with no paint of its own.",
       "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
         {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
-        {"name": "text", "type": "string"},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
         {"name": "width", "type": "number"},
         {"name": "height", "type": "number"},
         {"name": "fill", "type": "string"},
         {"name": "color", "type": "string"},
         {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
@@ -49,21 +64,29 @@
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
       ]
     },
     {
       "name": "rect",
       "description": "Filled rectangle. The Rust banner() helper is a rect named banner, not a separate kind.",
       "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
         {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
-        {"name": "text", "type": "string"},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
         {"name": "width", "type": "number"},
         {"name": "height", "type": "number"},
         {"name": "fill", "type": "string"},
         {"name": "color", "type": "string"},
         {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
@@ -71,21 +94,402 @@
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ]
+    },
+    {
+      "name": "image",
+      "description": "Image with RGBA pixels and an accessible name or decorative state.",
+      "props": [
+        {"name": "imageSource", "type": "object", "description": "Width, height and straight-alpha RGBA bytes.", "jsxType": "{ width: number; height: number; rgba: Uint8Array | number[] }", "required": true},
+        {"name": "imageFit", "type": "string", "description": "contain or cover.", "jsxType": "\"contain\" | \"cover\""},
+        {"name": "decorative", "type": "boolean"},
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "name", "type": "string"},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ]
+    },
+    {
+      "name": "progress",
+      "description": "Labeled determinate progress indicator with a value from zero to one.",
+      "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "name", "type": "string"},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ]
+    },
+    {
+      "name": "slider",
+      "description": "Labeled slider with a value from zero to one.",
+      "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "disabled", "type": "boolean"},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "name", "type": "string"},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "Focus the slider."},
+        {"name": "set_value", "description": "Set the slider value from zero to one."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ]
+    },
+    {
+      "name": "radio_group",
+      "description": "Labeled group of mutually exclusive radio options.",
+      "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "name", "type": "string"},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ]
+    },
+    {
+      "name": "radio",
+      "description": "Labeled option within a radio group.",
+      "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "disabled", "type": "boolean"},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "name", "type": "string", "description": "Accessible label. Defaults from the text child when unset."},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "Selects this option."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ]
+    },
+    {
+      "name": "tab_list",
+      "description": "Named horizontal list of tabs with one keyboard tab stop.",
+      "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "name", "type": "string"},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ]
+    },
+    {
+      "name": "tab",
+      "description": "A selectable tab inside a tab list.",
+      "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "disabled", "type": "boolean"},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "name", "type": "string", "description": "Accessible label. Defaults from the text child when unset."},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "Selects this option."}
+      ],
+      "jsxProps": [
+        {"name": "onClick", "type": "function", "jsxType": "() => void", "description": "Callback on pointer or keyboard activation."},
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."},
+        {"name": "panel", "type": "object", "jsxType": "TektoElement", "description": "Associated tab_panel element."}
+      ]
+    },
+    {
+      "name": "tab_panel",
+      "description": "Content associated with a tab.",
+      "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "name", "type": "string"},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ]
+    },
+    {
+      "name": "dialog",
+      "description": "Named modal dialog, opened as a centered overlay.",
+      "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "name", "type": "string", "required": true},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ]
+    },
+    {
+      "name": "menu",
+      "description": "Named popup menu, opened as an anchored overlay.",
+      "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "name", "type": "string", "required": true},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ]
+    },
+    {
+      "name": "menu_item",
+      "jsxProps": [
+        {"name": "onClick", "type": "function", "description": "No-argument callback on a retained host.", "jsxType": "() => void"},
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ],
+      "description": "Labeled button. Defaults to the same fill, color, font size, and padding as Rust button().",
+      "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "disabled", "type": "boolean"},
+        {"name": "name", "type": "string", "description": "Accessible label. Defaults from the text child when unset."},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "Button activation delivers the callback in desktop QuickJS and the WASM host."}
+      ]
+    },
+    {
+      "name": "select",
+      "jsxProps": [
+        {"name": "onInput", "type": "function", "description": "Receives the selected option label.", "jsxType": "(value: string) => void"},
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ],
+      "description": "Labeled button. Defaults to the same fill, color, font size, and padding as Rust button().",
+      "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "disabled", "type": "boolean"},
+        {"name": "name", "type": "string", "description": "Accessible label. Defaults from the text child when unset.", "required": true},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "Button activation delivers the callback in desktop QuickJS and the WASM host."}
       ]
     },
     {
       "name": "text",
-      "description": "Text leaf. A string child becomes the text. The text prop may be a function on a retained QuickJS host.",
+      "description": "Text leaf. A string child becomes the text. The text prop may be a function on a retained host.",
       "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
         {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
-        {"name": "text", "type": "string"},
+        {"name": "text", "type": "string", "jsxType": "string | number | (() => string | number)"},
         {"name": "width", "type": "number"},
         {"name": "height", "type": "number"},
         {"name": "fill", "type": "string"},
         {"name": "color", "type": "string"},
         {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
@@ -93,117 +497,129 @@
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
       ]
     },
     {
       "name": "button",
-      "jsxProps": [{"name": "onClick", "type": "function", "description": "No-argument callback on a retained QuickJS host."}],
+      "jsxProps": [
+        {"name": "onClick", "type": "function", "description": "No-argument callback on a retained host.", "jsxType": "() => void"},
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ],
       "description": "Labeled button. Defaults to the same fill, color, font size, and padding as Rust button().",
       "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
         {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
         {"name": "disabled", "type": "boolean"},
         {"name": "name", "type": "string", "description": "Accessible label. Defaults from the text child when unset."},
         {"name": "title", "type": "string", "description": "Alias of name."},
-        {"name": "text", "type": "string"},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
         {"name": "width", "type": "number"},
         {"name": "height", "type": "number"},
         {"name": "fill", "type": "string"},
         {"name": "color", "type": "string"},
         {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
         {"name": "justifyCenter", "type": "boolean"}
       ],
       "events": [
-        {"name": "click", "description": "Agent click delivers the button callback in desktop QuickJS; web parity is not supported."}
+        {"name": "click", "description": "Button activation delivers the callback in desktop QuickJS and the WASM host."}
       ]
     },
     {
       "name": "checkbox",
       "description": "Labeled checkbox with an initial checked state.",
       "props": [
-        {
-          "name": "disabled",
-          "type": "boolean"
-        },
-        {
-          "name": "checked",
-          "type": "boolean"
-        },
-        {
-          "name": "name",
-          "type": "string",
-          "description": "Accessible label. Defaults from the text child when unset."
-        },
-        {
-          "name": "title",
-          "type": "string",
-          "description": "Alias of name."
-        },
-        {
-          "name": "text",
-          "type": "string"
-        },
-        {
-          "name": "width",
-          "type": "number"
-        },
-        {
-          "name": "height",
-          "type": "number"
-        },
-        {
-          "name": "fill",
-          "type": "string"
-        },
-        {
-          "name": "color",
-          "type": "string"
-        },
-        {
-          "name": "fontSize",
-          "type": "number"
-        },
-        {
-          "name": "padding",
-          "type": "number"
-        },
-        {
-          "name": "gap",
-          "type": "number"
-        },
-        {
-          "name": "column",
-          "type": "boolean"
-        },
-        {
-          "name": "justifyCenter",
-          "type": "boolean"
-        }
-      ],
-      "events": [
-        {
-          "name": "click",
-          "description": "Toggles the checkbox."
-        }
-      ]
-    },
-    {
-      "name": "text_field",
-      "jsxProps": [{"name": "onInput", "type": "function", "description": "Receives the committed value on a retained QuickJS host."}],
-      "description": "Single-line field with the same style defaults as Rust text_field(). name is the label. text is the committed value.",
-      "props": [
-        {"name": "checked", "type": "boolean"},
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
         {"name": "disabled", "type": "boolean"},
-        {"name": "name", "type": "string", "description": "Accessible label."},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "name", "type": "string", "description": "Accessible label. Defaults from the text child when unset."},
         {"name": "title", "type": "string", "description": "Alias of name."},
-        {"name": "text", "type": "string", "description": "Committed value."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
         {"name": "width", "type": "number"},
         {"name": "height", "type": "number"},
         {"name": "fill", "type": "string"},
         {"name": "color", "type": "string"},
         {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "Toggles the checkbox."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ]
+    },
+    {
+      "name": "switch",
+      "description": "Labeled switch with an initial checked state.",
+      "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "disabled", "type": "boolean"},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "name", "type": "string", "description": "Accessible label. Defaults from the text child when unset."},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
+        {"name": "padding", "type": "number"},
+        {"name": "gap", "type": "number"},
+        {"name": "column", "type": "boolean"},
+        {"name": "justifyCenter", "type": "boolean"}
+      ],
+      "events": [
+        {"name": "click", "description": "Toggles the switch."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ]
+    },
+    {
+      "name": "text_field",
+      "jsxProps": [
+        {"name": "onInput", "type": "function", "description": "Receives the committed value on a retained host.", "jsxType": "(value: string) => void"},
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
+      ],
+      "description": "Single-line field with the same style defaults as Rust text_field(). name is the label. text is the committed value.",
+      "props": [
+        {"name": "multiline", "type": "boolean", "description": "Allow line breaks and wrapped text."},
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
+        {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
+        {"name": "disabled", "type": "boolean"},
+        {"name": "name", "type": "string", "description": "Accessible label."},
+        {"name": "title", "type": "string", "description": "Alias of name."},
+        {"name": "text", "type": "string", "description": "Committed value.", "jsxType": "string | number"},
+        {"name": "width", "type": "number"},
+        {"name": "height", "type": "number"},
+        {"name": "fill", "type": "string"},
+        {"name": "color", "type": "string"},
+        {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
@@ -220,15 +636,20 @@
       "name": "scroll",
       "description": "Vertical viewport. Children keep their height. Paint is clipped. scroll_y shifts them.",
       "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
         {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
-        {"name": "text", "type": "string"},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
         {"name": "width", "type": "number"},
         {"name": "height", "type": "number"},
         {"name": "fill", "type": "string"},
         {"name": "color", "type": "string"},
         {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
@@ -237,21 +658,29 @@
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."},
         {"name": "scroll", "description": "Wheel (48px per notch) and pointer drag change scroll_y. Clamped, no rubber-band."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
       ]
     },
     {
       "name": "list",
       "description": "Column of list_item rows. JSX does not add a scroll parent; wrap the list in scroll when it should clip. The Rust list() helper may insert that scroll.",
       "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
         {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
-        {"name": "text", "type": "string"},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
         {"name": "width", "type": "number"},
         {"name": "height", "type": "number", "description": "Layout height. The Rust helper also stores a viewport height separately when it wraps the list in scroll."},
         {"name": "fill", "type": "string"},
         {"name": "color", "type": "string"},
         {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
@@ -259,21 +688,29 @@
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
       ]
     },
     {
       "name": "list_item",
       "description": "One list row. name and text are the label.",
       "props": [
+        {"name": "testKey", "type": "string", "description": "Optional developer test key."},
         {"name": "checked", "type": "boolean"},
+        {"name": "value", "type": "number"},
         {"name": "name", "type": "string"},
         {"name": "title", "type": "string", "description": "Alias of name."},
-        {"name": "text", "type": "string"},
+        {"name": "text", "type": "string", "jsxType": "string | number"},
         {"name": "width", "type": "number"},
         {"name": "height", "type": "number"},
         {"name": "fill", "type": "string"},
         {"name": "color", "type": "string"},
         {"name": "fontSize", "type": "number"},
+        {"name": "radius", "type": "number"},
+        {"name": "borderColor", "type": "string"},
+        {"name": "borderWidth", "type": "number"},
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
@@ -281,6 +718,9 @@
       ],
       "events": [
         {"name": "click", "description": "Pointer click. Agents use ui.click with the row id."}
+      ],
+      "jsxProps": [
+        {"name": "contextMenu", "type": "object", "jsxType": "TektoElement", "description": "Detached menu opened by a context-menu gesture."}
       ]
     }
   ]

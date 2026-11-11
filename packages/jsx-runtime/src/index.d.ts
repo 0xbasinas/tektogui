@@ -1,9 +1,15 @@
 export const Fragment: symbol;
+/** Retained keyed list. Each child must produce one Tekto node. */
+export function For<T>(props: { each: () => T[]; by: (item: T) => string | number; children: (item: () => T) => TektoElement }): TektoElement;
+/** Keep the current branch mounted until the condition changes truthiness. */
+export function Show<T>(props: { when: () => T; children: TektoElement | ((value: () => NonNullable<T>) => TektoElement); fallback?: TektoElement | null }): TektoElement;
 
 export type ComponentProp = {
   name: string;
   type: string;
   description?: string;
+  jsxType?: string;
+  required?: boolean;
 };
 export type ComponentEvent = {
   name: string;
@@ -43,6 +49,10 @@ export type HostApi = {
   setProp(id: number, key: string, value: string): void;
   append(parent: number, child: number): void;
   remove?(id: number): void;
+  openOverlay?(id: number, anchor: number, side: "above" | "below" | "left" | "right" | "center"): void;
+  closeOverlay?(): void;
+  bindTabPanel?(tab: number, panel: number): void;
+  bindContextMenu?(target: number, menu: number): void;
   /**
    * Desktop QuickJS only. `spec` is `nativeOpJson(...)` from `@tektogui/core`.
    * Returns a string, or null when the op has no value. Throws when the
@@ -55,19 +65,13 @@ export type HostOpJson =
   | { op: "setText"; id: number; text: string }
   | { op: "setProp"; id: number; key: string; value: string }
   | { op: "append"; parent: number; child: number }
-  | { op: "remove"; id: number };
-export function mount(element: TektoElement, tekto: HostApi, options?: { createEffect: (fn: () => void) => { dispose(): void } }): number | null;
+  | { op: "remove"; id: number }
+  | { op: "openOverlay"; id: number; anchor: number; side: "above" | "below" | "left" | "right" | "center" }
+  | { op: "closeOverlay" }
+  | { op: "bindTabPanel"; tab: number; panel: number }
+  | { op: "bindContextMenu"; target: number; menu: number };
+export function mount(element: TektoElement, tekto: HostApi, options?: { createEffect: (fn: () => void) => { dispose(): void }; createSignal?: <T>(value: T) => [() => T, (value: T | ((previous: T) => T)) => void]; untrack?: <T>(fn: () => T) => T }): number | null;
 export function renderToOps(element: TektoElement): HostOpJson[];
 
-/** JSX props for Tekto nodes. Reactive text is limited to text nodes. */
-export namespace JSX {
-  type CommonProps = { name?: string; title?: string; width?: number; height?: number; fill?: string; color?: string; fontSize?: number; padding?: number; gap?: number; column?: boolean; justifyCenter?: boolean; children?: unknown };
-  type StaticProps = CommonProps & { text?: string | number };
-  interface IntrinsicElements {
-    text: CommonProps & { text?: string | number | (() => string | number) };
-    button: StaticProps & { disabled?: boolean; onClick?: () => void };
-    checkbox: StaticProps & { disabled?: boolean; checked?: boolean };
-    window: StaticProps; group: StaticProps; rect: StaticProps;
-    text_field: StaticProps & { disabled?: boolean; onInput?: (value: string) => void }; scroll: StaticProps; list: StaticProps; list_item: StaticProps;
-  }
-}
+/** JSX intrinsic declarations are generated from components.json. */
+export { JSX } from "./jsx-types.js";

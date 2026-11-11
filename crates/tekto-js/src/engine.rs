@@ -83,6 +83,10 @@ impl JsSession {
                 tekto.set("setProp", Func::from(js_set_prop))?;
                 tekto.set("append", Func::from(js_append))?;
                 tekto.set("remove", Func::from(js_remove))?;
+                tekto.set("openOverlay", Func::from(js_open_overlay))?;
+                tekto.set("closeOverlay", Func::from(js_close_overlay))?;
+                tekto.set("bindContextMenu", Func::from(js_bind_context_menu))?;
+                tekto.set("bindTabPanel", Func::from(js_bind_tab_panel))?;
                 tekto.set("transition", Func::from(js_transition))?;
                 tekto.set("applyNativeOp", Func::from(js_apply_native_op))?;
                 ctx.globals().set("tekto", tekto)?;
@@ -100,6 +104,24 @@ impl JsSession {
     /// Evaluate one bundle. Replace the entire session for a reload.
     pub fn eval(&self, source: &str, host: &mut dyn Host) -> Result<(), JsError> {
         self.run(host, |ctx| ctx.eval::<(), _>(source))
+    }
+
+    /// Capture keyed signal values as JSON before replacing this session.
+    pub fn snapshot_signals(&self, host: &mut dyn Host) -> Result<String, JsError> {
+        self.run(host, |ctx| ctx.eval("typeof globalThis.__tektoSnapshotSignals === 'function' ? globalThis.__tektoSnapshotSignals() : '{}'"))
+    }
+
+    /// Supply the prior session's JSON state before evaluating the new bundle.
+    pub fn restore_signals(&self, json: &str, host: &mut dyn Host) -> Result<(), JsError> {
+        self.run(host, |ctx| {
+            ctx.globals().set("__tektoReloadJson", json)?;
+            ctx.eval::<(), _>("globalThis.__tektoReloadState = JSON.parse(globalThis.__tektoReloadJson); delete globalThis.__tektoReloadJson;")
+        })
+    }
+
+    /// Return the candidate's restored, reset, and removed key report.
+    pub fn signal_report(&self, host: &mut dyn Host) -> Result<String, JsError> {
+        self.run(host, |ctx| ctx.eval("typeof globalThis.__tektoSignalReloadReport === 'function' ? globalThis.__tektoSignalReloadReport() : '{}'"))
     }
 
     /// Deliver one already-validated click. Returns false when no handler exists.
@@ -228,6 +250,46 @@ fn js_set_prop(ctx: Ctx<'_>, id: u64, key: String, value: String) -> rquickjs::R
 fn js_append(ctx: Ctx<'_>, parent: u64, child: u64) -> rquickjs::Result<()> {
     match with_host(|host| {
         host.apply(&[HostOp::Append { parent, child }])?;
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(err) => throw(&ctx, err),
+    }
+}
+
+fn js_open_overlay(ctx: Ctx<'_>, id: u64, anchor: u64, side: String) -> rquickjs::Result<()> {
+    match with_host(|host| {
+        host.apply(&[HostOp::OpenOverlay { id, anchor, side }])?;
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(err) => throw(&ctx, err),
+    }
+}
+
+fn js_bind_tab_panel(ctx: Ctx<'_>, tab: u64, panel: u64) -> rquickjs::Result<()> {
+    match with_host(|host| {
+        host.apply(&[HostOp::BindTabPanel { tab, panel }])?;
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(err) => throw(&ctx, err),
+    }
+}
+
+fn js_bind_context_menu(ctx: Ctx<'_>, target: u64, menu: u64) -> rquickjs::Result<()> {
+    match with_host(|host| {
+        host.apply(&[HostOp::BindContextMenu { target, menu }])?;
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(err) => throw(&ctx, err),
+    }
+}
+
+fn js_close_overlay(ctx: Ctx<'_>) -> rquickjs::Result<()> {
+    match with_host(|host| {
+        host.apply(&[HostOp::CloseOverlay])?;
         Ok(())
     }) {
         Ok(()) => Ok(()),

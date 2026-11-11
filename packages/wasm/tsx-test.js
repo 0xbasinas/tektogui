@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
@@ -22,6 +21,13 @@ function haveEsbuild() {
   const found = spawnSync(esbuildBin(), ["--version"], { encoding: "utf8" });
   return !found.error && found.status === 0;
 }
+
+test("applyUiPatch forwards paint fields and aliases", () => {
+  const calls = [];
+  const host = { setText() {}, setProp: (...args) => calls.push(args) };
+  applyUiPatch(host, { id: 3, radius: 4, border_color: "#123456", border_width: 2 });
+  assert.deepEqual(calls, [[3, "radius", "4"], [3, "borderColor", "#123456"], [3, "borderWidth", "2"]]);
+});
 
 test("applyUiPatch forwards disabled booleans", () => {
   const calls = [];
@@ -165,58 +171,32 @@ test("web dev server waits for its watcher and isolates concurrent bundles", asy
   const dir = mkdtempSync(resolve(tmpdir(), "tekto-watch-ready-"));
   const firstEntry = resolve(dir, "first.tsx");
   const secondEntry = resolve(dir, "second.tsx");
-  const shim = resolve(dir, "esbuild-shim");
-  const originalEsbuild = process.env.ESBUILD;
-  const realEsbuild = esbuildBin();
   writeFileSync(firstEntry, 'export function App() { return <text>first-server</text>; }');
   writeFileSync(secondEntry, 'export function App() { return <text>second-server</text>; }');
-  const gate = createServer();
-  await new Promise((resolveListen) => gate.listen(0, "127.0.0.1", resolveListen));
-  const port = gate.address().port;
-  writeFileSync(shim, `#!${process.execPath}
-const { spawn, spawnSync } = require("node:child_process");
-const net = require("node:net");
-const args = process.argv.slice(2);
-const bin = ${JSON.stringify(realEsbuild)};
-if (!args.includes("--watch=forever")) {
-  const result = spawnSync(bin, args, { stdio: "inherit" });
-  process.exit(result.status ?? 1);
-}
-const socket = net.connect(${port}, "127.0.0.1", () => socket.write("waiting"));
-socket.once("data", () => {
-  socket.destroy();
-  const child = spawn(bin, args, { stdio: "inherit" });
-  process.on("SIGTERM", () => child.kill());
-  child.on("exit", (code) => process.exit(code ?? 1));
-});
-`, { mode: 0o755 });
+  let signalReady, release;
+  const watcherReady = new Promise(resolve => { signalReady = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
   let firstServer;
   let secondServer;
   try {
-    process.env.ESBUILD = shim;
-    const connected = new Promise((resolveConnection) => gate.once("connection", resolveConnection));
     let started = false;
-    const starting = startDevServer({ entry: firstEntry, wasmPath, port: 0 }).then((server) => {
+    const starting = startDevServer({ entry: firstEntry, wasmPath, port: 0,
+      beforeWatcherReady: () => { signalReady(); return gate; } }).then((server) => {
       started = true;
       return server;
     });
-    const socket = await connected;
-    await new Promise((resolveData) => socket.once("data", resolveData));
+    await Promise.race([watcherReady, starting.then(() => { throw new Error("server started before watcher gate"); })]);
     await new Promise((resolveTurn) => setImmediate(resolveTurn));
     assert.equal(started, false, "server must wait for the watcher initial build");
-    socket.end("go");
+    release();
     firstServer = await starting;
-    if (originalEsbuild === undefined) delete process.env.ESBUILD;
-    else process.env.ESBUILD = originalEsbuild;
     secondServer = await startDevServer({ entry: secondEntry, wasmPath, port: 0, watch: false });
     assert.match(await (await fetch(new URL("/app.js", firstServer.url))).text(), /first-server/);
     assert.match(await (await fetch(new URL("/app.js", secondServer.url))).text(), /second-server/);
   } finally {
-    if (originalEsbuild === undefined) delete process.env.ESBUILD;
-    else process.env.ESBUILD = originalEsbuild;
+    release();
     if (firstServer) await firstServer.close();
     if (secondServer) await secondServer.close();
-    await new Promise((done) => gate.close(done));
     rmSync(dir, { recursive: true, force: true });
   }
 });

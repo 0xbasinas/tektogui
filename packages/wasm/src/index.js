@@ -25,6 +25,22 @@ export function hostFromExports(exports) {
     tekto_set_fallback_font: setFallbackFontExport,
     tekto_render_png: renderExport,
     tekto_click_at: clickExport,
+    tekto_context_menu_at: contextMenuExport,
+    tekto_field_begin: fieldBeginExport,
+    tekto_field_move: fieldMoveExport,
+    tekto_escape: escapeExport,
+    tekto_overlay_id: overlayIdExport,
+    tekto_field_input: fieldInputExport,
+    tekto_field_ime: fieldImeExport,
+    tekto_field_key: fieldKeyExport,
+    tekto_field_selection: fieldSelectionExport,
+    tekto_focused_field: focusedFieldExport,
+    tekto_slider_begin: sliderBeginExport,
+    tekto_slider_move: sliderMoveExport,
+    tekto_slider_key: sliderKeyExport,
+    tekto_activate_focused: activateExport,
+    tekto_open_select_state: selectStateExport,
+    tekto_select_value: selectValueExport,
     tekto_scroll_at: scrollExport,
     tekto_reset: resetExport,
     tekto_out_ptr: outPtr,
@@ -37,21 +53,106 @@ export function hostFromExports(exports) {
     typeof setFallbackFontExport !== "function" ||
     typeof renderExport !== "function" ||
     typeof clickExport !== "function" ||
+    typeof contextMenuExport !== "function" ||
+    typeof fieldBeginExport !== "function" ||
+    typeof fieldMoveExport !== "function" ||
+    typeof escapeExport !== "function" ||
+    typeof overlayIdExport !== "function" ||
+    typeof fieldInputExport !== "function" ||
+    typeof fieldImeExport !== "function" ||
+    typeof fieldKeyExport !== "function" ||
+    typeof fieldSelectionExport !== "function" ||
+    typeof focusedFieldExport !== "function" ||
+    typeof sliderBeginExport !== "function" ||
+    typeof sliderMoveExport !== "function" ||
+    typeof sliderKeyExport !== "function" ||
+    typeof activateExport !== "function" ||
+    typeof selectStateExport !== "function" ||
+    typeof selectValueExport !== "function" ||
     typeof scrollExport !== "function"
   ) {
     throw new Error("tekto wasm exports are missing (rebuild tekto-wasm)");
   }
 
   function applyOps(ops) {
-    const bytes = textEncoder.encode(JSON.stringify(ops));
+    const created = [];
+    for (const op of ops) {
+      const bytes = textEncoder.encode(JSON.stringify([op]));
+      const ptr = alloc(bytes.length);
+      new Uint8Array(memory.buffer).set(bytes, ptr);
+      applyOpsExport(ptr, bytes.length);
+      const body = JSON.parse(textDecoder.decode(readOut(memory, outPtr, outLen)));
+      if (!body.ok) throw new Error(body.error || "apply ops failed");
+      created.push(...body.created);
+      if (op.op === "append") {
+        for (const ids of children.values()) ids.delete(op.child);
+        if (!children.has(op.parent)) children.set(op.parent, new Set());
+        children.get(op.parent).add(op.child);
+      } else if (op.op === "bindTabPanel") {
+        for (const ids of children.values()) ids.delete(op.panel);
+        if (!children.has(op.tab)) children.set(op.tab, new Set());
+        children.get(op.tab).add(op.panel);
+      } else if (op.op === "bindContextMenu") {
+        contextMenus.add(op.menu);
+        if (!children.has(op.target)) children.set(op.target, new Set());
+        children.get(op.target).add(op.menu);
+      } else if (op.op === "remove") {
+        try { forget(op.id); } finally { syncOverlay(); }
+        continue;
+      }
+      syncOverlay();
+    }
+    return created;
+  }
+
+  const clicks = new Map(), inputs = new Map(), cleanups = new Map(), children = new Map(), contextMenus = new Set();
+  let overlay = null, imeTarget = null;
+  function forget(id) {
+    let firstError;
+    function visit(node) {
+      if (overlay === node) overlay = null;
+      const descendants = [...(children.get(node) || [])];
+      children.delete(node); clicks.delete(node); inputs.delete(node); contextMenus.delete(node);
+      for (const ids of children.values()) ids.delete(node);
+      const callbacks = cleanups.get(node) || [];
+      cleanups.delete(node);
+      for (const child of descendants) visit(child);
+      for (const callback of callbacks) {
+        try { callback(); } catch (error) { firstError ??= error; }
+      }
+    }
+    visit(id);
+    if (firstError) throw firstError;
+  }
+  function syncOverlay() {
+    const current = overlayIdExport() || null;
+    if (overlay !== null && overlay !== current) {
+      const previous = overlay;
+      overlay = current;
+      if (!contextMenus.has(previous)) forget(previous);
+    } else {
+      overlay = current;
+    }
+  }
+  function selectState() {
+    selectStateExport();
+    return JSON.parse(textDecoder.decode(readOut(memory, outPtr, outLen)));
+  }
+  function deliverSelection(before) {
+    if (!before) return;
+    selectValueExport(before[0]);
+    const value = JSON.parse(textDecoder.decode(readOut(memory, outPtr, outLen)));
+    if (value !== null && value !== before[1]) inputs.get(before[0])?.(value);
+  }
+  function input(text, backspace = false) {
+    const bytes = textEncoder.encode(text);
     const ptr = alloc(bytes.length);
     new Uint8Array(memory.buffer).set(bytes, ptr);
-    applyOpsExport(ptr, bytes.length);
-    const body = JSON.parse(textDecoder.decode(readOut(memory, outPtr, outLen)));
-    if (!body.ok) {
-      throw new Error(body.error || "apply ops failed");
-    }
-    return body.created;
+    fieldInputExport(ptr, bytes.length, Number(backspace));
+    const result = JSON.parse(textDecoder.decode(readOut(memory, outPtr, outLen)));
+    if (!result) return false;
+    inputs.get(result[0])?.(result[1]);
+    return true;
   }
 
   return {
@@ -70,7 +171,14 @@ export function hostFromExports(exports) {
     },
     /** Drop the scene. The next create returns id 1. */
     reset() {
+      let firstError;
+      for (const id of new Set([...children.keys(), ...clicks.keys(), ...inputs.keys(), ...cleanups.keys()])) {
+        try { forget(id); } catch (error) { firstError ??= error; }
+      }
+      overlay = null;
+      imeTarget = null;
       resetExport();
+      if (firstError) throw firstError;
     },
     /** CPU-renderer PNG bytes for the current tree. */
     renderPng(width, height) {
@@ -81,10 +189,77 @@ export function hostFromExports(exports) {
       }
       return bytes;
     },
-    /** Hit-test in the supplied viewport. A hit does not invoke app callbacks. */
+    /** Hit-test in the supplied viewport and deliver a registered click callback. */
     clickAt(width, height, x, y) {
-      return clickExport(width, height, x, y) || null;
+      const before = selectState();
+      const id = clickExport(width, height, x, y) || null;
+      try { if (id !== null) clicks.get(id)?.(); deliverSelection(before); }
+      finally { syncOverlay(); }
+      return id;
     },
+    contextMenuAt(width, height, x, y) {
+      const id = contextMenuExport(width, height, x, y) || null;
+      syncOverlay();
+      return id;
+    },
+    /** Dismiss an overlay when Escape is pressed. */
+    escape() { const closed = escapeExport() !== 0; syncOverlay(); return closed; },
+    fieldBegin(width, height, x, y) {
+      return fieldBeginExport(width, height, x, y) || null;
+    },
+    fieldMove(id, x, y) { return fieldMoveExport(id, x, y) !== 0; },
+    fieldClick(id) { clicks.get(id)?.(); },
+    sliderBegin(width, height, x, y) { return sliderBeginExport(width, height, x, y) || null; },
+    sliderMove(id, x) { return sliderMoveExport(id, x) !== 0; },
+    activate(space = false) {
+      const before = selectState();
+      const id = activateExport(Number(space)) || null;
+      try { if (id !== null) clicks.get(id)?.(); deliverSelection(before); }
+      finally { syncOverlay(); }
+      return id !== null;
+    },
+    sliderKey(key) {
+      const handled = sliderKeyExport(({ ArrowLeft: 1, ArrowRight: 2, Home: 3, End: 4, ArrowUp: 5, ArrowDown: 6 })[key] || 0) !== 0;
+      const id = JSON.parse(textDecoder.decode(readOut(memory, outPtr, outLen)));
+      try { if (id !== null) clicks.get(id)?.(); }
+      finally { syncOverlay(); }
+      return handled;
+    },
+    typeText(text) { return input(String(text)); },
+    backspace() { return input("", true); },
+    fieldIme(kind, text = "") {
+      const code = ({ preedit: 1, commit: 2, cancel: 3 })[kind];
+      if (!code) throw new TypeError("unknown IME operation");
+      if (kind !== "preedit" && imeTarget === null) return false;
+      const bytes = textEncoder.encode(String(text));
+      const ptr = alloc(bytes.length);
+      new Uint8Array(memory.buffer).set(bytes, ptr);
+      fieldImeExport(ptr, bytes.length, code, imeTarget ?? 0);
+      const result = JSON.parse(textDecoder.decode(readOut(memory, outPtr, outLen)));
+      if (kind !== "preedit") imeTarget = null;
+      if (!result) return false;
+      if (kind === "preedit") imeTarget = result[0];
+      if (result[1] !== null) inputs.get(result[0])?.(result[1]);
+      return true;
+    },
+    fieldKey(key, shift = false) {
+      const code = ({ ArrowLeft: shift ? 6 : 1, ArrowRight: shift ? 7 : 2,
+        Home: shift ? 8 : 3, End: shift ? 9 : 4, Delete: 5, SelectAll: 10,
+        ArrowUp: shift ? 13 : 11, ArrowDown: shift ? 14 : 12, Enter: 15 })[key] || 0;
+      fieldKeyExport(code);
+      const result = JSON.parse(textDecoder.decode(readOut(memory, outPtr, outLen)));
+      if (!result) return false;
+      if (result[1] !== null) inputs.get(result[0])?.(result[1]);
+      return true;
+    },
+    fieldSelection() {
+      fieldSelectionExport();
+      return JSON.parse(textDecoder.decode(readOut(memory, outPtr, outLen)));
+    },
+    focusedField() { return focusedFieldExport() || null; },
+    onClick(id, fn) { clicks.set(id, fn); },
+    onInput(id, fn) { inputs.set(id, fn); },
+    onDispose(id, fn) { if (!cleanups.has(id)) cleanups.set(id, []); cleanups.get(id).push(fn); },
     /** Scroll in layout pixels; null means no scroll target. */
     scrollAt(width, height, x, y, delta) {
       const result = scrollExport(width, height, x, y, delta);
@@ -103,9 +278,18 @@ export function hostFromExports(exports) {
     },
     append(parent, child) {
       applyOps([{ op: "append", parent, child }]);
+
     },
     remove(id) {
       applyOps([{ op: "remove", id }]);
+    },
+    bindTabPanel(tab, panel) { applyOps([{ op: "bindTabPanel", tab, panel }]); },
+    bindContextMenu(target, menu) { applyOps([{ op: "bindContextMenu", target, menu }]); },
+    openOverlay(id, anchor, side) {
+      applyOps([{ op: "openOverlay", id, anchor, side }]);
+    },
+    closeOverlay() {
+      applyOps([{ op: "closeOverlay" }]);
     },
   };
 }

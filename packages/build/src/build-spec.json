@@ -1,0 +1,13 @@
+{
+  "imports": "import { mount } from \"@tektogui/jsx-runtime\";\nimport { createEffect, createSignal, untrack } from \"@tektogui/core\";\n",
+  "web": "export const App = entry.App || entry.default;\nexport function mountApp(host) {\n  if (typeof App !== \"function\") throw new Error(\"TSX entry must export a function App (named or default)\");\n  return mount(App(), host, { createEffect, createSignal, untrack });\n}\n",
+  "desktop": "const App = entry.App || entry.default;\nif (typeof App !== \"function\") throw new Error(\"TSX entry must export a function App (named or default)\");\nmount(App(), globalThis.tekto, { createEffect, createSignal, untrack });\n",
+  "flags": [
+    "--bundle",
+    "--platform=neutral",
+    "--target=es2020",
+    "--jsx=automatic",
+    "--jsx-import-source=@tektogui/jsx-runtime",
+    "--log-level=warning"
+  ]
+}

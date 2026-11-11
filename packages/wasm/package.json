@@ -34,6 +34,7 @@
     "notes.html",
     "gpu.html"
   ],
+  "devDependencies": { "@tektogui/build": "file:../build" },
   "scripts": {
     "test": "node --test test.js"
   }
