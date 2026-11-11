@@ -64,7 +64,7 @@ Short, command-accurate how-tos live in `.agents/skills/<slug>/SKILL.md`. The sa
 
 `tekto-js` is the `HostOp` protocol. Desktop embeds QuickJS-ng behind `--features quickjs` (off by default, not on PR CI). Web uses the browser engine and calls the same ops on a WASM module.
 
-`tekto-native` is the plugin API for files, dialogs, clipboard, notifications, tray, and global shortcuts. Fill in one platform at a time; stubs should return a clear error. Android text clipboard uses `ClipboardManager` (same `get_text` / `set_text`). A background read on API 29+ is `Unavailable`. Files on Android are still open. The tray is the optional `tray` feature (off by default): StatusNotifierItem on Linux, `Shell_NotifyIconW` on Windows. Linux and Windows global shortcuts are the optional `shortcuts` feature (X11 grab via `x11rb` on Linux, `RegisterHotKey` on Windows, off by default). A live Windows hotkey check is still open.
+`tekto-native` is the plugin API for files, dialogs, clipboard, notifications, tray, and global shortcuts. Fill in one platform at a time; stubs should return a clear error. Android text clipboard uses `ClipboardManager` (same `get_text` / `set_text`). A background read on API 29+ is `Unavailable`. Android app-private text and byte reads and writes use relative paths under `Context.getFilesDir()`; dialogs and Storage Access Framework / shared-document access remain unsupported. A device check is still open. The tray is the optional `tray` feature (off by default): StatusNotifierItem on Linux, `Shell_NotifyIconW` on Windows. Linux and Windows global shortcuts are the optional `shortcuts` feature (X11 grab via `x11rb` on Linux, `RegisterHotKey` on Windows, off by default). A live Windows hotkey check is still open.
 
 ## How to check a change
 
