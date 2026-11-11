@@ -28,18 +28,39 @@ use tekto_mcp::SharedTreeHandle;
 use tekto_render::{paint_tree, CpuRenderer, Renderer};
 use tekto_tree::{ImeEvent, Tree, SCROLL_WHEEL_LINE};
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalPosition, LogicalSize};
+use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{
     ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::window::{ImePurpose, Window, WindowId};
+use winit::window::{CursorIcon, ImePurpose, ResizeDirection, Window, WindowId};
 
 /// Wakes the window when the dev server patches the tree.
 #[derive(Clone, Copy, Debug)]
 enum AppEvent {
     TreeChanged,
 }
+
+/// One edge-resize gesture on an undecorated window.
+#[derive(Clone, Copy)]
+struct ResizeSession {
+    direction: ResizeDirection,
+    /// Physical cursor position when the press started.
+    start: (f64, f64),
+    /// Physical outer position at the start.
+    origin: (i32, i32),
+    /// Physical inner size at the start.
+    size: (u32, u32),
+    scale: f64,
+}
+
+/// Distance from an edge that starts a resize, in logical pixels.
+const RESIZE_EDGE: f32 = 6.0;
+/// Minimum logical content size while resizing.
+const MIN_RESIZE_WIDTH: f32 = 240.0;
+const MIN_RESIZE_HEIGHT: f32 = 160.0;
+/// Distance from a monitor edge that snaps the window, in logical pixels.
+const SNAP_EDGE: f32 = 8.0;
 
 struct State {
     /// Dropped before [`State::window`] so the Android `ANativeWindow` is
@@ -66,6 +87,12 @@ struct State {
     anim_origin: Instant,
     /// Set by a close control; the event loop exits on the next wake.
     close_requested: bool,
+    /// Active edge resize for an undecorated window.
+    resize: Option<ResizeSession>,
+    /// Last press on the drag region, for double-click to maximise.
+    last_title_press: Option<(Instant, (f32, f32))>,
+    /// A bar drag is in progress and may end at a screen edge.
+    snap_drag: bool,
     #[cfg(feature = "a11y-os")]
     adapter: accesskit_winit::Adapter,
 }
@@ -136,6 +163,9 @@ impl ApplicationHandler<AppEvent> for App {
             viewport: Arc::clone(&self.viewport),
             anim_origin: Instant::now(),
             close_requested: false,
+            resize: None,
+            last_title_press: None,
+            snap_drag: false,
             #[cfg(feature = "a11y-os")]
             adapter,
         });
@@ -251,8 +281,19 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(state) = self.state.as_mut() {
                     let scale = state.window.scale_factor();
                     let (x, y) = logical_from_physical(position.x, position.y, scale);
+                    if state.resize.is_some() {
+                        resize_follow(state, (x, y));
+                        return;
+                    }
                     let op = state.pointer.on_cursor_moved(x, y);
                     deliver_pointer(state, op);
+                    if !state.window.is_decorated() {
+                        let size = state.window.inner_size();
+                        let width = size.width as f32 / scale as f32;
+                        let height = size.height as f32 / scale as f32;
+                        let direction = edge_direction((x, y), width, height);
+                        state.window.set_cursor(resize_cursor(direction));
+                    }
                 }
             }
             WindowEvent::MouseInput {
@@ -263,19 +304,56 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(state) = self.state.as_mut() {
                     let pressed = button_state == ElementState::Pressed;
                     if pressed {
-                        let drag = state
+                        let cursor = state
                             .pointer
                             .cursor
-                            .filter(|_| !state.pointer.swallow_mouse)
-                            .is_some_and(|(x, y)| {
-                                state
-                                    .tree
-                                    .lock()
-                                    .ok()
-                                    .is_some_and(|tree| tree.drag_region_at(x, y))
-                            });
+                            .filter(|_| !state.pointer.swallow_mouse);
+                        if let (Some(cursor), false) = (cursor, state.window.is_decorated()) {
+                            let size = state.window.inner_size();
+                            let scale = state.window.scale_factor() as f32;
+                            let width = size.width as f32 / scale;
+                            let height = size.height as f32 / scale;
+                            if let Some(direction) = edge_direction(cursor, width, height) {
+                                begin_resize(state, direction, cursor);
+                                capture_mouse(&state.window);
+                                return;
+                            }
+                        }
+                        let drag = cursor.is_some_and(|(x, y)| {
+                            state
+                                .tree
+                                .lock()
+                                .ok()
+                                .is_some_and(|tree| tree.drag_region_at(x, y))
+                        });
                         if drag {
+                            if let Some((x, y)) = cursor {
+                                let now = Instant::now();
+                                let double = state.last_title_press.is_some_and(|(then, at)| {
+                                    now.duration_since(then) < Duration::from_millis(400)
+                                        && (x - at.0).abs() <= 6.0
+                                        && (y - at.1).abs() <= 6.0
+                                });
+                                if double {
+                                    state.last_title_press = None;
+                                    let maximized = state.window.is_maximized();
+                                    state.window.set_maximized(!maximized);
+                                    return;
+                                }
+                                state.last_title_press = Some((now, (x, y)));
+                            }
+                            state.snap_drag = true;
                             let _ = state.window.drag_window();
+                            return;
+                        }
+                    } else {
+                        if state.resize.take().is_some() {
+                            release_mouse();
+                            return;
+                        }
+                        if state.snap_drag {
+                            state.snap_drag = false;
+                            snap_window(state);
                             return;
                         }
                     }
@@ -743,6 +821,208 @@ fn apply_window_control(state: &mut State, control: tekto_tree::WindowControl) {
     }
 }
 
+fn edge_direction(cursor: (f32, f32), width: f32, height: f32) -> Option<ResizeDirection> {
+    let left = cursor.0 <= RESIZE_EDGE;
+    let right = cursor.0 >= width - RESIZE_EDGE;
+    let top = cursor.1 <= RESIZE_EDGE;
+    let bottom = cursor.1 >= height - RESIZE_EDGE;
+    match (left, right, top, bottom) {
+        (true, _, true, _) => Some(ResizeDirection::NorthWest),
+        (true, _, _, true) => Some(ResizeDirection::SouthWest),
+        (_, true, true, _) => Some(ResizeDirection::NorthEast),
+        (_, true, _, true) => Some(ResizeDirection::SouthEast),
+        (true, _, _, _) => Some(ResizeDirection::West),
+        (_, true, _, _) => Some(ResizeDirection::East),
+        (_, _, true, _) => Some(ResizeDirection::North),
+        (_, _, _, true) => Some(ResizeDirection::South),
+        _ => None,
+    }
+}
+
+fn resize_cursor(direction: Option<ResizeDirection>) -> CursorIcon {
+    match direction {
+        Some(ResizeDirection::West | ResizeDirection::East) => CursorIcon::EwResize,
+        Some(ResizeDirection::North | ResizeDirection::South) => CursorIcon::NsResize,
+        Some(ResizeDirection::NorthEast | ResizeDirection::SouthWest) => CursorIcon::NeswResize,
+        Some(ResizeDirection::NorthWest | ResizeDirection::SouthEast) => CursorIcon::NwseResize,
+        None => CursorIcon::Default,
+    }
+}
+
+/// Keep receiving cursor moves after the pointer leaves the window.
+#[cfg(target_os = "windows")]
+fn capture_mouse(window: &Window) {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    unsafe extern "system" {
+        fn SetCapture(hwnd: isize) -> isize;
+    }
+    if let Ok(handle) = window.window_handle() {
+        if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+            // Safety: the HWND belongs to this window; capture is released on mouse up.
+            unsafe {
+                SetCapture(handle.hwnd.get());
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn capture_mouse(_window: &Window) {}
+
+#[cfg(target_os = "windows")]
+fn release_mouse() {
+    unsafe extern "system" {
+        fn ReleaseCapture() -> i32;
+    }
+    // Safety: releases this thread's capture, which only begin_resize sets.
+    unsafe {
+        ReleaseCapture();
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn release_mouse() {}
+
+fn begin_resize(state: &mut State, direction: ResizeDirection, cursor: (f32, f32)) {
+    let Ok(origin) = state.window.outer_position() else {
+        return;
+    };
+    let size = state.window.inner_size();
+    let scale = state.window.scale_factor();
+    state.resize = Some(ResizeSession {
+        direction,
+        start: (cursor.0 as f64 * scale, cursor.1 as f64 * scale),
+        origin: (origin.x, origin.y),
+        size: (size.width, size.height),
+        scale,
+    });
+}
+
+fn resize_follow(state: &mut State, cursor: (f32, f32)) {
+    let Some(session) = state.resize else {
+        return;
+    };
+    let dx = cursor.0 as f64 * session.scale - session.start.0;
+    let dy = cursor.1 as f64 * session.scale - session.start.1;
+    let mut x = session.origin.0 as f64;
+    let mut y = session.origin.1 as f64;
+    let mut width = session.size.0 as f64;
+    let mut height = session.size.1 as f64;
+    let west = matches!(
+        session.direction,
+        ResizeDirection::West | ResizeDirection::NorthWest | ResizeDirection::SouthWest
+    );
+    let east = matches!(
+        session.direction,
+        ResizeDirection::East | ResizeDirection::NorthEast | ResizeDirection::SouthEast
+    );
+    let north = matches!(
+        session.direction,
+        ResizeDirection::North | ResizeDirection::NorthWest | ResizeDirection::NorthEast
+    );
+    let south = matches!(
+        session.direction,
+        ResizeDirection::South | ResizeDirection::SouthWest | ResizeDirection::SouthEast
+    );
+    if east {
+        width += dx;
+    }
+    if west {
+        x += dx;
+        width -= dx;
+    }
+    if south {
+        height += dy;
+    }
+    if north {
+        y += dy;
+        height -= dy;
+    }
+    let min_width = MIN_RESIZE_WIDTH as f64 * session.scale;
+    let min_height = MIN_RESIZE_HEIGHT as f64 * session.scale;
+    if width < min_width {
+        if west {
+            x -= min_width - width;
+        }
+        width = min_width;
+    }
+    if height < min_height {
+        if north {
+            y -= min_height - height;
+        }
+        height = min_height;
+    }
+    state
+        .window
+        .set_outer_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+    let _ = state.window.request_inner_size(PhysicalSize::new(
+        width.round() as u32,
+        height.round() as u32,
+    ));
+}
+
+/// Snap a dragged window to halves, quarters, or maximised at a monitor edge.
+fn snap_window(state: &mut State) {
+    if state.window.is_maximized() {
+        return;
+    }
+    let Some(cursor) = state.pointer.cursor else {
+        return;
+    };
+    let Some(monitor) = state.window.current_monitor() else {
+        return;
+    };
+    let scale = state.window.scale_factor();
+    let cx = cursor.0 as f64 * scale;
+    let cy = cursor.1 as f64 * scale;
+    let pos = monitor.position();
+    let size = monitor.size();
+    let left = pos.x as f64;
+    let top = pos.y as f64;
+    let width = size.width as f64;
+    let height = size.height as f64;
+    let edge = SNAP_EDGE as f64 * scale;
+    let horizontal = if cx <= left + edge {
+        Some(0)
+    } else if cx >= left + width - edge {
+        Some(1)
+    } else {
+        None
+    };
+    let vertical = if cy <= top + edge {
+        Some(0)
+    } else if cy >= top + height - edge {
+        Some(1)
+    } else {
+        None
+    };
+    let half_width = width / 2.0;
+    let half_height = height / 2.0;
+    match (horizontal, vertical) {
+        (Some(hx), Some(vy)) => {
+            let x = if hx == 0 { left } else { left + half_width };
+            let y = if vy == 0 { top } else { top + half_height };
+            state
+                .window
+                .set_outer_position(PhysicalPosition::new(x as i32, y as i32));
+            let _ = state
+                .window
+                .request_inner_size(PhysicalSize::new(half_width as u32, half_height as u32));
+        }
+        (None, Some(0)) => state.window.set_maximized(true),
+        (Some(hx), None) => {
+            let x = if hx == 0 { left } else { left + half_width };
+            state
+                .window
+                .set_outer_position(PhysicalPosition::new(x as i32, top as i32));
+            let _ = state
+                .window
+                .request_inner_size(PhysicalSize::new(half_width as u32, height as u32));
+        }
+        _ => {}
+    }
+}
+
 fn apply_wheel(state: &mut State, x: f32, y: f32, delta_y: f32) {
     let changed = state
         .tree
@@ -1049,4 +1329,49 @@ fn run_event_loop(
     run_result.map_err(|e| PlatformError::msg(e.to_string()))?;
     tekto_mcp::clear_endpoint();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edges_and_corners_map_to_resize_directions() {
+        let (width, height) = (400.0, 300.0);
+        assert_eq!(
+            edge_direction((2.0, 150.0), width, height),
+            Some(ResizeDirection::West)
+        );
+        assert_eq!(
+            edge_direction((398.0, 150.0), width, height),
+            Some(ResizeDirection::East)
+        );
+        assert_eq!(
+            edge_direction((200.0, 2.0), width, height),
+            Some(ResizeDirection::North)
+        );
+        assert_eq!(
+            edge_direction((200.0, 298.0), width, height),
+            Some(ResizeDirection::South)
+        );
+        assert_eq!(
+            edge_direction((2.0, 2.0), width, height),
+            Some(ResizeDirection::NorthWest)
+        );
+        assert_eq!(
+            edge_direction((398.0, 2.0), width, height),
+            Some(ResizeDirection::NorthEast)
+        );
+        assert_eq!(
+            edge_direction((2.0, 298.0), width, height),
+            Some(ResizeDirection::SouthWest)
+        );
+        assert_eq!(
+            edge_direction((398.0, 298.0), width, height),
+            Some(ResizeDirection::SouthEast)
+        );
+        assert_eq!(edge_direction((200.0, 150.0), width, height), None);
+        // A button near the top-right stays outside the corner band in the middle.
+        assert_eq!(edge_direction((390.0, 40.0), width, height), None);
+    }
 }
