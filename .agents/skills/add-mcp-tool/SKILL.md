@@ -22,13 +22,18 @@ The stdio MCP server (`tekto mcp`) is a proxy for the `ui.*` and other `app.*` t
 | MCP tool | HTTP | CLI |
 |---|---|---|
 | `ui.tree` | `GET /tree` (JSON) and `GET /tree.txt` | `tekto tree` uses `/tree.txt` |
+| `ui.inspect` | `POST /inspect` `{"id":N}` | `tekto inspect N` prints semantic and layout diagnostics; without an id it prints the inspector URL |
+| `ui.snapshot` | `GET /snapshot` returns a versioned semantic tree and focus | none |
+| `ui.find` | `POST /find` with `{"role":"Button","name":"Save"}`; either field may be omitted; exact matches include duplicates | none |
 | `ui.accesskit` | `GET /accesskit` | none |
 | `ui.screenshot` | `GET /screenshot` | `tekto screenshot [out]` |
+| `ui.action` | `POST /action` with `action`, `id`, and `checked` for toggle or `value` for set_value; focus and activate need only `id` | none |
 | `ui.click` | `POST /click` `{"id":N}` | `tekto click N` (sets focus and `last_click`; also logged). Retained desktop JS button callbacks run; callback errors are returned and logged. Each callback has a fixed one-second QuickJS budget (no setting); a runaway loop is interrupted and returns a budget error. Native Rust and lock waits are not preemptible, and changes made before an interrupt are kept |
-| `ui.key` | `POST /key` `{"name":"Tab"}` | `tekto key <name>`; names: `Tab`, `Shift+Tab`, `Enter`, `Space`, `Backspace` |
+| `ui.key` | `POST /key` `{"name":"Tab"}` | `tekto key <name>`; names: `Tab`, `Shift+Tab`, `Enter`, `Space`, `Backspace`, `Escape`, `ArrowLeft`, `ArrowRight`, `ArrowUp`, `ArrowDown`, `Home`, `End`, `Shift+ArrowLeft`, `Shift+ArrowRight`, `Shift+Home`, `Shift+End`, `SelectAll` |
+| `ui.set_value` | `POST /set-value` `{"id":N,"value":0.5}` sets an enabled slider in the 0–1 range | none |
 | `ui.scroll` | `POST /scroll` `{"id":N,"delta":N}` | `tekto scroll ID --by N`; returns the clamped `offset` |
 | `ui.type` | `POST /type` `{"id":N,"text":"…"}` inserts plain characters into a text field at the caret and focuses it. Not an IME; use `ui.key` for Backspace | none |
-| `ui.patch` | `POST /patch` | `tekto patch ID [--text] [--fill] [--color] [--font-size] [--padding] [--gap] [--disabled <bool>]` (positional id; HTTP/MCP also accept `name` and `fontSize`; `disabled` applies to buttons and text fields). Response is `{ ok, node, writeback }`. |
+| `ui.patch` | `POST /patch` | `tekto patch ID [--text] [--fill] [--color] [--font-size] [--padding] [--gap] [--disabled <bool>]` (positional id; HTTP/MCP also accept `name`, `fontSize`, `value` (progress), `radius`, `borderColor`, and `borderWidth`; `disabled` applies to buttons and text fields). Response is `{ ok, node, writeback }`. |
 | `app.state` | `GET /state` | none |
 | `app.states` | `GET /states` | `tekto states` |
 | `app.restore` | `POST /states/restore` `{"index":N}` | `tekto restore N` |
@@ -42,7 +47,7 @@ Protocol version in `initialize` is `2024-11-05`. Stdio uses newline-delimited J
 Constants live in `crates/tekto-mcp/src/lib.rs` (`serve`, `handle_client_locked`):
 
 - `MAX_CLIENTS = 8`: at most eight connections in flight. The accept loop closes any extra connection at once, with no response and no dispatch. Capacity returns when a worker finishes.
-- `IO_DEADLINE = 5s`, absolute, not per read or write. The request (headers and body) must arrive within 5 seconds of accept, even if a client trickles one byte at a time. The response gets a separate 5 seconds to write. On a miss the connection is dropped with no HTTP error body, so a slow reader cannot hold a slot.
+- `IO_DEADLINE = 5s`, absolute, not per read or write. The request (headers and body) must arrive within 5 seconds of accept, even if a client trickles one byte at a time. The response gets a separate 5 seconds to write, with sends bounded to 64 KiB so Windows can recheck the deadline during large responses. On a miss the connection is dropped with no HTTP error body, so a slow reader cannot hold a slot.
 - Requests: headers up to 64 KiB, whole buffered request up to 2 MiB. A body shorter than `Content-Length` is an error, not a partial request.
 - Most handlers run one at a time under a dispatch lock; click and key delivery run outside that lock and use the handle action gate, which also orders supported patches and JS mounts. Keep new routes short. Do not reenter gated handle actions from callbacks or change hooks. A click that runs JS holds the gate for at most about one second of JS time (periodic interrupt); native or lock waits in a new route are not covered, so keep them short.
 - IPv6: `DevEndpoint::base_url()` brackets the host (`http://[::1]:PORT`).

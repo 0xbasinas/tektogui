@@ -3097,6 +3097,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tekto-tree",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -3108,6 +3109,13 @@ dependencies = [
  "tekto",
  "tekto-js",
  "tekto-mcp",
+]
+
+[[package]]
+name = "tekto-image"
+version = "0.1.0"
+dependencies = [
+ "png",
 ]
 
 [[package]]
@@ -3168,6 +3176,7 @@ dependencies = [
  "tekto-a11y",
  "tekto-layout",
  "tekto-mcp",
+ "tekto-native",
  "tekto-render",
  "tekto-tree",
  "thiserror 2.0.21",
@@ -3182,6 +3191,7 @@ dependencies = [
  "png",
  "pollster",
  "skrifa",
+ "tekto-image",
  "tekto-text",
  "tekto-tree",
  "thiserror 2.0.21",
@@ -3191,10 +3201,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "tekto-test"
+version = "0.1.0"
+dependencies = [
+ "tekto-a11y",
+ "tekto-js",
+ "tekto-layout",
+ "tekto-render",
+ "tekto-tree",
+ "tekto-widgets",
+ "tiny-skia 0.12.0",
+]
+
+[[package]]
 name = "tekto-text"
 version = "0.1.0"
 dependencies = [
  "parley",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -3202,6 +3226,8 @@ name = "tekto-tree"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "tekto-image",
+ "unicode-segmentation",
 ]
 
 [[package]]

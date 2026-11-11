@@ -49,6 +49,7 @@ fn agent_scroll_changes_virtual_rows_after_layout() {
         action_gate: Arc::new(Mutex::new(())),
         click_js: Mutex::new(None),
         input_js: Mutex::new(None),
+        forget_js: Mutex::new(None),
         history: Mutex::new(None),
     };
     assert!(list_items(&handle.tree(), list_id).contains(&ids[0]));

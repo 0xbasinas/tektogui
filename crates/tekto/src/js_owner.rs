@@ -9,8 +9,9 @@ use crate::{layout_tree, SharedTreeHandle, Viewport};
 type Reply<T> = mpsc::Sender<Result<T, String>>;
 enum Command {
     Mount(String, Reply<u64>),
-    Click(u64, u64, Reply<bool>),
+    Click(u64, u64, bool, Reply<bool>),
     Input(u64, u64, String, Reply<bool>),
+    Forget(u64, Reply<()>),
     Generation(Reply<u64>),
     Shutdown(Reply<()>),
 }
@@ -58,12 +59,13 @@ fn dispatch(
     expected: u64,
     id: u64,
     value: Option<&str>,
+    allow_removed: bool,
     tree: &Arc<Mutex<Tree>>,
 ) -> Result<bool, String> {
     match current.as_mut() {
         Some(session) if expected == generation => {
             let live = tree.lock().map_err(|e| e.to_string())?;
-            if live.get(NodeId::from_raw(id)).is_none() {
+            if !allow_removed && live.get(NodeId::from_raw(id)).is_none() {
                 return Ok(false);
             }
             drop(live);
@@ -124,13 +126,33 @@ impl JsAppOwner {
                         let result = (|| {
                             let next_generation =
                                 generation.checked_add(1).ok_or("JS generation exhausted")?;
+                            let snapshot = match current.as_mut() {
+                                Some(previous) => previous
+                                    .js
+                                    .snapshot_signals(&mut previous.host)
+                                    .map_err(|e| e.to_string())?,
+                                None => "{}".to_string(),
+                            };
                             let mut candidate = Session {
                                 js: JsSession::new().map_err(|e| e.to_string())?,
                                 host: SharedHost(Arc::new(Mutex::new(Tree::new()))),
                             };
+                            candidate
+                                .js
+                                .restore_signals(&snapshot, &mut candidate.host)
+                                .map_err(|e| e.to_string())?;
                             if let Err(e) = candidate.js.eval(&source, &mut candidate.host) {
                                 let _ = candidate.js.dispose(&mut candidate.host);
                                 return Err(e.to_string());
+                            }
+                            let signal_report = candidate
+                                .js
+                                .signal_report(&mut candidate.host)
+                                .map_err(|e| e.to_string())?;
+                            if current.is_some() {
+                                if let Ok(mut logs) = logs.lock() {
+                                    logs.push(format!("js signal reload: {signal_report}"));
+                                }
                             }
                             let (w, h) = viewport
                                 .lock()
@@ -158,14 +180,39 @@ impl JsAppOwner {
                         })();
                         let _ = reply.send(result);
                     }
-                    Command::Click(expected, id, reply) => {
-                        let result = dispatch(&mut current, generation, expected, id, None, &tree);
+                    Command::Click(expected, id, allow_removed, reply) => {
+                        let result = dispatch(
+                            &mut current,
+                            generation,
+                            expected,
+                            id,
+                            None,
+                            allow_removed,
+                            &tree,
+                        );
                         finish_event(result, "click", reply, &logs, &viewport, &tree, &notify);
                     }
                     Command::Input(expected, id, value, reply) => {
-                        let result =
-                            dispatch(&mut current, generation, expected, id, Some(&value), &tree);
+                        let result = dispatch(
+                            &mut current,
+                            generation,
+                            expected,
+                            id,
+                            Some(&value),
+                            false,
+                            &tree,
+                        );
                         finish_event(result, "input", reply, &logs, &viewport, &tree, &notify);
+                    }
+                    Command::Forget(id, reply) => {
+                        let result = match current.as_mut() {
+                            Some(session) => session
+                                .js
+                                .forget_node(id, &mut session.host)
+                                .map_err(|e| e.to_string()),
+                            None => Ok(()),
+                        };
+                        let _ = reply.send(result);
                     }
                     Command::Generation(reply) => {
                         let _ = reply.send(if current.is_some() {
@@ -213,7 +260,10 @@ impl JsAppOwner {
     }
     pub(crate) fn dispatch_click_locked(&self, id: u64) -> Result<bool, String> {
         let generation = self.generation()?;
-        self.request(|reply| Command::Click(generation, id, reply))
+        self.request(|reply| Command::Click(generation, id, true, reply))
+    }
+    pub(crate) fn forget_node_locked(&self, id: u64) -> Result<(), String> {
+        self.request(|reply| Command::Forget(id, reply))
     }
     pub(crate) fn dispatch_input_locked(&self, id: u64, value: String) -> Result<bool, String> {
         let generation = self.generation()?;
@@ -235,7 +285,7 @@ impl JsAppOwner {
     pub fn dispatch_click(&self, generation: u64, id: u64) -> Result<bool, String> {
         self.check_thread()?;
         let _gate = self.0.gate.lock().map_err(|e| e.to_string())?;
-        self.request(|reply| Command::Click(generation, id, reply))
+        self.request(|reply| Command::Click(generation, id, false, reply))
     }
     /// Capture the generation for a later click handoff.
     pub fn generation(&self) -> Result<u64, String> {
@@ -267,9 +317,288 @@ mod tests {
             action_gate: Arc::new(Mutex::new(())),
             click_js: Mutex::new(None),
             input_js: Mutex::new(None),
+            forget_js: Mutex::new(None),
             history: Mutex::new(None),
         })
     }
+    #[test]
+    fn select_selection_delivers_retained_input_and_preserves_options() {
+        let handle = handle();
+        let viewport = Arc::new(Mutex::new(Viewport {
+            width: 320,
+            height: 240,
+            scale: 1.0,
+        }));
+        let owner = crate::install_js_runtime(&handle, &viewport);
+        owner.mount(r#"
+            const root = tekto.create('window');
+            const label = tekto.create('text'); tekto.setText(label, 'waiting'); tekto.append(root, label);
+            const select = tekto.create('select'); tekto.setProp(select, 'name', 'Size'); tekto.append(root, select);
+            const small = tekto.create('menu_item'); tekto.setText(small, 'Small'); tekto.setProp(small, 'checked', 'true'); tekto.append(select, small);
+            const large = tekto.create('menu_item'); tekto.setText(large, 'Large'); tekto.append(select, large);
+            tekto.onInput(select, value => tekto.setText(label, value));
+        "#).unwrap();
+        handle.click(NodeId::from_raw(3)).unwrap();
+        handle.click(NodeId::from_raw(5)).unwrap();
+        assert_eq!(
+            handle
+                .tree()
+                .get(NodeId::from_raw(2))
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("Large")
+        );
+        assert!(handle.tree().get(NodeId::from_raw(5)).is_some());
+        handle.click(NodeId::from_raw(3)).unwrap();
+        handle.click(NodeId::from_raw(4)).unwrap();
+        assert_eq!(
+            handle
+                .tree()
+                .get(NodeId::from_raw(2))
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("Small")
+        );
+    }
+
+    #[test]
+    fn tab_arrow_selection_delivers_retained_callback() {
+        let handle = handle();
+        let viewport = Arc::new(Mutex::new(Viewport {
+            width: 320,
+            height: 240,
+            scale: 1.0,
+        }));
+        let owner = crate::install_js_runtime(&handle, &viewport);
+        owner.mount(r#"
+            const root = tekto.create('window');
+            const label = tekto.create('text'); tekto.setText(label, 'waiting'); tekto.append(root, label);
+            const list = tekto.create('tab_list'); tekto.append(root, list);
+            const first = tekto.create('tab'); tekto.setText(first, 'First'); tekto.setProp(first, 'checked', 'true'); tekto.append(list, first);
+            const second = tekto.create('tab'); tekto.setText(second, 'Second'); tekto.append(list, second);
+            tekto.onClick(second, () => tekto.setText(label, 'selected'));
+        "#).unwrap();
+        handle.click(NodeId::from_raw(4)).unwrap();
+        handle.key(tekto_tree::NamedActionKey::ArrowRight).unwrap();
+        let tree = handle.tree();
+        assert_eq!(tree.focus, Some(NodeId::from_raw(5)));
+        assert_eq!(
+            tree.get(NodeId::from_raw(2)).unwrap().text.as_deref(),
+            Some("selected")
+        );
+    }
+
+    #[test]
+    fn context_menu_callbacks_survive_reopening() {
+        let handle = handle();
+        let viewport = Arc::new(Mutex::new(Viewport {
+            width: 320,
+            height: 240,
+            scale: 1.0,
+        }));
+        let owner = crate::install_js_runtime(&handle, &viewport);
+        owner.mount(r#"
+            const root = tekto.create('window');
+            const target = tekto.create('button'); tekto.setText(target, 'Target'); tekto.append(root, target);
+            const label = tekto.create('text'); tekto.append(root, label);
+            const menu = tekto.create('menu'); tekto.setProp(menu, 'name', 'Actions');
+            const item = tekto.create('menu_item'); tekto.setText(item, 'Open'); tekto.append(menu, item);
+            let count = 0; tekto.onClick(item, () => tekto.setText(label, String(++count)));
+            tekto.bindContextMenu(target, menu);
+        "#).unwrap();
+        for expected in ["1", "2"] {
+            handle
+                .route_action(|tree| {
+                    crate::layout_tree(tree, 320.0, 240.0);
+                    (tree.context_menu_at(10.0, 10.0).is_some(), None)
+                })
+                .unwrap();
+            handle.click(NodeId::from_raw(5)).unwrap();
+            assert_eq!(
+                handle
+                    .tree()
+                    .get(NodeId::from_raw(3))
+                    .unwrap()
+                    .text
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn menu_callback_runs_before_removed_item_cleanup() {
+        let handle = handle();
+        let viewport = Arc::new(Mutex::new(Viewport {
+            width: 320,
+            height: 240,
+            scale: 1.0,
+        }));
+        let owner = crate::install_js_runtime(&handle, &viewport);
+        owner.mount(r#"
+            const root = tekto.create('window');
+            const label = tekto.create('text'); tekto.setText(label, 'waiting'); tekto.append(root, label);
+            const anchor = tekto.create('button'); tekto.append(root, anchor);
+            const menu = tekto.create('menu'); tekto.setProp(menu, 'name', 'Actions');
+            const item = tekto.create('menu_item'); tekto.setText(item, 'Run'); tekto.append(menu, item);
+            let result = '';
+            tekto.onClick(item, () => { result += 'clicked'; tekto.setText(label, result); });
+            tekto.onDispose(item, () => { result += ',disposed'; tekto.setText(label, result); });
+            tekto.openOverlay(menu, anchor, 'below');
+        "#).unwrap();
+        handle.click(NodeId::from_raw(5)).unwrap();
+        assert_eq!(
+            handle
+                .tree()
+                .get(NodeId::from_raw(2))
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("clicked,disposed")
+        );
+        assert!(handle.tree().overlay().is_none());
+        assert!(handle.click(NodeId::from_raw(5)).is_err());
+    }
+
+    #[test]
+    fn host_dismissal_runs_overlay_cleanup_without_tree_lock() {
+        let handle = handle();
+        let viewport = Arc::new(Mutex::new(Viewport {
+            width: 100,
+            height: 100,
+            scale: 1.0,
+        }));
+        let owner = crate::install_js_runtime(&handle, &viewport);
+        owner
+            .mount(
+                r#"
+            const root = tekto.create('window');
+            const label = tekto.create('text');
+            const anchor = tekto.create('button');
+            const popup = tekto.create('rect');
+            const child = tekto.create('button');
+            tekto.append(root, label); tekto.append(root, anchor);
+            tekto.append(popup, child);
+            tekto.onDispose(child, () => tekto.setText(label, 'cleaned'));
+            tekto.openOverlay(popup, anchor, 'below');
+        "#,
+            )
+            .unwrap();
+        assert!(handle
+            .route_action(|tree| tekto_tree::route_named_key(
+                tree,
+                tekto_tree::NamedActionKey::Escape,
+                false
+            ))
+            .unwrap());
+        assert_eq!(
+            handle
+                .tree()
+                .get(NodeId::from_raw(2))
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("cleaned")
+        );
+        assert!(handle.tree().overlay().is_none());
+        owner
+            .mount(
+                r#"
+            const root = tekto.create('window');
+            const label = tekto.create('text');
+            const anchor = tekto.create('button');
+            const popup = tekto.create('rect');
+            tekto.append(root, label); tekto.append(root, anchor);
+            tekto.onDispose(popup, () => tekto.setText(label, 'outside'));
+            tekto.openOverlay(popup, anchor, 'below');
+        "#,
+            )
+            .unwrap();
+        assert!(handle
+            .route_action(|tree| {
+                tree.click_at(99.0, 99.0);
+                (true, None)
+            })
+            .unwrap());
+        assert_eq!(
+            handle
+                .tree()
+                .get(NodeId::from_raw(2))
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("outside")
+        );
+    }
+
+    #[test]
+    fn keyed_signals_survive_reload_and_report_incompatible_keys() {
+        let handle = handle();
+        let viewport = Arc::new(Mutex::new(Viewport {
+            width: 100,
+            height: 100,
+            scale: 1.0,
+        }));
+        let owner = crate::install_js_runtime(&handle, &viewport);
+        let core = include_str!("../../../packages/core/src/index.js")
+            .replace("export function ", "function ");
+        let first = format!(
+            r#"{core}
+            const root = tekto.create('window');
+            const label = tekto.create('text'); tekto.append(root, label);
+            const [count, setCount] = createSignal(1, {{ key: 'count' }});
+            const [old, setOld] = createSignal('old', {{ key: 'old' }});
+            setCount(7); setOld('saved'); tekto.setText(label, String(count()));
+        "#
+        );
+        owner.mount(&first).unwrap();
+        let failed = format!(
+            r#"{core}
+            createSignal(0, {{ key: 'duplicate' }});
+            createSignal(1, {{ key: 'duplicate' }});
+        "#
+        );
+        assert!(owner.mount(&failed).is_err());
+        assert_eq!(
+            handle
+                .tree()
+                .get(NodeId::from_raw(2))
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("7")
+        );
+        let second = format!(
+            r#"{core}
+            const root = tekto.create('window');
+            const label = tekto.create('text'); tekto.append(root, label);
+            const [count] = createSignal(0, {{ key: 'count' }});
+            const [old] = createSignal(42, {{ key: 'old' }});
+            const [fresh] = createSignal('new', {{ key: 'fresh' }});
+            const [plain] = createSignal(3);
+            tekto.setText(label, [count(), old(), fresh(), plain()].join(','));
+        "#
+        );
+        owner.mount(&second).unwrap();
+        assert_eq!(
+            handle
+                .tree()
+                .get(NodeId::from_raw(2))
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("7,42,new,3")
+        );
+        let logs = handle.logs();
+        assert!(
+            logs.iter()
+                .any(|s| s.contains("\"count\"") && s.contains("\"old\"")),
+            "{logs:?}"
+        );
+    }
+
     const COUNTER: &str = r#"
         const root = tekto.create('window');
         const label = tekto.create('text');
@@ -844,5 +1173,67 @@ mod tests {
             .iter()
             .any(|line| line.contains("click exploded")));
         assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn typed_agent_actions_reach_retained_tsx_and_reject_unrealized_nodes() {
+        use tekto_mcp::{SemanticAction, SemanticValue};
+        let handle = handle();
+        let viewport = Arc::new(Mutex::new(Viewport::new(320, 240)));
+        let owner = crate::install_js_runtime(&handle, &viewport);
+        owner
+            .mount(
+                r#"
+            const root = tekto.create('window');
+            const save = tekto.create('button'); tekto.setProp(save, 'name', 'Save'); tekto.append(root, save);
+            const label = tekto.create('text'); tekto.setText(label, 'waiting'); tekto.append(root, label);
+            const ghost = tekto.create('button'); tekto.setProp(ghost, 'name', 'Ghost');
+            const field = tekto.create('text_field'); tekto.setProp(field, 'name', 'Name'); tekto.append(root, field);
+            tekto.onClick(save, () => tekto.setText(label, 'saved'));
+            tekto.onInput(field, value => tekto.setText(label, value));
+        "#,
+            )
+            .unwrap();
+        let find = |role: &str, name: &str| {
+            tekto_a11y::dump(&handle.tree())
+                .unwrap()
+                .nodes
+                .into_iter()
+                .find(|node| node.role == role && node.label.as_deref() == Some(name))
+                .map(|node| node.id)
+        };
+        let label_text = || {
+            handle
+                .tree()
+                .get(NodeId::from_raw(3))
+                .and_then(|node| node.text.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(find("Button", "Save"), Some(2));
+        // The ghost button was created in JS but never attached, so it is not
+        // in the AccessKit tree an agent searches.
+        assert_eq!(find("Button", "Ghost"), None);
+        assert_eq!(label_text(), "waiting");
+
+        handle
+            .semantic_action(SemanticAction::Activate { id: 2 })
+            .unwrap();
+        assert_eq!(label_text(), "saved");
+
+        handle
+            .semantic_action(SemanticAction::SetValue {
+                id: 5,
+                value: SemanticValue::Text("Ada".into()),
+            })
+            .unwrap();
+        assert_eq!(label_text(), "Ada");
+
+        let error = handle
+            .semantic_action(SemanticAction::Activate { id: 4 })
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("stale or not realized"),
+            "{error}"
+        );
     }
 }

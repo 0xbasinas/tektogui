@@ -19,7 +19,7 @@ export declare function transitionOp(
   durationMs?: number;
 };
 
-export declare function createSignal<T>(value: T): [() => T, (value: T | ((prev: T) => T)) => void];
+export declare function createSignal<T>(value: T, options?: { key?: string }): [() => T, (value: T | ((prev: T) => T)) => void];
 export declare function createEffect(fn: () => void): (() => void) & { dispose(): void };
 
 /** Tagged native plugin call. The `op` names match Rust `NativeOp`. */
@@ -47,3 +47,4 @@ export type NativeOp =
  * `shortcutsTakeActivation`. The host throws on a headless or unsupported call.
  */
 export declare function nativeOpJson(op: NativeOp): string;
+export function untrack<T>(fn: () => T): T;

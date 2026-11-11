@@ -29,6 +29,8 @@ pub struct PointerSession {
     pub pointer_down: bool,
     press_origin: Option<(f32, f32)>,
     drag_scroll: Option<NodeId>,
+    capture: Option<NodeId>,
+    text_capture: Option<(NodeId, usize)>,
     dragged: bool,
     pub active_touch: Option<u64>,
     /// While set, cursor motion and left-button presses are dropped.
@@ -143,6 +145,43 @@ pub fn apply_pointer_op(
         PointerOp::Ignore => PointerEffect::quiet(),
         PointerOp::Begin { x, y } => {
             pointer.pointer_down = true;
+            pointer.cursor = Some((x, y));
+            pointer.capture = tree.hit(x, y).filter(|id| {
+                tree.get(*id)
+                    .is_some_and(|n| n.kind == tekto_tree::NodeKind::Slider && !n.disabled)
+            });
+            if let Some(id) = pointer.capture {
+                let focus_changed = tree.focus != Some(id);
+                let _ = tree.set_focus(id);
+                let changed = set_slider_from_x(tree, id, x) || focus_changed;
+                pointer.press_origin = Some((x, y));
+                pointer.dragged = false;
+                return PointerEffect {
+                    redraw: changed,
+                    click_at: None,
+                };
+            }
+            if pointer.active_touch.is_none() {
+                if let Some(id) = tree.hit(x, y).filter(|id| {
+                    tree.get(*id).is_some_and(|n| {
+                        n.kind == tekto_tree::NodeKind::TextField
+                            && !n.disabled
+                            && n.preedit.is_empty()
+                    })
+                }) {
+                    if let Some(caret) = tekto_layout::field_caret_at(tree, id, x, y) {
+                        if tree.set_field_selection(id, caret, caret).is_ok() {
+                            pointer.text_capture = Some((id, tree.get(id).expect("field").caret));
+                            pointer.press_origin = Some((x, y));
+                            pointer.dragged = false;
+                            return PointerEffect {
+                                redraw: true,
+                                click_at: None,
+                            };
+                        }
+                    }
+                }
+            }
             pointer.press_origin = Some((x, y));
             pointer.dragged = false;
             pointer.drag_scroll = tree.scroll_touch_begin(x, y, now_ms);
@@ -151,6 +190,40 @@ pub fn apply_pointer_op(
             PointerEffect::quiet()
         }
         PointerOp::Drag { x, y } => {
+            pointer.cursor = Some((x, y));
+            if let Some(id) = pointer.capture {
+                if tree
+                    .get(id)
+                    .is_none_or(|n| n.disabled || n.kind != tekto_tree::NodeKind::Slider)
+                {
+                    pointer.capture = None;
+                    pointer.dragged = true;
+                    return PointerEffect::quiet();
+                }
+                return PointerEffect {
+                    redraw: set_slider_from_x(tree, id, x),
+                    click_at: None,
+                };
+            }
+            if let Some((id, anchor)) = pointer.text_capture {
+                if let Some((ox, oy)) = pointer.press_origin {
+                    if (x - ox).abs() + (y - oy).abs() >= DRAG_SLOP {
+                        pointer.dragged = true;
+                    }
+                }
+                if pointer.dragged {
+                    if let Some(caret) = tekto_layout::field_caret_at(tree, id, x, y) {
+                        if tree.set_field_selection(id, anchor, caret).is_ok() {
+                            return PointerEffect {
+                                redraw: true,
+                                click_at: None,
+                            };
+                        }
+                    }
+                    pointer.text_capture = None;
+                }
+                return PointerEffect::quiet();
+            }
             if let Some((ox, oy)) = pointer.press_origin {
                 if (x - ox).abs() + (y - oy).abs() >= DRAG_SLOP {
                     pointer.dragged = true;
@@ -167,6 +240,8 @@ pub fn apply_pointer_op(
         }
         PointerOp::End { commit } => {
             let was_down = pointer.pointer_down;
+            let captured = pointer.capture.take().is_some();
+            pointer.text_capture = None;
             pointer.pointer_down = false;
             pointer.drag_scroll = None;
             pointer.press_origin = None;
@@ -176,7 +251,7 @@ pub fn apply_pointer_op(
                 tree.scroll_touch_cancel();
                 false
             };
-            let click_at = if commit && was_down && !pointer.dragged {
+            let click_at = if commit && was_down && !pointer.dragged && !captured {
                 pointer.cursor
             } else {
                 None
@@ -190,6 +265,15 @@ pub fn apply_pointer_op(
     }
 }
 
+fn set_slider_from_x(tree: &mut Tree, id: NodeId, x: f32) -> bool {
+    let Some(node) = tree.get(id) else {
+        return false;
+    };
+    let width = (node.bounds.width - 16.0).max(1.0);
+    let value = (x - node.bounds.x - 8.0) / width;
+    tree.set_slider_value(id, value).unwrap_or(false)
+}
+
 /// Apply a gesture and deliver a completed click through the live action gate.
 pub fn deliver_pointer(
     handle: &tekto_mcp::SharedTreeHandle,
@@ -199,13 +283,17 @@ pub fn deliver_pointer(
 ) -> Result<bool, tekto_mcp::McpError> {
     handle.route_activated_action(|tree| {
         let effect = apply_pointer_op(pointer, tree, op, now_ms);
+        let had_overlay = tree.overlay().is_some();
         let id = match effect.click_at {
             Some((x, y)) => {
                 click_pointer(tree, x, y).map_err(|e| tekto_mcp::McpError::msg(e.to_string()))?
             }
             None => None,
         };
-        Ok((effect.redraw, id))
+        Ok((
+            effect.redraw || (had_overlay && tree.overlay().is_none()),
+            id,
+        ))
     })
 }
 
@@ -216,6 +304,7 @@ pub(crate) fn click_pointer(
     y: f32,
 ) -> Result<Option<NodeId>, tekto_tree::TreeError> {
     let Some(id) = tree.hit(x, y) else {
+        tree.close_overlay();
         return Ok(None);
     };
     // A click clears IME preedit, so resolve and apply against committed text.
@@ -223,6 +312,8 @@ pub(crate) fn click_pointer(
     tree.click(id)?;
     if let (Some(caret), Some(node)) = (caret, tree.get_mut(id)) {
         node.caret = caret.min(node.text.as_deref().unwrap_or("").chars().count());
+        node.selection_anchor = None;
+        node.selection_x = None;
     }
     Ok(Some(id))
 }
@@ -255,6 +346,92 @@ mod tests {
     }
 
     #[test]
+    fn mouse_drag_selects_text_without_scrolling() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        tree.get_mut(root).unwrap().bounds = Rect::new(0.0, 0.0, 300.0, 100.0);
+        let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+        let node = tree.get_mut(field).unwrap();
+        node.text = Some("Hello world".into());
+        node.bounds = Rect::new(0.0, 0.0, 250.0, 40.0);
+        node.font_size = 20.0;
+        let mut pointer = PointerSession::default();
+        apply_pointer_op(
+            &mut pointer,
+            &mut tree,
+            PointerOp::Begin { x: 1.0, y: 10.0 },
+            0.0,
+        );
+        apply_pointer_op(
+            &mut pointer,
+            &mut tree,
+            PointerOp::Drag { x: 240.0, y: 10.0 },
+            10.0,
+        );
+        assert_eq!(tree.selected_text(field).unwrap(), "Hello world");
+        assert!(apply_pointer_op(
+            &mut pointer,
+            &mut tree,
+            PointerOp::End { commit: true },
+            20.0
+        )
+        .click_at
+        .is_none());
+    }
+
+    #[test]
+    fn slider_capture_survives_leaving_bounds_and_does_not_scroll() {
+        let (mut tree, button) = scroll_with_button();
+        let scroll = tree.get(button).unwrap().parent.unwrap();
+        let slider = tree.add(NodeKind::Slider, Some(scroll)).unwrap();
+        tree.get_mut(slider).unwrap().bounds = Rect::new(10.0, 20.0, 100.0, 24.0);
+        let mut pointer = PointerSession::default();
+        apply_pointer_op(
+            &mut pointer,
+            &mut tree,
+            PointerOp::Begin { x: 20.0, y: 30.0 },
+            0.0,
+        );
+        apply_pointer_op(
+            &mut pointer,
+            &mut tree,
+            PointerOp::Drag { x: 200.0, y: 200.0 },
+            10.0,
+        );
+        assert_eq!(tree.get(slider).unwrap().progress, 1.0);
+        assert_eq!(tree.get(scroll).unwrap().scroll_y, 0.0);
+        let end = apply_pointer_op(
+            &mut pointer,
+            &mut tree,
+            PointerOp::End { commit: false },
+            20.0,
+        );
+        assert!(end.click_at.is_none());
+        assert!(pointer.capture.is_none());
+        apply_pointer_op(
+            &mut pointer,
+            &mut tree,
+            PointerOp::Begin { x: 20.0, y: 30.0 },
+            30.0,
+        );
+        tree.remove(slider).unwrap();
+        apply_pointer_op(
+            &mut pointer,
+            &mut tree,
+            PointerOp::Drag { x: 30.0, y: 30.0 },
+            40.0,
+        );
+        assert!(apply_pointer_op(
+            &mut pointer,
+            &mut tree,
+            PointerOp::End { commit: true },
+            50.0
+        )
+        .click_at
+        .is_none());
+    }
+
+    #[test]
     fn routed_field_click_sets_caret_before_typing() {
         use std::sync::{Arc, Mutex};
         for (value, x, expected) in [
@@ -283,6 +460,7 @@ mod tests {
                 action_gate: Arc::new(Mutex::new(())),
                 click_js: Mutex::new(None),
                 input_js: Mutex::new(None),
+                forget_js: Mutex::new(None),
                 history: Mutex::new(None),
             };
             let mut pointer = PointerSession::default();

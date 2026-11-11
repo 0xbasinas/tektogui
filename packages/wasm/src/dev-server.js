@@ -24,13 +24,19 @@ function pageHtml() {
 <meta charset="utf-8">
 <title>Tekto Notes</title>
 <p>Host page. The Notes sketch is the TSX bundle. The wasm core paints the canvas. QuickJS is not used.</p>
-<canvas id="view" width="640" height="400" style="border:1px solid #ccc; max-width:100%"></canvas>
+<canvas tabindex="0" id="view" width="640" height="400" style="border:1px solid #ccc; max-width:100%"></canvas>
 <pre id="log"></pre>
 <script type="module">
 import { connectWasm } from "./src/index.js";
 import { paintCanvas, attachCanvasInput } from "./src/canvas.js";
 import { applyUiPatch } from "./src/patch.js";
-import { mountApp } from "./app.js";
+const stateKey = "tekto.reload:" + location.pathname;
+try {
+  const saved = sessionStorage.getItem(stateKey);
+  sessionStorage.removeItem(stateKey);
+  if (saved) globalThis.__tektoReloadState = JSON.parse(saved);
+} catch (error) { console.warn("Tekto reload state unavailable", error); }
+const { mountApp } = await import("./app.js");
 
 const canvas = document.querySelector("#view");
 const log = document.querySelector("#log");
@@ -39,6 +45,8 @@ const host = await connectWasm("./tekto_wasm.wasm");
 async function show() {
   host.reset();
   mountApp(host);
+  if (typeof globalThis.__tektoSignalReloadReport === "function")
+    console.info("Tekto signal reload", JSON.parse(globalThis.__tektoSignalReloadReport()));
   await paintCanvas(host, canvas, canvas.width, canvas.height);
   log.textContent = "painted " + canvas.width + "×" + canvas.height;
 }
@@ -50,6 +58,10 @@ const events = new EventSource("/events");
 events.onmessage = async (ev) => {
   const msg = JSON.parse(ev.data);
   if (msg.type === "reload") {
+    try {
+      if (typeof globalThis.__tektoSnapshotSignals === "function")
+        sessionStorage.setItem(stateKey, globalThis.__tektoSnapshotSignals());
+    } catch (error) { console.warn("Tekto reload state was not saved", error); }
     location.reload();
     return;
   }
@@ -110,9 +122,12 @@ export async function startDevServer(opts) {
         const onExit = (code) => reject(new Error(`esbuild watcher exited before ready (${code}): ${output}`));
         watchChild.once("error", onError);
         watchChild.once("exit", onExit);
-        const onData = (chunk) => {
+        let finishing = false;
+        const onData = async (chunk) => {
           output += chunk;
-          if (!output.includes("[watch] build finished, watching for changes...")) return;
+          if (finishing || !output.includes("[watch] build finished, watching for changes...")) return;
+          finishing = true;
+          try { await opts.beforeWatcherReady?.(); } catch (error) { reject(error); return; }
           watchChild.removeListener("error", onError);
           watchChild.removeListener("exit", onExit);
           watchChild.stderr.removeListener("data", onData);

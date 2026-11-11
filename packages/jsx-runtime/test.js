@@ -11,6 +11,14 @@ test("jsx builds a plain element, not a DOM node", () => {
   assert.ok(Fragment);
 });
 
+test("image validates its description and forwards bounded source data", () => {
+  const source = { width: 1, height: 1, rgba: new Uint8Array([255, 0, 0, 255]) };
+  const ops = renderToOps(jsx("image", { name: "Logo", imageSource: source, imageFit: "cover" }));
+  assert.ok(ops.some(op => op.key === "imageSource" && JSON.parse(op.value).rgba.join(",") === "255,0,0,255"));
+  assert.throws(() => renderToOps(jsx("image", { imageSource: source })), /name or decorative/);
+  assert.throws(() => renderToOps(jsx("image", { name: "Logo" })), /imageSource/);
+});
+
 import { mount, renderToOps } from "./src/index.js";
 import { Notes } from "./notes-app.js";
 
@@ -113,12 +121,15 @@ test("component schema lists every prop JSX forwards on each kind", () => {
     componentSchema.components.flatMap((c) => c.props.map((p) => p.name)).filter((name) => !aliasKeys.has(name)),
   );
   forwarded.delete("disabled");
+  for (const key of ["imageSource", "imageFit", "decorative", "multiline"]) forwarded.delete(key);
   forwarded.add("title");
   for (const spec of componentSchema.components) {
     assert.ok(Array.isArray(spec.props));
     assert.ok(Array.isArray(spec.events));
     const listed = new Set(spec.props.map((p) => p.name));
-    assert.equal(listed.has("disabled"), ["button", "text_field", "checkbox"].includes(spec.name));
+    for (const key of ["imageSource", "imageFit", "decorative"]) assert.equal(listed.has(key), spec.name === "image");
+    assert.equal(listed.has("multiline"), spec.name === "text_field");
+    assert.equal(listed.has("disabled"), ["button", "text_field", "checkbox", "switch", "slider", "radio", "tab", "menu_item", "select"].includes(spec.name));
     for (const key of forwarded) {
       assert.ok(listed.has(key), `${spec.name} omits prop ${key} that JSX forwards`);
     }
@@ -170,8 +181,8 @@ test("reactive text and button callbacks require a retained host", async () => {
   assert.equal(text.get(2), "2");
   disposers.get(2)(); callbacks.get(3)();
   assert.equal(text.get(2), "2");
-  assert.throws(() => renderToOps(jsx("button", { onClick() {} })), /retained QuickJS/);
-  assert.throws(() => renderToOps(jsx("text", { text: count })), /retained QuickJS/);
+  assert.throws(() => renderToOps(jsx("button", { onClick() {} })), /retained host/);
+  assert.throws(() => renderToOps(jsx("text", { text: count })), /retained host/);
 });
 
 test("failed mount rolls back created nodes and reactive bindings", async () => {
@@ -204,7 +215,7 @@ test("disabled controls lower their state to host props", () => {
   mount(jsx('text_field', { onInput: v => { value = v; } }), host);
   callback('hello');
   assert.equal(value, 'hello');
-  assert.throws(() => renderToOps(jsx('text_field', { onInput() {} })), /retained QuickJS/);
+  assert.throws(() => renderToOps(jsx('text_field', { onInput() {} })), /retained host/);
   assert.throws(() => mount(jsx('button', { onInput() {} }), host), /text_field/);
 }
 
@@ -212,4 +223,71 @@ test("checkbox lowers checked state", () => {
   const ops = renderToOps(jsx("checkbox", { checked: true, children: "Remember" }));
   assert.ok(ops.some(o => o.op === "create" && o.kind === "checkbox"));
   assert.ok(ops.some(o => o.op === "setProp" && o.key === "checked" && o.value === "true"));
+});
+
+
+test("switch lowers checked state", () => {
+  const ops = renderToOps(jsx("switch", { checked: true, children: "Alerts" }));
+  assert.ok(ops.some(o => o.op === "create" && o.kind === "switch"));
+  assert.ok(ops.some(o => o.op === "setProp" && o.key === "checked" && o.value === "true"));
+});
+
+
+test("progress lowers its numeric value", () => {
+  const ops = renderToOps(jsx("progress", { name: "Upload", value: 0.5 }));
+  assert.ok(ops.some(o => o.op === "create" && o.kind === "progress"));
+  assert.ok(ops.some(o => o.op === "setProp" && o.key === "value" && o.value === "0.5"));
+});
+
+
+test("slider lowers a value and disabled state", () => {
+  const ops = renderToOps(jsx("slider", { name: "Volume", value: 0.5, disabled: true }));
+  assert.ok(ops.some(o => o.op === "create" && o.kind === "slider"));
+  assert.ok(ops.some(o => o.op === "setProp" && o.key === "value" && o.value === "0.5"));
+});
+
+
+test("radio group lowers labeled options", () => {
+  const ops = renderToOps(jsx("radio_group", { name: "Size", children: [jsx("radio", { checked: true, children: "Small" }), jsx("radio", { children: "Large" })] }));
+  assert.ok(ops.some(o => o.op === "create" && o.kind === "radio_group"));
+  assert.equal(ops.filter(o => o.op === "create" && o.kind === "radio").length, 2);
+});
+
+
+test("context menu lowers as a detached owned menu", () => {
+  const ops = renderToOps(jsx("window", { children: jsx("button", { children: "Target", contextMenu: jsx("menu", { name: "Actions", children: jsx("menu_item", { children: "Open" }) }) }) }));
+  assert.ok(ops.some(op => op.op === "bindContextMenu" && op.target === 2 && op.menu === 3));
+  assert.ok(!ops.some(op => op.op === "append" && op.child === 3));
+});
+
+test("tab list lowers options and registers tab activation", () => {
+  const ops = renderToOps(jsx("tab_list", { name: "Pages", children: [jsx("tab", { checked: true, children: "General" }), jsx("tab", { children: "Advanced" })] }));
+  assert.ok(ops.some(o => o.op === "create" && o.kind === "tab_list"));
+  assert.equal(ops.filter(o => o.op === "create" && o.kind === "tab").length, 2);
+  let callback;
+  const host = { create: () => 1, setText() {}, setProp() {}, append() {}, remove() {}, onClick: (_id, fn) => { callback = fn; } };
+  mount(jsx("tab", { onClick: () => 42, children: "General" }), host);
+  assert.equal(callback(), 42);
+});
+
+test("dialog lowers its accessible name and children", () => {
+  const ops = renderToOps(jsx("dialog", { name: "Confirm", children: jsx("button", { children: "OK" }) }));
+  assert.ok(ops.some(o => o.op === "create" && o.kind === "dialog"));
+  assert.ok(ops.some(o => o.op === "setProp" && o.key === "name" && o.value === "Confirm"));
+});
+
+
+test("menu item registers its callback", () => {
+  let callback;
+  const host = { create: () => 1, setText() {}, setProp() {}, append() {}, remove() {}, onClick: (_id, fn) => { callback = fn; } };
+  mount(jsx("menu_item", { onClick: () => 42, children: "Open" }), host);
+  assert.equal(callback(), 42);
+});
+
+
+test("select registers an input callback", () => {
+  let callback;
+  const host = { create: () => 1, setText() {}, setProp() {}, append() {}, remove() {}, onInput: (_id, fn) => { callback = fn; } };
+  mount(jsx("select", { name: "Size", onInput: value => value }), host);
+  assert.equal(callback("Small"), "Small");
 });

@@ -43,8 +43,10 @@ jobs:
         run: cargo test --workspace --all-targets
       - name: Install TypeScript for declaration tests
         run: npm install --no-save --no-package-lock --ignore-scripts typescript@6.0.3
+      # packages/build tests the shared bundler used by both hosts. Its
+      # esbuild cases skip here; the WASM job runs them for real.
       - name: JS package tests
-        run: node --test packages/core/test.js packages/jsx-runtime/test.js packages/jsx-runtime/input-types.test.js packages/create-tektogui/test/index.test.js
+        run: node --test packages/core/test.js packages/jsx-runtime/test.js packages/jsx-runtime/input-types.test.js packages/build/test.js packages/create-tektogui/test/index.test.js
 
   windows:
     name: Windows compile
@@ -111,9 +113,35 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p tekto --features quickjs --lib js_owner -- --list > "$RUNNER_TEMP/owner-tests.txt"
-          for test in execution_budget_lifecycle_with_outer_timeout owner_mount_click_reload_and_shutdown callback_error_and_removed_node_do_not_break_owner desktop_routes_deliver_counter_once_and_order_lifecycle http_and_handle_click_deliver_signal_and_errors; do
+          for test in execution_budget_lifecycle_with_outer_timeout owner_mount_click_reload_and_shutdown callback_error_and_removed_node_do_not_break_owner desktop_routes_deliver_counter_once_and_order_lifecycle http_and_handle_click_deliver_signal_and_errors typed_agent_actions_reach_retained_tsx_and_reject_unrealized_nodes; do
             grep -Fx "js_owner::tests::$test: test" "$RUNNER_TEMP/owner-tests.txt"
           done
           cargo test -p tekto --features quickjs --lib js_owner
       - name: Check CLI with QuickJS
         run: cargo check -p tekto-cli --features quickjs
+
+  generated:
+    name: Generated app builds
+    # Same schedule as the WASM job: nightly or a manual run, not every PR.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/nightly')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: generated-apps
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      # Each manager scaffolds an app, installs it, typechecks it, and builds
+      # the web and desktop bundles. A missing manager fails because it is
+      # named in TEKTO_REQUIRE_PMS.
+      - name: Build a generated app with npm, pnpm, and bun
+        env:
+          TEKTO_REQUIRE_PMS: npm,pnpm,bun
+        run: node scripts/test-generated-apps.js

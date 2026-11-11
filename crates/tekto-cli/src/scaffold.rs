@@ -160,12 +160,56 @@ pub fn write_app(dest: &Path, package: &str, repo_root: &Path) -> Result<(), Sca
     }
     let tekto_rel = relative_from(dest, &tekto);
     let tekto_path = tekto_rel.to_string_lossy().replace('\\', "/");
+    let package_path = |name: &str| {
+        let path = relative_from(dest, &repo_root.join("packages").join(name));
+        format!("file:{}", path.to_string_lossy().replace('\\', "/"))
+    };
+    let package_json = serde_json::json!({
+        "name": package,
+        "version": "0.1.0",
+        "private": true,
+        "type": "module",
+        "scripts": { "typecheck": "tsc --noEmit", "build:web": "tekto-build web src/app.tsx dist/app.mjs", "build:desktop": "tekto-build desktop src/app.tsx dist/app.js" },
+        "dependencies": {
+            "@tektogui/core": package_path("core"),
+            "@tektogui/jsx-runtime": package_path("jsx-runtime")
+        },
+        "devDependencies": { "typescript": "^6.0.3", "esbuild": "^0.25.12", "@tektogui/build": package_path("build") }
+    });
+    let tsconfig = serde_json::json!({
+        "compilerOptions": { "target": "ES2020", "module": "ESNext", "moduleResolution": "Bundler",
+            "jsx": "react-jsx", "jsxImportSource": "@tektogui/jsx-runtime", "strict": true, "noEmit": true },
+        "include": ["src/**/*.ts", "src/**/*.tsx"]
+    });
     let title = title_case(package);
     let files = [
         ("Cargo.toml", fill(CARGO_TOML, package, &title, &tekto_path)),
         ("src/main.rs", fill(MAIN_RS, package, &title, &tekto_path)),
         ("src/app.tsx", fill(APP_TSX, package, &title, &tekto_path)),
         ("README.md", fill(README, package, &title, &tekto_path)),
+        (
+            "package.json",
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&package_json)
+                    .map_err(|e| ScaffoldError(e.to_string()))?
+            ),
+        ),
+        (
+            "tsconfig.json",
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&tsconfig)
+                    .map_err(|e| ScaffoldError(e.to_string()))?
+            ),
+        ),
+        // pnpm 10+ refuses to run a dependency's install script until it is
+        // approved. esbuild needs its script to place the platform binary, so
+        // generated apps allow that one build. npm and bun ignore this file.
+        (
+            "pnpm-workspace.yaml",
+            "allowBuilds:\n  esbuild: true\n".into(),
+        ),
     ];
     for (rel, contents) in files {
         fs::write(dest.join(rel), contents).map_err(|e| ScaffoldError(e.to_string()))?;
@@ -207,6 +251,8 @@ mod tests {
         assert!(dest.join("Cargo.toml").is_file());
         assert!(dest.join("src/main.rs").is_file());
         assert!(dest.join("src/app.tsx").is_file());
+        assert!(dest.join("package.json").is_file());
+        assert!(dest.join("tsconfig.json").is_file());
         assert!(dest.join("README.md").is_file());
         let cargo = fs::read_to_string(dest.join("Cargo.toml")).unwrap();
         assert!(cargo.contains("name = \"hello\""));
@@ -217,12 +263,65 @@ mod tests {
         assert!(readme.contains("screenshot"));
         let tsx = fs::read_to_string(dest.join("src/app.tsx")).unwrap();
         assert!(tsx.contains("Hello from Tekto"));
-        let status = Command::new("cargo")
-            .args(["check", "--manifest-path"])
-            .arg(dest.join("Cargo.toml"))
-            .env("CARGO_TARGET_DIR", repo.join("target"))
-            .status()
-            .expect("cargo");
-        assert!(status.success(), "generated app failed to cargo check");
+        let package_json: serde_json::Value =
+            serde_json::from_slice(&fs::read(dest.join("package.json")).unwrap()).unwrap();
+        assert_eq!(package_json["scripts"]["typecheck"], "tsc --noEmit");
+        assert!(package_json["scripts"]["build:web"]
+            .as_str()
+            .unwrap()
+            .contains("tekto-build web"));
+        assert!(package_json["scripts"]["build:desktop"]
+            .as_str()
+            .unwrap()
+            .contains("tekto-build desktop"));
+        assert!(package_json["dependencies"]["@tektogui/core"]
+            .as_str()
+            .unwrap()
+            .starts_with("file:"));
+        let tsconfig: serde_json::Value =
+            serde_json::from_slice(&fs::read(dest.join("tsconfig.json")).unwrap()).unwrap();
+        assert_eq!(
+            tsconfig["compilerOptions"]["jsxImportSource"],
+            "@tektogui/jsx-runtime"
+        );
+        // Typecheck the generated project when the workspace TypeScript tool is installed.
+        // Copy only the public declarations, so the test needs neither network nor symlinks.
+        let tsc =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../node_modules/typescript/bin/tsc");
+        if tsc.is_file() {
+            for package in ["core", "jsx-runtime"] {
+                let source = repo.join("packages").join(package);
+                let target = dest.join("node_modules/@tektogui").join(package);
+                fs::create_dir_all(target.join("src")).unwrap();
+                fs::copy(source.join("package.json"), target.join("package.json")).unwrap();
+                fs::copy(source.join("src/index.d.ts"), target.join("src/index.d.ts")).unwrap();
+                if package == "jsx-runtime" {
+                    fs::copy(
+                        source.join("src/jsx-types.d.ts"),
+                        target.join("src/jsx-types.d.ts"),
+                    )
+                    .unwrap();
+                }
+            }
+            let status = Command::new("node")
+                .arg(tsc)
+                .args(["--noEmit", "--project"])
+                .arg(dest.join("tsconfig.json"))
+                .status()
+                .expect("node for generated project typecheck");
+            assert!(status.success(), "generated app failed to typecheck");
+        }
+        // A full check of a generated app resolves and compiles the whole
+        // dependency graph, which needs the network and several minutes on a
+        // cold cache. Opt in with TEKTO_SCAFFOLD_CHECK=1. PR CI leaves it off.
+        if std::env::var_os("TEKTO_SCAFFOLD_CHECK").is_some() {
+            let status = Command::new("cargo")
+                .args(["check", "--manifest-path"])
+                .arg(dest.join("Cargo.toml"))
+                .env("CARGO_TARGET_DIR", repo.join("target"))
+                .status()
+                .expect("cargo");
+            assert!(status.success(), "generated app failed to cargo check");
+        }
     }
 }

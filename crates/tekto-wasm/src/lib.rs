@@ -46,9 +46,9 @@ pub fn render_png(width: u32, height: u32) -> Result<Vec<u8>, String> {
         return Err("width and height must be non-zero".into());
     }
     TREE.with(|tree| {
-        let mut laid = tree.borrow().clone();
-        layout_tree(&mut laid, width as f32, height as f32);
-        render_tree_png(&laid, width, height, Color::PAGE).map_err(|err| err.to_string())
+        let mut tree = tree.borrow_mut();
+        layout_tree(&mut tree, width as f32, height as f32);
+        render_tree_png(&tree, width, height, Color::PAGE).map_err(|err| err.to_string())
     })
 }
 
@@ -62,6 +62,311 @@ pub fn click_at(width: u32, height: u32, x: f32, y: f32) -> Option<u64> {
         layout_tree(&mut tree, width as f32, height as f32);
         tree.click_at(x, y).map(|id| id.raw())
     })
+}
+
+/// Open a bound context menu at a logical pointer location.
+pub fn context_menu_at(width: u32, height: u32, x: f32, y: f32) -> Option<u64> {
+    if width == 0 || height == 0 || !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    TREE.with(|tree| {
+        let mut tree = tree.borrow_mut();
+        layout_tree(&mut tree, width as f32, height as f32);
+        tree.context_menu_at(x, y).map(|id| id.raw())
+    })
+}
+
+/// Focus a field at the pointer and start a selection at its caret.
+pub fn field_begin(width: u32, height: u32, x: f32, y: f32) -> Option<u64> {
+    if width == 0 || height == 0 || !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    TREE.with(|tree| {
+        let mut tree = tree.borrow_mut();
+        layout_tree(&mut tree, width as f32, height as f32);
+        let id = tree.hit(x, y)?;
+        let node = tree.get(id)?;
+        if node.kind != tekto_tree::NodeKind::TextField || node.disabled || !node.preedit.is_empty()
+        {
+            return None;
+        }
+        let caret = tekto_layout::field_caret_at(&tree, id, x, y)?;
+        tree.click(id).ok()?;
+        tree.set_field_selection(id, caret, caret).ok()?;
+        Some(id.raw())
+    })
+}
+
+/// Extend the captured field selection to a pointer position.
+pub fn field_move(id: u64, x: f32, y: f32) -> bool {
+    if !x.is_finite() || !y.is_finite() {
+        return false;
+    }
+    TREE.with(|tree| {
+        let mut tree = tree.borrow_mut();
+        let id = tekto_tree::NodeId::from_raw(id);
+        if tree.focus != Some(id) {
+            return false;
+        }
+        let Some(node) = tree.get(id) else {
+            return false;
+        };
+        if node.disabled || !node.preedit.is_empty() {
+            return false;
+        }
+        let Some(anchor) = node.selection_anchor else {
+            return false;
+        };
+        let Some(caret) = tekto_layout::field_caret_at(&tree, id, x, y) else {
+            return false;
+        };
+        tree.set_field_selection(id, anchor, caret).is_ok()
+    })
+}
+
+/// Start a slider drag at a point, returning the captured id.
+pub fn slider_begin(width: u32, height: u32, x: f32, y: f32) -> Option<u64> {
+    if width == 0 || height == 0 || !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    TREE.with(|tree| {
+        let mut tree = tree.borrow_mut();
+        layout_tree(&mut tree, width as f32, height as f32);
+        let id = tree.hit(x, y)?;
+        let node = tree.get(id)?;
+        if node.kind != tekto_tree::NodeKind::Slider || node.disabled {
+            return None;
+        }
+        tree.set_focus(id).ok()?;
+        let bounds = tree.get(id)?.bounds;
+        let value = (x - bounds.x - 8.0) / (bounds.width - 16.0).max(1.0);
+        tree.set_slider_value(id, value).ok()?;
+        Some(id.raw())
+    })
+}
+
+/// Move an existing slider capture; removed, blocked or disabled sliders fail.
+pub fn slider_move(id: u64, x: f32) -> bool {
+    if !x.is_finite() {
+        return false;
+    }
+    TREE.with(|tree| {
+        let mut tree = tree.borrow_mut();
+        let id = tekto_tree::NodeId::from_raw(id);
+        let Some(node) = tree.get(id) else {
+            return false;
+        };
+        let value = (x - node.bounds.x - 8.0) / (node.bounds.width - 16.0).max(1.0);
+        tree.set_slider_value(id, value).is_ok()
+    })
+}
+
+/// Route slider keyboard navigation, returning whether a slider handled the key.
+pub fn slider_key(code: u32) -> bool {
+    slider_key_with_activation(code).0
+}
+
+fn slider_key_with_activation(code: u32) -> (bool, Option<u64>) {
+    let key = match code {
+        1 => tekto_tree::NamedActionKey::ArrowLeft,
+        2 => tekto_tree::NamedActionKey::ArrowRight,
+        3 => tekto_tree::NamedActionKey::Home,
+        4 => tekto_tree::NamedActionKey::End,
+        5 => tekto_tree::NamedActionKey::ArrowUp,
+        6 => tekto_tree::NamedActionKey::ArrowDown,
+        _ => return (false, None),
+    };
+    TREE.with(|tree| {
+        let mut tree = tree.borrow_mut();
+        let eligible = tree.focus.and_then(|id| tree.get(id)).is_some_and(|n| {
+            matches!(
+                n.kind,
+                tekto_tree::NodeKind::Slider
+                    | tekto_tree::NodeKind::Radio
+                    | tekto_tree::NodeKind::Tab
+                    | tekto_tree::NodeKind::MenuItem
+            ) && !n.disabled
+        });
+        let activation = if eligible {
+            let (_, id) = tekto_tree::route_named_key(&mut tree, key, false);
+            id.filter(|id| tree.click(*id).is_ok()).map(|id| id.raw())
+        } else {
+            None
+        };
+        (eligible, activation)
+    })
+}
+
+/// Apply printable keyboard text or a field editing key to the focused field.
+/// Return its id and committed value only when the value changed.
+pub fn field_input(text: &str, backspace: bool) -> Option<(u64, String)> {
+    TREE.with(|tree| {
+        let mut tree = tree.borrow_mut();
+        let id = tree.focus?;
+        let before = tree.get(id)?.text.clone().unwrap_or_default();
+        if backspace {
+            tree.apply_field_key(tekto_tree::FieldKey::Backspace).ok()?;
+        } else {
+            tree.type_keyboard_text(text).ok()?;
+        }
+        let value = tree.get(id)?.text.clone().unwrap_or_default();
+        (before != value).then_some((id.raw(), value))
+    })
+}
+
+/// Apply IME preedit, commit, or cancellation to the focused field.
+/// Returns the field id and a value only when committed text changed.
+pub fn field_ime(kind: u32, text: &str, expected: Option<u64>) -> Option<(u64, Option<String>)> {
+    TREE.with(|tree| {
+        let mut tree = tree.borrow_mut();
+        let id = tree.focus?;
+        if expected.is_some_and(|target| target != id.raw()) {
+            return None;
+        }
+        let node = tree.get(id)?;
+        if node.kind != tekto_tree::NodeKind::TextField || node.disabled {
+            return None;
+        }
+        let before = node.text.clone().unwrap_or_default();
+        let event = match kind {
+            1 => tekto_tree::ImeEvent::Preedit {
+                text: text.to_owned(),
+                cursor: Some((text.len(), text.len())),
+            },
+            2 => tekto_tree::ImeEvent::Commit(text.to_owned()),
+            3 => tekto_tree::ImeEvent::Disabled,
+            _ => return None,
+        };
+        tree.apply_ime(event).ok()?;
+        let after = tree.get(id)?.text.clone().unwrap_or_default();
+        Some((id.raw(), (before != after).then_some(after)))
+    })
+}
+
+/// Apply a field navigation or editing key and return its resulting value.
+pub fn field_key(code: u32) -> Option<(u64, Option<String>)> {
+    use tekto_tree::FieldKey;
+    if (11..=15).contains(&code) {
+        return TREE.with(|tree| {
+            let mut tree = tree.borrow_mut();
+            let id = tree.focus?;
+            let node = tree.get(id)?;
+            if node.kind != tekto_tree::NodeKind::TextField
+                || !node.multiline
+                || node.disabled
+                || !node.preedit.is_empty()
+            {
+                return None;
+            }
+            let before = node.text.clone().unwrap_or_default();
+            if code == 15 {
+                if !tree.type_keyboard_text("\n").ok()? {
+                    return None;
+                }
+            } else if !tekto_layout::field_move_lines(
+                &mut tree,
+                id,
+                if code == 11 || code == 13 { -1 } else { 1 },
+                code >= 13,
+            ) {
+                return None;
+            }
+            let after = tree.get(id)?.text.clone().unwrap_or_default();
+            Some((id.raw(), (before != after).then_some(after)))
+        });
+    }
+    let key = match code {
+        1 => FieldKey::Left,
+        2 => FieldKey::Right,
+        3 => FieldKey::Home,
+        4 => FieldKey::End,
+        5 => FieldKey::Delete,
+        6 => FieldKey::SelectLeft,
+        7 => FieldKey::SelectRight,
+        8 => FieldKey::SelectHome,
+        9 => FieldKey::SelectEnd,
+        10 => FieldKey::SelectAll,
+        _ => return None,
+    };
+    TREE.with(|tree| {
+        let mut tree = tree.borrow_mut();
+        let id = tree.focus?;
+        let before = tree.get(id)?.text.clone().unwrap_or_default();
+        if !tree.apply_field_key(key).ok()? {
+            return None;
+        }
+        let after = tree.get(id)?.text.clone().unwrap_or_default();
+        Some((id.raw(), (before != after).then_some(after)))
+    })
+}
+
+/// Return selected text in the focused, enabled field, if any.
+pub fn field_selection() -> Option<String> {
+    TREE.with(|tree| {
+        let tree = tree.borrow();
+        let id = tree.focus?;
+        if tree.get(id)?.disabled {
+            return None;
+        }
+        let text = tree.selected_text(id).ok()?;
+        (!text.is_empty()).then_some(text)
+    })
+}
+
+/// The focused editable field, if enabled.
+pub fn focused_field() -> Option<u64> {
+    TREE.with(|tree| {
+        let tree = tree.borrow();
+        let id = tree.focus?;
+        let node = tree.get(id)?;
+        (node.kind == tekto_tree::NodeKind::TextField && !node.disabled).then_some(id.raw())
+    })
+}
+
+/// Activate the focused button, menu item, or toggle with Enter or Space.
+pub fn activate_focused(space: bool) -> Option<u64> {
+    TREE.with(|tree| {
+        let mut tree = tree.borrow_mut();
+        let key = if space {
+            tekto_tree::NamedActionKey::Space
+        } else {
+            tekto_tree::NamedActionKey::Enter
+        };
+        let (_, id) = tekto_tree::route_named_key(&mut tree, key, false);
+        let id = id?;
+        tree.click(id).ok()?;
+        Some(id.raw())
+    })
+}
+
+/// Read the select that owns the current option popup.
+pub fn open_select_state() -> Option<(u64, String)> {
+    TREE.with(|tree| {
+        let tree = tree.borrow();
+        let overlay = tree.overlay()?;
+        let node = tree.get(overlay.anchor)?;
+        (node.kind == tekto_tree::NodeKind::Select)
+            .then(|| (overlay.anchor.raw(), node.text.clone().unwrap_or_default()))
+    })
+}
+
+/// Read a select's current value after an action.
+pub fn select_value(id: u64) -> Option<String> {
+    TREE.with(|tree| {
+        let tree = tree.borrow();
+        let node = tree.get(tekto_tree::NodeId::from_raw(id))?;
+        (node.kind == tekto_tree::NodeKind::Select).then(|| node.text.clone().unwrap_or_default())
+    })
+}
+
+/// Stable id of the open overlay, if present.
+pub fn overlay_id() -> Option<u64> {
+    TREE.with(|tree| tree.borrow().overlay().map(|overlay| overlay.node.raw()))
+}
+
+/// Dismiss an open overlay as if Escape was pressed.
+pub fn escape() -> bool {
+    TREE.with(|tree| tree.borrow_mut().close_overlay())
 }
 
 /// Scroll the container under the point, in layout pixels.
@@ -182,6 +487,132 @@ mod ffi {
     #[no_mangle]
     pub extern "C" fn tekto_click_at(width: u32, height: u32, x: f32, y: f32) -> f64 {
         super::click_at(width, height, x, y).unwrap_or(0) as f64
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tekto_context_menu_at(width: u32, height: u32, x: f32, y: f32) -> f64 {
+        super::context_menu_at(width, height, x, y).unwrap_or(0) as f64
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tekto_field_begin(width: u32, height: u32, x: f32, y: f32) -> f64 {
+        super::field_begin(width, height, x, y).unwrap_or(0) as f64
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tekto_field_move(id: f64, x: f32, y: f32) -> u32 {
+        if id <= 0.0 || !id.is_finite() || id.fract() != 0.0 {
+            return 0;
+        }
+        u32::from(super::field_move(id as u64, x, y))
+    }
+
+    /// Apply keyboard text, publishing the changed field id and value as JSON.
+    /// # Safety
+    /// `ptr` and `len` must point to valid UTF-8 bytes in this module.
+    #[no_mangle]
+    pub unsafe extern "C" fn tekto_field_input(ptr: *const u8, len: u32, backspace: u32) {
+        let value = read_utf8(ptr, len)
+            .ok()
+            .and_then(|s| super::field_input(&s, backspace != 0));
+        publish(serde_json::to_string(&value).unwrap().as_bytes());
+    }
+
+    /// # Safety
+    /// `ptr` and `len` must identify valid UTF-8 bytes in module memory.
+    #[no_mangle]
+    pub unsafe extern "C" fn tekto_field_ime(ptr: *const u8, len: u32, kind: u32, expected: f64) {
+        let target = if expected == 0.0 {
+            None
+        } else if expected > 0.0 && expected.is_finite() && expected.fract() == 0.0 {
+            Some(expected as u64)
+        } else {
+            publish(b"null");
+            return;
+        };
+        let value = read_utf8(ptr, len)
+            .ok()
+            .and_then(|text| super::field_ime(kind, &text, target));
+        publish(serde_json::to_string(&value).unwrap().as_bytes());
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tekto_field_key(code: u32) {
+        publish(
+            serde_json::to_string(&super::field_key(code))
+                .unwrap()
+                .as_bytes(),
+        );
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tekto_field_selection() {
+        publish(
+            serde_json::to_string(&super::field_selection())
+                .unwrap()
+                .as_bytes(),
+        );
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tekto_focused_field() -> f64 {
+        super::focused_field().unwrap_or(0) as f64
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tekto_activate_focused(space: u32) -> f64 {
+        super::activate_focused(space != 0).unwrap_or(0) as f64
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tekto_open_select_state() {
+        publish(
+            serde_json::to_string(&super::open_select_state())
+                .unwrap()
+                .as_bytes(),
+        );
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tekto_select_value(id: f64) {
+        let value = if id > 0.0 && id.is_finite() && id.fract() == 0.0 {
+            super::select_value(id as u64)
+        } else {
+            None
+        };
+        publish(serde_json::to_string(&value).unwrap().as_bytes());
+    }
+
+    /// Return the current overlay id, or zero when none is open.
+    #[no_mangle]
+    pub extern "C" fn tekto_overlay_id() -> f64 {
+        super::overlay_id().unwrap_or(0) as f64
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tekto_slider_begin(width: u32, height: u32, x: f32, y: f32) -> f64 {
+        super::slider_begin(width, height, x, y).unwrap_or(0) as f64
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tekto_slider_move(id: f64, x: f32) -> u32 {
+        if id <= 0.0 || !id.is_finite() || id.fract() != 0.0 {
+            return 0;
+        }
+        u32::from(super::slider_move(id as u64, x))
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tekto_slider_key(code: u32) -> u32 {
+        let (handled, activation) = super::slider_key_with_activation(code);
+        publish(serde_json::to_string(&activation).unwrap().as_bytes());
+        u32::from(handled)
+    }
+
+    /// Return one if Escape dismissed an overlay.
+    #[no_mangle]
+    pub extern "C" fn tekto_escape() -> u32 {
+        u32::from(super::escape())
     }
 
     /// Returns the scroll offset, or NaN when there is no scroll target.

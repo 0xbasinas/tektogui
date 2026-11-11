@@ -9,7 +9,7 @@
   WebGL2 is checked on a throwaway canvas and still uses that blit (Vello needs compute).
   A failed WebGPU context is replaced so the blit can still take a 2D context.
 </p>
-<canvas id="view" width="640" height="400" style="border:1px solid #ccc; max-width:100%"></canvas>
+<canvas tabindex="0" id="view" width="640" height="400" style="border:1px solid #ccc; max-width:100%"></canvas>
 <pre id="log"></pre>
 <script type="module">
 import { mount } from "../jsx-runtime/src/index.js";

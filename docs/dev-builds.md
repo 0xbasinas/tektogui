@@ -23,7 +23,7 @@ It does include, on purpose:
 
 Off by default (opt in only when you need them):
 
-- `gpu` — Vello 0.10 and wgpu 29.0.4 (both MIT OR Apache-2.0), plus `pollster` 0.4 and `png` 0.18 (same license). Desktop wgpu is Vulkan, GLES, and Metal only (no DX12). The same native backends compile for Android. The wasm `tekto-wasm` feature `gpu` switches wgpu to its WebGPU backend and adds `wasm-bindgen` 0.2.130, `wasm-bindgen-futures` 0.4.80, and `web-sys` 0.3.107 (MIT OR Apache-2.0). Off by default. `cargo run -p notes --features gpu` paints the window on the GPU. `cargo test -p tekto --features gpu --lib gpu_notes` paints the Notes tree when an adapter exists (llvmpipe counts). On Android the default APK stays CPU-only. `notes-android` feature `gpu` only tries the GPU when `TEKTO_ANDROID_GPU=1`, then falls back to CPU if the device cannot be created. Do not enable `gpu` on default tests or PR CI. The web host falls back to the CPU canvas when the flag is off or WebGPU is missing.
+- `gpu` — Vello 0.10 and wgpu 29.0.4 (both MIT OR Apache-2.0), plus `pollster` 0.4 and `png` 0.18 (same license). Desktop wgpu is Vulkan, GLES, and Metal only (no DX12). The same native backends compile for Android. The wasm `tekto-wasm` feature `gpu` switches wgpu to its WebGPU backend and adds `wasm-bindgen` 0.2.130, `wasm-bindgen-futures` 0.4.80, and `web-sys` 0.3.107 (MIT OR Apache-2.0). Off by default. `cargo run -p notes --features gpu` (alias: `cargo notes-gpu`) paints the window on the GPU. `cargo test -p tekto --features gpu --lib gpu_` also compares CPU and GPU pixels for tabs, fields, selection and IME composition (skips without an adapter). A per-primitive test covers rect, rounded rect, border, line, nested clip, text width and images. It found that Vello smoothed scaled images while the CPU used nearest sampling; the GPU now samples nearest to match. `cargo test -p tekto --features gpu --lib gpu_notes` paints the Notes tree when an adapter exists (llvmpipe counts). On Android the default APK stays CPU-only. `notes-android` feature `gpu` only tries the GPU when `TEKTO_ANDROID_GPU=1`, then falls back to CPU if the device cannot be created. Do not enable `gpu` on default tests or PR CI. The web host falls back to the CPU canvas when the flag is off or WebGPU is missing.
 - `js` — the `HostOp` protocol only (no engine)
 - `quickjs` — embeds QuickJS-ng via `rquickjs` (both MIT). Slow to compile. Do not enable on PR CI. Local check: `cargo test -p tekto-js --features quickjs`. The CLI flag is the same: `cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx`. Hot reload also needs the MIT `esbuild` binary on `PATH` (not a Rust dependency, not on PR CI).
 - `a11y-os` — `accesskit_winit`, which pulls zbus / AT-SPI on Linux
@@ -34,9 +34,34 @@ The `tekto` crate still Android-checks with `--no-default-features --features cp
 
 Nothing unexpected showed up in the default graph that we should gate or drop in Month 1.
 
+## Local JavaScript tests
+
+`npm test` runs the PR CI files plus the WASM and bundler suites. Any case that
+needs esbuild skips when neither `ESBUILD` nor `esbuild` on `PATH` resolves, and
+the run still exits 0. A green local run therefore does not prove that bundling
+works. Install esbuild once and point `ESBUILD` at it:
+
+```bash
+npm install --prefix "$TMPDIR/tekto-esbuild" --no-save --no-package-lock esbuild@0.25.12
+ESBUILD="$TMPDIR/tekto-esbuild/node_modules/.bin/esbuild" npm test
+```
+
+Windows PowerShell. Node cannot start the `.cmd` shim without a shell, so point
+`ESBUILD` at the native binary:
+
+```powershell
+npm install --prefix "$env:TEMP\tekto-esbuild" --no-save --no-package-lock esbuild@0.25.12
+$env:ESBUILD = "$env:TEMP\tekto-esbuild\node_modules\@esbuild\win32-x64\esbuild.exe"
+npm test
+```
+
+`packages/build/test.js` runs on PR CI, but its bundling case skips there too.
+The WASM job installs esbuild and fails instead of skipping, so that job is the
+real bundler gate.
+
 ## CI caches and times
 
-Linux `fmt` + `clippy -D warnings` + `cargo test --workspace --all-targets` runs on every PR and every push. That one test command is what runs the record/replay integration test and the headless Notes PNG compare. Windows and Android compile jobs run only on `push` to `nightly`, or on `workflow_dispatch` with `full=true`. The WASM and QuickJS job runs on `push` to `nightly` or any `workflow_dispatch`, not on PR CI. It builds the WASM core, checks `tekto` with `--no-default-features --features cpu,js`, runs the required Node WASM and `tekto-js` QuickJS tests, verifies the existing owner tests are discovered and runs all `tekto` QuickJS owner tests, and compile-checks `tekto-cli` with QuickJS. Both QuickJS test steps set `TEKTO_REQUIRE_ESBUILD=1`, so esbuild-dependent owner and example regressions fail instead of skipping when esbuild is missing. Swatinem/rust-cache and concurrency cancel are on. The added owner and CLI steps have not yet been timed in CI.
+Linux `fmt` + `clippy -D warnings` + `cargo test --workspace --all-targets` runs on every PR and every push. That one test command is what runs the record/replay integration test and the headless Notes PNG compare. The scaffold test writes an app and typechecks it, but its full `cargo check` is opt-in with `TEKTO_SCAFFOLD_CHECK=1`: it resolves and builds a separate dependency graph, which needs the network and does not belong on every PR. Windows and Android compile jobs run only on `push` to `nightly`, or on `workflow_dispatch` with `full=true`. The WASM and QuickJS job runs on `push` to `nightly` or any `workflow_dispatch`, not on PR CI. It builds the WASM core, checks `tekto` with `--no-default-features --features cpu,js`, runs the required Node WASM and `tekto-js` QuickJS tests, verifies the existing owner tests are discovered and runs all `tekto` QuickJS owner tests, and compile-checks `tekto-cli` with QuickJS. Both QuickJS test steps set `TEKTO_REQUIRE_ESBUILD=1`, so esbuild-dependent owner and example regressions fail instead of skipping when esbuild is missing. The generated-app job runs on the same schedule: it scaffolds an app and runs install, typecheck, `build:web`, and `build:desktop` with npm, pnpm, and bun, and fails if a manager is missing. Run it locally with `npm run test:generated`. Swatinem/rust-cache and concurrency cancel are on. The added owner, CLI, and generated-app steps have not yet been timed in CI.
 
 Times from GitHub-hosted Linux (UTC, job "Linux check", step "Test (includes headless snapshot)"):
 

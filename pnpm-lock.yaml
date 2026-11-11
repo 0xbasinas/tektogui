@@ -12,6 +12,15 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  packages/build:
+    dependencies:
+      '@tektogui/core':
+        specifier: file:../core
+        version: link:../core
+      '@tektogui/jsx-runtime':
+        specifier: file:../jsx-runtime
+        version: link:../jsx-runtime
+
   packages/core: {}
 
   packages/create-tektogui: {}
@@ -22,7 +31,11 @@ importers:
         specifier: file:../core
         version: link:../core
 
-  packages/wasm: {}
+  packages/wasm:
+    devDependencies:
+      '@tektogui/build':
+        specifier: file:../build
+        version: link:../build
 
 packages:
 

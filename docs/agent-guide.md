@@ -49,22 +49,27 @@ Tools in the first slice:
 | Tool | What it does |
 | --- | --- |
 | `ui.tree` | Dump the tree (pretty text + JSON) |
+| `ui.inspect` | Inspect one node with `{"id":N}`: AccessKit state, ancestry, layout inputs, bounds, and ancestor scroll clips. Also `tekto inspect N`. |
+| `ui.snapshot` | Versioned semantic snapshot of the realized AccessKit tree, including focus and state |
+| `ui.find` | Find all realized nodes by exact role and/or accessible name; duplicates are returned together |
 | `ui.accesskit` | Dump AccessKit roles, labels, bounds, and focus (same ids) |
 | `ui.screenshot` | CPU-rendered PNG |
+| `ui.action` | Typed `focus`, `activate`, `toggle` (with `checked`), or `set_value` (text field string or slider number) on a realized node. Disabled, blocked, stale and wrong-type targets fail. |
 | `ui.click` | Click a node id (focus + last_click; a real window click uses the same hit test) |
+| `ui.set_value` | Set an enabled slider by stable ID with `{"id": N, "value": 0.5}`. Values clamp to 0–1. |
 | `ui.scroll` | Scroll a container by logical pixels (`{"id":N,"delta":120}`); returns the clamped `offset`. Also `POST /scroll` and `tekto scroll N --by 120` |
-| `ui.key` | Press `Tab`, `Shift+Tab`, `Enter`, `Space`, or `Backspace` on the focused node (`{"name":"Tab"}`). Also available as `POST /key` and `tekto key Tab` |
+| `ui.key` | Press `Tab`, `Shift+Tab`, `Enter`, `Space`, `Backspace`, `Escape`, `ArrowLeft`, `ArrowRight`, `ArrowUp`, `ArrowDown`, `Home`, or `End` on the focused node (`{"name":"Tab"}`). Also available as `POST /key` and `tekto key Tab` |
 | `ui.type` | Insert plain characters at the caret of a text field and focus it. Not an IME |
-| `ui.patch` | Live-edit text, name, fill, color, or fontSize on a running node. Returns `{ ok, node }`. |
+| `ui.patch` | Live-edit text, name, fill, color, fontSize, value, radius, borderColor, borderWidth, padding, gap, or disabled on a running node. Returns `{ ok, node, writeback }`. |
 | `app.state` | Focus and last click as JSON |
 | `app.states` | List time-travel frames. `enabled` is false unless the app opted in |
 | `app.restore` | Jump that store to a recorded `index` |
 | `app.logs` | Recent log lines |
 | `app.components` | JSON schema of widgets, props, and events. No running app required |
 
-`app.components` (and the dev-server route `GET /components`, which does need a running server) returns `packages/jsx-runtime/src/components.json`. That file is the list `@tektogui/jsx-runtime` mounts. Kinds match `NodeKind` (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`, `list`, `list_item`). Each kind lists every prop the host `setProp` accepts (`width`, `height`, `column`, `justifyCenter`, `text`, `name`, `fill`, `color`, `fontSize`, `padding`, `gap`), because JSX forwards that set on every kind. `title` is an alias of `name` (`font_size` and `justify_center` are the snake_case aliases). Host actions include `click` on every kind, plus `type`, `key`, and `ime` on `text_field`, and `scroll` on `scroll`. Retained desktop QuickJS also supports a no-argument `onClick` prop on buttons and reactive `text` on text nodes; see the [counter example](tsx-events.md). The Rust `banner()` helper is a `rect`, not its own kind.
+`app.components` (and the dev-server route `GET /components`, which does need a running server) returns `packages/jsx-runtime/src/components.json`. That file is the list `@tektogui/jsx-runtime` mounts. Kinds match `NodeKind` (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`, `list`, `list_item`). Each kind lists every prop the host `setProp` accepts (`width`, `height`, `column`, `justifyCenter`, `text`, `name`, `fill`, `color`, `fontSize`, `radius`, `borderColor`, `borderWidth`, `padding`, `gap`), because JSX forwards that set on every kind. `title` is an alias of `name` (`font_size` and `justify_center` are the snake_case aliases). Host actions include `click` on every kind, plus `type`, `key`, and `ime` on `text_field`, and `scroll` on `scroll`. Retained desktop QuickJS and the WASM host support button `onClick`, field `onInput`, and reactive `text` on text nodes; see the [counter example](tsx-events.md). The Rust `banner()` helper is a `rect`, not its own kind.
 
-Live patches change the running tree immediately and do not require a reload. `POST /patch` and `ui.patch` accept JSON `{ "id", "text?", "name?", "fill?", "color?", "fontSize?", "padding?", "gap?" }` (`#rrggbb` or `#rrggbbaa`) and return the updated node, or a clear error (unknown id, bad color).
+Live patches change the running tree immediately and do not require a reload. `POST /patch` and `ui.patch` accept JSON `{ "id", "text?", "name?", "fill?", "color?", "fontSize?", "value?", "radius?", "borderColor?", "borderWidth?", "padding?", "gap?" }` (`#rrggbb` or `#rrggbbaa`) and return the updated node, or a clear error (unknown id, bad color). The paint fields also appear in `ui.tree`. Border and radius patches currently apply at runtime only.
 
 A list (`kind` `list`) is a column of `list_item` rows. Each row's id is stable and is the AccessKit `ListItem` id. The list id is the AccessKit `List`. A tall list from `tekto::list` has a `scroll` parent; a short one does not. After layout, a scrolling list keeps only the visible rows plus 64px overscan as children. The window is the list's own position in the scroll, so padding and earlier siblings count. Rows outside that window are not painted. Their ids still exist until the list is removed or the row is moved with `append`. Scroll height stays the full stack.
 
@@ -90,7 +95,7 @@ Desktop reload rebuilds only the JS bundle and swaps it into the running QuickJS
 cargo run -p tekto-cli --features quickjs -- dev --js examples/notes/src/app.tsx --headless --out /tmp/notes-js.png
 ```
 
-Saving the `.tsx` prints `js reload Nms`. JS remounts from source, so signal state resets. Failures go to stderr and `app.logs`. `POST /reload` accepts a JS bundle (or JSON `{"js":"..."}`) so a host can push over `adb forward`. On Android, `tekto dev --js examples/notes/src/app.tsx --android` builds the APK with `-F quickjs` and posts the bundle (the host CLI does not need `--features quickjs`). The default APK stays without QuickJS so nightly Android CI stays lean.
+Saving the `.tsx` prints `js reload Nms`. JS remounts from source. Unkeyed signal state resets; `createSignal(initial, { key: "unique-key" })` restores compatible JSON state on reload. `app.logs` reports restored, reset, and removed keys. Keyed values must be JSON data; duplicate keys fail the candidate reload. Failures go to stderr and `app.logs`. `POST /reload` accepts a JS bundle (or JSON `{"js":"..."}`) so a host can push over `adb forward`. On Android, `tekto dev --js examples/notes/src/app.tsx --android` builds the APK with `-F quickjs` and posts the bundle (the host CLI does not need `--features quickjs`). The default APK stays without QuickJS so nightly Android CI stays lean.
 
 ## Headless tests
 
@@ -153,3 +158,13 @@ connections. Each request has five seconds total to send its headers and body,
 and each response has five seconds total to write. These are local development
 limits; retry after a stalled connection times out. Headers are limited to
 64 KiB and the full buffered request to 2 MiB.
+
+### Anchored overlays
+
+Rust apps can call `Tree::open_overlay(node, anchor, OverlaySide::Below)` with an existing subtree and an attached anchor. The window owns the overlay until `close_overlay`, Escape, an outside click, or removal of its anchor. Closing removes the subtree and restores the previous focus when possible. While open, clicks and keyboard focus are limited to the overlay. Placement supports `Above`, `Below`, `Left`, `Right`, and `Center`; it does not yet flip at viewport edges.
+
+QuickJS and the WASM host expose `openOverlay(node, anchor, side)` and `closeOverlay()`, using lowercase side names. Build the subtree before opening it. QuickJS closure and routed outside-click or Escape dismissal run registered disposal callbacks. On the web, focus the canvas to send Escape to it.
+
+A `select` node opens its options with `ui.click` or Enter/Space. Use arrow keys and Enter, or click an exposed option. Option IDs persist across closing and reopening; option labels are the selected values and must be unique. Escape closes the popup without changing the selection.
+
+Text fields support `ui.key` names `Shift+ArrowLeft`, `Shift+ArrowRight`, `Shift+Home`, `Shift+End`, and `SelectAll`; `ui.type` replaces the selected range. The scene dump reports the selection as Unicode scalar indices. AccessKit text-range metadata is not yet exposed.

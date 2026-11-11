@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
-use tekto_tree::{NodeId, NodeKind, NodePatch, StyleTransition, Tree, TreeError};
+use tekto_tree::{NodeId, NodeKind, NodePatch, OverlaySide, StyleTransition, Tree, TreeError};
 use thiserror::Error;
 
 #[cfg(feature = "quickjs")]
@@ -65,6 +65,23 @@ pub enum HostOp {
     Remove {
         id: u64,
     },
+    /// Open a window overlay anchored to a node.
+    OpenOverlay {
+        id: u64,
+        anchor: u64,
+        side: String,
+    },
+    /// Associate a detached menu with a target for context-menu gestures.
+    BindTabPanel {
+        tab: u64,
+        panel: u64,
+    },
+    BindContextMenu {
+        target: u64,
+        menu: u64,
+    },
+    /// Close the current overlay, if one is open.
+    CloseOverlay,
     /// Start a quiet style tween. The window loop calls [`Tree::advance`].
     /// Headless callers advance time themselves. Numbers are decimal strings
     /// so this op stays `Eq`.
@@ -151,6 +168,26 @@ pub fn apply_ops(tree: &mut Tree, ops: &[HostOp]) -> Result<Vec<u64>, JsError> {
             HostOp::Remove { id } => {
                 tree.remove(NodeId::from_raw(*id))?;
             }
+            HostOp::OpenOverlay { id, anchor, side } => {
+                let side = match side.as_str() {
+                    "above" => OverlaySide::Above,
+                    "below" => OverlaySide::Below,
+                    "left" => OverlaySide::Left,
+                    "right" => OverlaySide::Right,
+                    "center" => OverlaySide::Center,
+                    _ => return Err(JsError::Message(format!("unknown overlay side `{side}`"))),
+                };
+                tree.open_overlay(NodeId::from_raw(*id), NodeId::from_raw(*anchor), side)?;
+            }
+            HostOp::BindTabPanel { tab, panel } => {
+                tree.bind_tab_panel(NodeId::from_raw(*tab), NodeId::from_raw(*panel))?;
+            }
+            HostOp::BindContextMenu { target, menu } => {
+                tree.bind_context_menu(NodeId::from_raw(*target), NodeId::from_raw(*menu))?;
+            }
+            HostOp::CloseOverlay => {
+                tree.close_overlay();
+            }
             HostOp::Transition {
                 id,
                 opacity,
@@ -211,6 +248,7 @@ fn parse_bool(key: &str, value: &str) -> Result<bool, JsError> {
 pub const HOST_PROP_KEYS: &[&str] = &[
     "disabled",
     "checked",
+    "value",
     "width",
     "height",
     "column",
@@ -218,17 +256,28 @@ pub const HOST_PROP_KEYS: &[&str] = &[
     "justify_center",
     "text",
     "name",
+    "testKey",
+    "imageSource",
+    "imageFit",
+    "decorative",
+    "multiline",
     "fill",
     "color",
     "fontSize",
     "font_size",
+    "radius",
+    "borderColor",
+    "border_color",
+    "borderWidth",
+    "border_width",
     "padding",
     "gap",
 ];
 
 fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), JsError> {
     match key {
-        "width" | "height" | "column" | "justifyCenter" | "justify_center" => {
+        "width" | "height" | "column" | "justifyCenter" | "justify_center" | "testKey"
+        | "imageSource" | "imageFit" | "decorative" | "multiline" => {
             let node = tree
                 .get_mut(id)
                 .ok_or_else(|| JsError::Message(format!("unknown node {id}")))?;
@@ -236,6 +285,52 @@ fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), J
                 "width" => node.layout.width = parse_dim(key, value)?,
                 "height" => node.layout.height = parse_dim(key, value)?,
                 "column" => node.layout.column = parse_bool(key, value)?,
+                "testKey" => node.test_key = (!value.is_empty()).then(|| value.to_owned()),
+                "multiline" => {
+                    if node.kind != NodeKind::TextField {
+                        return Err(JsError::Message("multiline requires a text field".into()));
+                    }
+                    node.multiline = parse_bool(key, value)?;
+                }
+                "imageSource" => {
+                    if node.kind != NodeKind::Image {
+                        return Err(JsError::Message(
+                            "imageSource requires an image node".into(),
+                        ));
+                    }
+                    #[derive(Deserialize)]
+                    struct Source {
+                        width: u32,
+                        height: u32,
+                        rgba: Vec<u8>,
+                    }
+                    let source: Source = serde_json::from_str(value)
+                        .map_err(|e| JsError::Message(format!("invalid image source: {e}")))?;
+                    node.image = Some(
+                        tekto_tree::Image::new(source.width, source.height, source.rgba)
+                            .map_err(|e| JsError::Message(e.to_string()))?,
+                    );
+                }
+                "imageFit" => {
+                    if node.kind != NodeKind::Image {
+                        return Err(JsError::Message("imageFit requires an image node".into()));
+                    }
+                    node.image_fit = match value {
+                        "contain" => tekto_tree::ImageFit::Contain,
+                        "cover" => tekto_tree::ImageFit::Cover,
+                        _ => {
+                            return Err(JsError::Message(
+                                "imageFit must be contain or cover".into(),
+                            ))
+                        }
+                    };
+                }
+                "decorative" => {
+                    if node.kind != NodeKind::Image {
+                        return Err(JsError::Message("decorative requires an image node".into()));
+                    }
+                    node.decorative = parse_bool(key, value)?;
+                }
                 "justifyCenter" | "justify_center" => {
                     node.layout.justify_center = parse_bool(key, value)?;
                 }
@@ -247,6 +342,7 @@ fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), J
     }
     let mut patch = NodePatch::default();
     match key {
+        "value" => patch.value = Some(parse_f32(key, value)?),
         "checked" => patch.checked = Some(parse_bool(key, value)?),
         "disabled" => patch.disabled = Some(parse_bool(key, value)?),
         "text" => patch.text = Some(value.into()),
@@ -254,6 +350,9 @@ fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), J
         "fill" => patch.fill = Some(value.into()),
         "color" => patch.color = Some(value.into()),
         "fontSize" | "font_size" => patch.font_size = Some(parse_f32(key, value)?),
+        "radius" => patch.radius = Some(parse_f32(key, value)?),
+        "borderColor" | "border_color" => patch.border_color = Some(value.into()),
+        "borderWidth" | "border_width" => patch.border_width = Some(parse_f32(key, value)?),
         "padding" => patch.padding = Some(parse_f32(key, value)?),
         "gap" => patch.gap = Some(parse_f32(key, value)?),
         other => {
@@ -319,6 +418,170 @@ pub fn eval_module(source: &str, host: &mut dyn Host) -> Result<(), JsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn quickjs_can_open_and_close_overlay() {
+        let mut host = TreeHost::new();
+        eval_module(
+            r#"
+            const root = tekto.create("window");
+            const anchor = tekto.create("button");
+            tekto.append(root, anchor);
+            const popup = tekto.create("rect");
+            tekto.openOverlay(popup, anchor, "below");
+        "#,
+            &mut host,
+        )
+        .unwrap();
+        assert!(host.tree.borrow().overlay().is_some());
+        // A retained session is used to close the same tree.
+        let session = JsSession::new().unwrap();
+        session.eval("tekto.closeOverlay()", &mut host).unwrap();
+        assert!(host.tree.borrow().overlay().is_none());
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn explicit_overlay_close_disposes_callbacks() {
+        let mut host = TreeHost::new();
+        let session = JsSession::new().unwrap();
+        session
+            .eval(
+                r#"
+            const root = tekto.create("window");
+            const anchor = tekto.create("button");
+            tekto.append(root, anchor);
+            const popup = tekto.create("rect");
+            const child = tekto.create("button");
+            tekto.append(popup, child);
+            globalThis.disposed = 0;
+            tekto.onDispose(child, () => { disposed++; });
+            tekto.openOverlay(popup, anchor, "below");
+            tekto.closeOverlay();
+            if (disposed !== 1) throw new Error("cleanup did not run");
+        "#,
+                &mut host,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn overlay_host_ops_validate_and_close() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let anchor = tree.add(NodeKind::Button, Some(root)).unwrap();
+        let popup = tree.add(NodeKind::Rect, None).unwrap();
+        let json = format!(
+            r#"[{{"op":"openOverlay","id":{},"anchor":{},"side":"below"}}]"#,
+            popup.raw(),
+            anchor.raw()
+        );
+        let ops: Vec<HostOp> = serde_json::from_str(&json).unwrap();
+        apply_ops(&mut tree, &ops).unwrap();
+        assert_eq!(tree.overlay().unwrap().node, popup);
+        assert!(tree.click(anchor).is_err());
+        let close: Vec<HostOp> = serde_json::from_str(r#"[{"op":"closeOverlay"}]"#).unwrap();
+        apply_ops(&mut tree, &close).unwrap();
+        assert!(tree.overlay().is_none());
+        assert!(tree.get(popup).is_none());
+        let bad = HostOp::OpenOverlay {
+            id: 2,
+            anchor: 1,
+            side: "diagonal".into(),
+        };
+        assert!(apply_ops(&mut tree, &[bad]).is_err());
+    }
+
+    #[test]
+    fn paint_props_reach_tree_and_agent_dump() {
+        let mut tree = Tree::new();
+        let id = tree.add(NodeKind::Window, None).unwrap();
+        set_prop(&mut tree, id, "radius", "8").unwrap();
+        set_prop(&mut tree, id, "borderColor", "#123456").unwrap();
+        set_prop(&mut tree, id, "borderWidth", "2").unwrap();
+        let dump = serde_json::to_value(tree.to_dump()).unwrap();
+        let node = &dump["nodes"][0];
+        assert_eq!(node["radius"], 8.0);
+        assert_eq!(node["border_color"], "#123456");
+        assert_eq!(node["border_width"], 2.0);
+        assert!(set_prop(&mut tree, id, "borderWidth", "bad").is_err());
+        let patch: NodePatch =
+            serde_json::from_str(r##"{"borderColor":"#abcdef","borderWidth":3}"##).unwrap();
+        tree.patch(id, patch).unwrap();
+        assert_eq!(tree.node_dump(id).unwrap().border_width, 3.0);
+    }
+
+    #[test]
+    fn developer_test_key_reaches_scene_dump() {
+        let mut tree = Tree::new();
+        let id = tree.add(NodeKind::Window, None).unwrap();
+        set_prop(&mut tree, id, "testKey", "form").unwrap();
+        assert_eq!(
+            tree.node_dump(id).unwrap().test_key.as_deref(),
+            Some("form")
+        );
+        set_prop(&mut tree, id, "testKey", "").unwrap();
+        assert!(tree.node_dump(id).unwrap().test_key.is_none());
+    }
+
+    #[test]
+    fn image_props_validate_without_replacing_valid_pixels() {
+        let mut tree = Tree::new();
+        let id = tree.add(NodeKind::Image, None).unwrap();
+        set_prop(
+            &mut tree,
+            id,
+            "imageSource",
+            r#"{"width":1,"height":1,"rgba":[255,0,0,255]}"#,
+        )
+        .unwrap();
+        set_prop(&mut tree, id, "imageFit", "cover").unwrap();
+        set_prop(&mut tree, id, "decorative", "true").unwrap();
+        assert!(set_prop(
+            &mut tree,
+            id,
+            "imageSource",
+            r#"{"width":2,"height":1,"rgba":[1]}"#
+        )
+        .is_err());
+        let node = tree.get(id).unwrap();
+        assert_eq!(node.image.as_ref().unwrap().pixels(), &[255, 0, 0, 255]);
+        assert_eq!(node.image_fit, tekto_tree::ImageFit::Cover);
+        assert!(node.decorative);
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn quickjs_image_props_reach_scene() {
+        let mut host = TreeHost::new();
+        let session = JsSession::new().unwrap();
+        session
+            .eval(
+                r#"const id = tekto.create('image');
+            tekto.setProp(id, 'name', 'Logo');
+            tekto.setProp(id, 'imageSource', JSON.stringify({width:1,height:1,rgba:[1,2,3,255]}));
+            tekto.setProp(id, 'imageFit', 'cover');"#,
+                &mut host,
+            )
+            .unwrap();
+        let tree = host.tree.borrow();
+        let node = tree.get(tree.root().unwrap()).unwrap();
+        assert_eq!(node.image.as_ref().unwrap().pixels(), &[1, 2, 3, 255]);
+        assert_eq!(node.name.as_deref(), Some("Logo"));
+        assert_eq!(node.image_fit, tekto_tree::ImageFit::Cover);
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn generated_bundle_runs_in_quickjs_when_supplied() {
+        let Some(path) = std::env::var_os("TEKTO_TEST_JS_BUNDLE") else {
+            return;
+        };
+        let source = std::fs::read_to_string(path).expect("generated bundle");
+        let tree = eval_to_tree(&source).expect("bundle should mount in QuickJS");
+        assert!(tree.to_pretty_text().contains("Hello from Tekto"));
+    }
 
     #[test]
     fn disabled_host_prop_updates_control_and_focus() {
@@ -884,7 +1147,17 @@ mod tests {
         let mut required: Vec<&str> = HOST_PROP_KEYS
             .iter()
             .copied()
-            .filter(|key| *key != "disabled" && !aliases.contains_key(*key))
+            .filter(|key| {
+                ![
+                    "disabled",
+                    "imageSource",
+                    "imageFit",
+                    "decorative",
+                    "multiline",
+                ]
+                .contains(key)
+                    && !aliases.contains_key(*key)
+            })
             .collect();
         required.push("title");
         let components = schema["components"].as_array().unwrap();
@@ -897,9 +1170,24 @@ mod tests {
                 .iter()
                 .map(|p| p["name"].as_str().unwrap())
                 .collect();
+            for key in ["imageSource", "imageFit", "decorative"] {
+                assert_eq!(listed.contains(&key), kind == "image");
+            }
+            assert_eq!(listed.contains(&"multiline"), kind == "text_field");
             assert_eq!(
                 listed.contains(&"disabled"),
-                matches!(kind, "button" | "text_field" | "checkbox")
+                matches!(
+                    kind,
+                    "button"
+                        | "text_field"
+                        | "checkbox"
+                        | "switch"
+                        | "slider"
+                        | "radio"
+                        | "tab"
+                        | "menu_item"
+                        | "select"
+                )
             );
             for name in &listed {
                 let host = aliases.get(*name).and_then(|v| v.as_str()).unwrap_or(name);

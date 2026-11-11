@@ -48,6 +48,36 @@ pub fn validate_key_name(name: &str) -> Result<(), String> {
     name.parse::<NamedActionKey>().map(|_| ())
 }
 
+/// Typed actions operate on realized nodes in the shared semantic tree.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SemanticAction {
+    Focus { id: u64 },
+    Activate { id: u64 },
+    Toggle { id: u64, checked: bool },
+    SetValue { id: u64, value: SemanticValue },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum SemanticValue {
+    Text(String),
+    Number(f32),
+}
+
+fn realized_node(tree: &Tree, id: NodeId) -> Result<&tekto_tree::Node, McpError> {
+    let realized = tekto_a11y::dump(tree)
+        .is_some_and(|dump| dump.nodes.iter().any(|node| node.id == id.raw()));
+    let node = tree
+        .get(id)
+        .filter(|_| realized)
+        .ok_or_else(|| McpError::msg(format!("node {id} is stale or not realized")))?;
+    if node.disabled {
+        return Err(McpError::msg(format!("node {id} is disabled")));
+    }
+    Ok(node)
+}
+
 /// What the running app can do for agents.
 pub trait AppHandle: Send + Sync {
     fn tree(&self) -> Tree;
@@ -59,6 +89,12 @@ pub trait AppHandle: Send + Sync {
     }
     fn key(&self, _key: NamedActionKey) -> Result<(), McpError> {
         Err(McpError::msg("key is not wired up yet"))
+    }
+    fn semantic_action(&self, _action: SemanticAction) -> Result<(), McpError> {
+        Err(McpError::msg("semantic actions are not wired up yet"))
+    }
+    fn set_value(&self, _id: NodeId, _value: f32) -> Result<(), McpError> {
+        Err(McpError::msg("set value is not wired up yet"))
     }
     fn scroll(&self, _id: NodeId, _delta: f32) -> Result<f32, McpError> {
         Err(McpError::msg("scroll is not wired up yet"))
@@ -122,6 +158,8 @@ pub struct SharedTreeHandle {
     pub action_gate: Arc<Mutex<()>>,
     pub click_js: Mutex<Option<ClickJsFn>>,
     pub input_js: Mutex<Option<InputJsFn>>,
+    /// Clean up a JS-owned overlay removed by a routed host action.
+    pub forget_js: Mutex<Option<ClickJsFn>>,
     /// Direct concurrent mutation is unsupported while a JS session is active.
     /// Use handle operations so they are ordered with clicks and reloads.
     pub tree: Arc<Mutex<Tree>>,
@@ -144,8 +182,11 @@ pub struct SharedTreeHandle {
 fn field_value(tree: &Tree, id: Option<NodeId>) -> Option<(NodeId, String)> {
     let id = id?;
     let node = tree.get(id)?;
-    (node.kind == tekto_tree::NodeKind::TextField)
-        .then(|| (id, node.text.clone().unwrap_or_default()))
+    matches!(
+        node.kind,
+        tekto_tree::NodeKind::TextField | tekto_tree::NodeKind::Select
+    )
+    .then(|| (id, node.text.clone().unwrap_or_default()))
 }
 
 impl SharedTreeHandle {
@@ -187,35 +228,57 @@ impl SharedTreeHandle {
             .action_gate
             .lock()
             .map_err(|e| McpError::msg(e.to_string()))?;
-        let (changed, id, input) = {
+        let (changed, id, input, removed_overlay) = {
             let mut tree = self.tree.lock().map_err(|e| McpError::msg(e.to_string()))?;
-            let before = field_value(&tree, tree.focus);
+            let overlay_before = tree.overlay().map(|o| o.node);
+            let input_target = tree
+                .overlay()
+                .and_then(|o| {
+                    tree.get(o.anchor)
+                        .filter(|n| n.kind == tekto_tree::NodeKind::Select)
+                        .map(|_| o.anchor)
+                })
+                .or(tree.focus);
+            let before = field_value(&tree, input_target);
             let (changed, id) = route(&mut tree)?;
-            let after = field_value(&tree, tree.focus);
+            let after = field_value(&tree, input_target);
             let input = match (before, after) {
                 (Some((old_id, old)), Some((id, value))) if old_id == id && old != value => {
                     Some((id, value))
                 }
                 _ => None,
             };
-            (changed, id, input)
+            let removed_overlay = overlay_before.filter(|id| tree.get(*id).is_none());
+            (changed, id, input, removed_overlay)
         };
         if let Some(id) = id {
             self.log(format!("clicked #{id}"));
         }
-        if changed || id.is_some() {
+        if changed || id.is_some() || removed_overlay.is_some() {
             self.notify_change();
         }
-        if let Some(id) = id {
+        let click_result = if let Some(id) = id {
             let hook = self
                 .click_js
                 .lock()
                 .map_err(|e| McpError::msg(e.to_string()))?
                 .clone();
-            if let Some(hook) = hook {
-                hook(id).map_err(McpError::msg)?;
-            }
-        }
+            hook.map_or(Ok(()), |hook| hook(id).map_err(McpError::msg))
+        } else {
+            Ok(())
+        };
+        let forget_result = if let Some(id) = removed_overlay {
+            let hook = self
+                .forget_js
+                .lock()
+                .map_err(|e| McpError::msg(e.to_string()))?
+                .clone();
+            hook.map_or(Ok(()), |hook| hook(id).map_err(McpError::msg))
+        } else {
+            Ok(())
+        };
+        click_result?;
+        forget_result?;
         self.deliver_input(input)?;
         Ok(changed || id.is_some())
     }
@@ -344,6 +407,136 @@ impl AppHandle for SharedTreeHandle {
             } else {
                 result
             }
+        })
+        .map(|_| ())
+    }
+
+    fn semantic_action(&self, action: SemanticAction) -> Result<(), McpError> {
+        use tekto_tree::NodeKind;
+        if let SemanticAction::SetValue {
+            id,
+            value: SemanticValue::Text(ref value),
+        } = action
+        {
+            let id = NodeId::from_raw(id);
+            let _gate = self
+                .action_gate
+                .lock()
+                .map_err(|e| McpError::msg(e.to_string()))?;
+            let mut tree = self.tree.lock().map_err(|e| McpError::msg(e.to_string()))?;
+            if realized_node(&tree, id)?.kind != NodeKind::TextField {
+                return Err(McpError::msg(format!("node {id} is not a text field")));
+            }
+            let before = field_value(&tree, Some(id));
+            let focus_changed = tree.focus != Some(id);
+            tree.set_focus(id)
+                .map_err(|e| McpError::msg(e.to_string()))?;
+            let changed = tree
+                .set_focused_field_value(value, value.chars().count())
+                .map_err(|e| McpError::msg(e.to_string()))?;
+            let after = field_value(&tree, Some(id));
+            let input = if before != after { after } else { None };
+            drop(tree);
+            if changed || focus_changed {
+                self.notify_change();
+            }
+            return self.deliver_input(input);
+        }
+        self.route_activated_action(|tree| {
+            let id = match &action {
+                SemanticAction::Focus { id }
+                | SemanticAction::Activate { id }
+                | SemanticAction::Toggle { id, .. }
+                | SemanticAction::SetValue { id, .. } => NodeId::from_raw(*id),
+            };
+            let node = realized_node(tree, id)?;
+            match action {
+                SemanticAction::Focus { .. } => {
+                    if !matches!(
+                        node.kind,
+                        NodeKind::Button
+                            | NodeKind::Checkbox
+                            | NodeKind::Switch
+                            | NodeKind::Radio
+                            | NodeKind::Tab
+                            | NodeKind::Slider
+                            | NodeKind::Select
+                            | NodeKind::MenuItem
+                            | NodeKind::TextField
+                    ) {
+                        return Err(McpError::msg(format!("node {id} is not focusable")));
+                    }
+                    let changed = tree.focus != Some(id);
+                    tree.set_focus(id)
+                        .map_err(|e| McpError::msg(e.to_string()))?;
+                    Ok((changed, None))
+                }
+                SemanticAction::Activate { .. } => {
+                    if !matches!(
+                        node.kind,
+                        NodeKind::Button
+                            | NodeKind::Checkbox
+                            | NodeKind::Switch
+                            | NodeKind::Radio
+                            | NodeKind::Tab
+                            | NodeKind::Select
+                            | NodeKind::MenuItem
+                    ) {
+                        return Err(McpError::msg(format!("node {id} is not activatable")));
+                    }
+                    tree.click(id).map_err(|e| McpError::msg(e.to_string()))?;
+                    Ok((true, Some(id)))
+                }
+                SemanticAction::Toggle { checked, .. } => {
+                    if !matches!(node.kind, NodeKind::Checkbox | NodeKind::Switch) {
+                        return Err(McpError::msg(format!("node {id} is not toggleable")));
+                    }
+                    if node.checked == checked {
+                        if let Some(overlay) = tree.overlay() {
+                            let mut cursor = Some(id);
+                            let mut allowed = false;
+                            while let Some(current) = cursor {
+                                if current == overlay.node {
+                                    allowed = true;
+                                    break;
+                                }
+                                cursor = tree.get(current).and_then(|node| node.parent);
+                            }
+                            if !allowed {
+                                return Err(McpError::msg(format!(
+                                    "node {id} is blocked by an overlay"
+                                )));
+                            }
+                        }
+                        return Ok((false, None));
+                    }
+                    tree.click(id).map_err(|e| McpError::msg(e.to_string()))?;
+                    Ok((true, Some(id)))
+                }
+                SemanticAction::SetValue {
+                    value: SemanticValue::Number(value),
+                    ..
+                } => {
+                    let changed = tree
+                        .set_slider_value(id, value)
+                        .map_err(|e| McpError::msg(e.to_string()))?;
+                    Ok((changed, None))
+                }
+                SemanticAction::SetValue {
+                    value: SemanticValue::Text(_),
+                    ..
+                } => unreachable!(),
+            }
+        })
+        .map(|_| ())
+    }
+
+    fn set_value(&self, id: NodeId, value: f32) -> Result<(), McpError> {
+        self.route_activated_action(|tree| {
+            let changed = tree
+                .set_slider_value(id, value)
+                .map_err(|e| McpError::msg(e.to_string()))?;
+            Ok((changed, None))
         })
         .map(|_| ())
     }
@@ -599,7 +792,10 @@ fn write_before(
                 std::io::Error::new(std::io::ErrorKind::TimedOut, "response deadline")
             })?;
         stream.set_write_timeout(Some(left))?;
-        let n = stream.write(bytes)?;
+        // Bound each blocking send: some Windows socket implementations can
+        // keep a large send pending while the peer is not reading, even past
+        // the configured timeout. Smaller writes let us recheck the deadline.
+        let n = stream.write(&bytes[..bytes.len().min(64 * 1024)])?;
         if n == 0 {
             return Err(std::io::ErrorKind::WriteZero.into());
         }
@@ -675,7 +871,7 @@ fn handle_client_locked(
         stream: &mut stream,
         deadline: Instant::now() + IO_DEADLINE,
     })?;
-    let (status, content_type, body_bytes) = if matches!(&request, Some((method, path, _)) if method == "POST" && (path == "/click" || path == "/key" || path == "/scroll"))
+    let (status, content_type, body_bytes) = if matches!(&request, Some((method, path, _)) if method == "POST" && (path == "/click" || path == "/key" || path == "/scroll" || path == "/action"))
     {
         process_http_request(handle.as_ref(), request)
     } else {
@@ -746,6 +942,46 @@ fn error_response(e: McpError) -> (&'static str, &'static str, Vec<u8>) {
     (status, "application/json", body)
 }
 
+/// Inspect a node in the same scene and AccessKit tree used by agents.
+fn inspect_node(tree: &Tree, id: NodeId) -> Result<Value, McpError> {
+    let node = tree
+        .get(id)
+        .ok_or_else(|| McpError::msg(format!("unknown node {id}")))?;
+    let semantics = tekto_a11y::dump(tree).ok_or_else(|| McpError::msg("empty tree"))?;
+    let semantic = semantics
+        .nodes
+        .iter()
+        .find(|n| n.id == id.raw())
+        .ok_or_else(|| McpError::msg(format!("unknown node {id} in attached tree")))?;
+    let mut ancestry = Vec::new();
+    let mut cursor = node.parent;
+    let mut clips = Vec::new();
+    while let Some(parent) = cursor {
+        let ancestor = tree
+            .get(parent)
+            .ok_or_else(|| McpError::msg("broken ancestry"))?;
+        ancestry.push(parent.raw());
+        if ancestor.kind == tekto_tree::NodeKind::Scroll {
+            clips.push(ancestor.bounds);
+        }
+        cursor = ancestor.parent;
+    }
+    ancestry.reverse();
+    let mut visible = node.bounds;
+    for clip in &clips {
+        let left = visible.x.max(clip.x);
+        let top = visible.y.max(clip.y);
+        let right = (visible.x + visible.width).min(clip.x + clip.width);
+        let bottom = (visible.y + visible.height).min(clip.y + clip.height);
+        visible =
+            tekto_tree::Rect::new(left, top, (right - left).max(0.0), (bottom - top).max(0.0));
+    }
+    Ok(json!({"version": 1, "id": id.raw(), "ancestry": ancestry,
+        "semantics": semantic, "focused": tree.focus == Some(id),
+        "bounds": node.bounds, "visible_bounds": visible, "ancestor_clips": clips,
+        "layout": node.layout, "scroll_y": node.scroll_y, "scroll_extent": node.scroll_extent}))
+}
+
 fn dispatch(
     handle: &dyn AppHandle,
     method: &str,
@@ -770,6 +1006,14 @@ fn dispatch(
             let text = handle.tree().to_pretty_text();
             Ok(("200 OK", "text/plain; charset=utf-8", text.into_bytes()))
         }
+        ("POST", "/inspect") => {
+            let args: Value = serde_json::from_str(body)?;
+            let id = args
+                .get("id")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| McpError::msg("missing id"))?;
+            ok_json(inspect_node(&handle.tree(), NodeId::from_raw(id))?)
+        }
         ("GET", "/screenshot") => {
             let png = handle.screenshot_png()?;
             Ok(("200 OK", "image/png", png))
@@ -778,6 +1022,40 @@ fn dispatch(
             let tree = handle.tree();
             let dump = tekto_a11y::dump(&tree).ok_or_else(|| McpError::msg("empty tree"))?;
             ok_json(serde_json::to_value(dump)?)
+        }
+        ("GET", "/snapshot") => {
+            let dump =
+                tekto_a11y::dump(&handle.tree()).ok_or_else(|| McpError::msg("empty tree"))?;
+            ok_json(json!({"version": 1, "focus": dump.focus, "nodes": dump.nodes}))
+        }
+        ("POST", "/find") => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Query {
+                role: Option<String>,
+                name: Option<String>,
+            }
+            let query: Query = serde_json::from_str(body)?;
+            if query.role.is_none() && query.name.is_none() {
+                return Err(McpError::msg("provide role, name, or both"));
+            }
+            let tree = handle.tree();
+            let dump = tekto_a11y::dump(&tree).ok_or_else(|| McpError::msg("empty tree"))?;
+            let matches: Vec<_> = dump
+                .nodes
+                .into_iter()
+                .filter(|node| {
+                    query.role.as_ref().is_none_or(|role| node.role == *role)
+                        && query
+                            .name
+                            .as_ref()
+                            .is_none_or(|name| node.label.as_ref() == Some(name))
+                        && !tree
+                            .get(NodeId::from_raw(node.id))
+                            .is_some_and(|n| n.kind == tekto_tree::NodeKind::Image && n.decorative)
+                })
+                .collect();
+            ok_json(json!({"version": 1, "matches": matches}))
         }
         ("GET", "/state") => ok_json(handle.state_json()),
         ("GET", "/states") => ok_json(handle.states_json()),
@@ -815,6 +1093,11 @@ fn dispatch(
             }
             ok_json(body)
         }
+        ("POST", "/action") => {
+            let action: SemanticAction = serde_json::from_str(body)?;
+            handle.semantic_action(action)?;
+            ok_json(json!({"ok": true}))
+        }
         ("POST", "/click") => {
             let v: Value = serde_json::from_str(if body.is_empty() { "{}" } else { body })?;
             let id = v
@@ -832,6 +1115,19 @@ fn dispatch(
                 .ok_or_else(|| McpError::msg("missing key name"))?;
             let key = name.parse().map_err(McpError::msg)?;
             handle.key(key)?;
+            ok_json(json!({"ok": true}))
+        }
+        ("POST", "/set-value") => {
+            let v: Value = serde_json::from_str(body)?;
+            let id = v
+                .get("id")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| McpError::msg("missing id"))?;
+            let value = v
+                .get("value")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| McpError::msg("missing value"))? as f32;
+            handle.set_value(NodeId::from_raw(id), value)?;
             ok_json(json!({"ok": true}))
         }
         ("POST", "/scroll") => {
@@ -998,13 +1294,18 @@ pub fn run_stdio_mcp() -> Result<(), McpError> {
 fn tool_list() -> Value {
     json!([
         {"name": "ui.tree", "description": "Dump the AccessKit / scene tree with stable node ids.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "ui.snapshot", "description": "Get a versioned semantic snapshot of the realized AccessKit tree.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "ui.find", "description": "Find all realized nodes by exact AccessKit role and/or accessible name. Returns every match, including duplicates.", "inputSchema": {"type": "object", "properties": {"role": {"type": "string"}, "name": {"type": "string"}}, "anyOf": [{"required": ["role"]}, {"required": ["name"]}], "additionalProperties": false}},
+        {"name": "ui.inspect", "description": "Inspect a node's semantic state, ancestry, layout, bounds and scroll clipping.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]}},
         {"name": "ui.accesskit", "description": "Dump the AccessKit tree (roles, labels, bounds, focus) with the same stable ids.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "ui.screenshot", "description": "Take a PNG screenshot using the CPU renderer.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "ui.action", "description": "Perform a typed action on a realized control. set_value accepts a string for text fields or a number for sliders; toggle sets the requested checked state.", "inputSchema": {"type":"object", "oneOf": [{"type":"object", "properties":{"action":{"const":"focus"},"id":{"type":"integer"}},"required":["action","id"],"additionalProperties":false},{"type":"object", "properties":{"action":{"const":"activate"},"id":{"type":"integer"}},"required":["action","id"],"additionalProperties":false},{"type":"object", "properties":{"action":{"const":"toggle"},"id":{"type":"integer"},"checked":{"type":"boolean"}},"required":["action","id","checked"],"additionalProperties":false},{"type":"object", "properties":{"action":{"const":"set_value"},"id":{"type":"integer"},"value":{"type":["string","number"]}},"required":["action","id","value"],"additionalProperties":false}]}},
         {"name": "ui.click", "description": "Click a node by id.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}}, "required": ["id"]}},
+        {"name": "ui.set_value", "description": "Set a slider's normalized value.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}, "value": {"type": "number"}}, "required": ["id", "value"]}},
         {"name": "ui.scroll", "description": "Scroll a container by logical pixels and return the clamped offset.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}, "delta": {"type": "number"}}, "required": ["id", "delta"]}},
-        {"name": "ui.key", "description": "Press a named key on the focused node.", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "enum": ["Tab", "Shift+Tab", "Enter", "Space", "Backspace"]}}, "required": ["name"]}},
+        {"name": "ui.key", "description": "Press a named key on the focused node.", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "enum": ["Tab", "Shift+Tab", "Enter", "Space", "Backspace", "Escape", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Shift+ArrowLeft", "Shift+ArrowRight", "Shift+Home", "Shift+End", "SelectAll"]}}, "required": ["name"]}},
         {"name": "ui.type", "description": "Insert plain characters at the caret of a text field (by stable id) and focus it. Not an IME: no composition or candidate window. Use ui.key for Backspace.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "text": {"type": "string"}}, "required": ["id", "text"]}},
-        {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, fontSize, padding, gap, or disabled (buttons and text fields). Returns the updated node and a writeback report. Applies immediately (no reload). Unique literals in the app project are written back to source; ambiguous edits stay in the runtime tree.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "disabled": {"type": "boolean"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}, "padding": {"type": "number"}, "gap": {"type": "number"}}, "required": ["id"]}},
+        {"name": "ui.patch", "description": "Live-edit a node by stable id: text, name, fill, color, fontSize, value, radius, borderColor, borderWidth, padding, gap, or disabled (buttons and text fields). Returns the updated node and a writeback report. Applies immediately (no reload). Unique literals in the app project are written back to source; ambiguous edits stay in the runtime tree.", "inputSchema": {"type": "object", "properties": {"id": {"type": "number"}, "disabled": {"type": "boolean"}, "value": {"type": "number"}, "text": {"type": "string"}, "name": {"type": "string"}, "fill": {"type": "string"}, "color": {"type": "string"}, "fontSize": {"type": "number"}, "font_size": {"type": "number"}, "radius": {"type": "number"}, "borderColor": {"type": "string"}, "border_color": {"type": "string"}, "borderWidth": {"type": "number"}, "border_width": {"type": "number"}, "padding": {"type": "number"}, "gap": {"type": "number"}}, "required": ["id"]}},
         {"name": "app.state", "description": "Read opted-in app state as JSON.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "app.states", "description": "List time-travel frames for an opted-in store. enabled is false when the app did not record history.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "app.restore", "description": "Jump an opted-in store to a recorded index from app.states. Returns the restored JSON value.", "inputSchema": {"type": "object", "properties": {"index": {"type": "number"}}, "required": ["index"]}},
@@ -1036,6 +1337,18 @@ fn call_tool(params: &Value) -> Result<Value, McpError> {
             let text = String::from_utf8_lossy(&body).into_owned();
             Ok(json!({"content": [{"type": "text", "text": text}]}))
         }
+        "ui.snapshot" => {
+            let (_, body) = http_get(&format!("{base}/snapshot"))?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
+        "ui.find" => {
+            let (_, body) = http_post(&format!("{base}/find"), &args)?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
+        "ui.inspect" => {
+            let (_, body) = http_post(&format!("{base}/inspect"), &args)?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
         "ui.accesskit" => {
             let (_, body) = http_get(&format!("{base}/accesskit"))?;
             let text = String::from_utf8_lossy(&body).into_owned();
@@ -1050,8 +1363,16 @@ fn call_tool(params: &Value) -> Result<Value, McpError> {
             let (_, body) = http_post(&format!("{base}/patch"), &args)?;
             Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
         }
+        "ui.action" => {
+            let (_, body) = http_post(&format!("{base}/action"), &args)?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
         "ui.click" => {
             let (_, body) = http_post(&format!("{base}/click"), &args)?;
+            Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
+        }
+        "ui.set_value" => {
+            let (_, body) = http_post(&format!("{base}/set-value"), &args)?;
             Ok(json!({"content": [{"type": "text", "text": String::from_utf8_lossy(&body)}]}))
         }
         "ui.scroll" => {
@@ -1248,6 +1569,281 @@ mod tests {
     }
 
     #[test]
+    fn semantic_actions_check_types_state_and_deliver_callbacks() {
+        let handle = http_test_handle();
+        let (field, button, toggle, slider, orphan) = {
+            let mut tree = handle.tree.lock().unwrap();
+            let root = tree.root().unwrap();
+            (
+                tree.add(NodeKind::TextField, Some(root)).unwrap(),
+                tree.add(NodeKind::Button, Some(root)).unwrap(),
+                tree.add(NodeKind::Checkbox, Some(root)).unwrap(),
+                tree.add(NodeKind::Slider, Some(root)).unwrap(),
+                tree.add(NodeKind::Button, None).unwrap(),
+            )
+        };
+        let clicks = Arc::new(Mutex::new(Vec::new()));
+        let inputs = Arc::new(Mutex::new(Vec::new()));
+        let seen = clicks.clone();
+        *handle.click_js.lock().unwrap() = Some(Arc::new(move |id| {
+            seen.lock().unwrap().push(id);
+            Ok(())
+        }));
+        let seen = inputs.clone();
+        *handle.input_js.lock().unwrap() = Some(Arc::new(move |id, value| {
+            seen.lock().unwrap().push((id, value));
+            Ok(())
+        }));
+        let request = |v: Value| {
+            process_http_request(
+                &handle,
+                Some(("POST".into(), "/action".into(), v.to_string())),
+            )
+            .0
+        };
+        assert_eq!(
+            request(json!({"action":"focus", "id":button.raw()})),
+            "200 OK"
+        );
+        assert_eq!(handle.tree().focus, Some(button));
+        assert_eq!(
+            request(json!({"action":"activate", "id":button.raw()})),
+            "200 OK"
+        );
+        assert_eq!(
+            request(json!({"action":"toggle", "id":toggle.raw(), "checked":true})),
+            "200 OK"
+        );
+        assert_eq!(
+            request(json!({"action":"toggle", "id":toggle.raw(), "checked":true})),
+            "200 OK"
+        );
+        assert_eq!(*clicks.lock().unwrap(), vec![button, toggle]);
+        assert!(handle.tree().get(toggle).unwrap().checked);
+        assert_eq!(
+            request(json!({"action":"set_value", "id":field.raw(), "value":"hello"})),
+            "200 OK"
+        );
+        assert_eq!(*inputs.lock().unwrap(), vec![(field, "hello".to_owned())]);
+        assert_eq!(
+            request(json!({"action":"set_value", "id":slider.raw(), "value":0.4})),
+            "200 OK"
+        );
+        assert_eq!(handle.tree().get(slider).unwrap().progress, 0.4);
+        assert_eq!(
+            request(json!({"action":"toggle", "id":button.raw(), "checked":true})),
+            "400 Bad Request"
+        );
+        assert_eq!(
+            request(json!({"action":"activate", "id":orphan.raw()})),
+            "400 Bad Request"
+        );
+        assert_eq!(
+            request(json!({"action":"activate", "id":999999})),
+            "400 Bad Request"
+        );
+        {
+            let mut tree = handle.tree.lock().unwrap();
+            let popup = tree.add(NodeKind::Dialog, None).unwrap();
+            tree.get_mut(popup).unwrap().name = Some("Confirm".into());
+            let root = tree.root().unwrap();
+            tree.open_overlay(popup, root, tekto_tree::OverlaySide::Center)
+                .unwrap();
+        }
+        assert_eq!(
+            request(json!({"action":"toggle", "id":toggle.raw(), "checked":true})),
+            "400 Bad Request"
+        );
+        assert_eq!(
+            request(json!({"action":"set_value", "id":field.raw(), "value":"blocked"})),
+            "400 Bad Request"
+        );
+        handle.tree.lock().unwrap().close_overlay();
+        handle
+            .tree
+            .lock()
+            .unwrap()
+            .get_mut(toggle)
+            .unwrap()
+            .disabled = true;
+        assert_eq!(
+            request(json!({"action":"toggle", "id":toggle.raw(), "checked":true})),
+            "400 Bad Request"
+        );
+        assert_eq!(
+            request(json!({"action":"focus", "id":button.raw(), "unknown":true})),
+            "400 Bad Request"
+        );
+    }
+
+    #[test]
+    fn semantic_find_returns_duplicates_and_only_realized_nodes() {
+        let handle = http_test_handle();
+        let ids = {
+            let mut tree = handle.tree.lock().unwrap();
+            let root = tree.root().unwrap();
+            let first = tree.add(NodeKind::Button, Some(root)).unwrap();
+            let second = tree.add(NodeKind::Button, Some(root)).unwrap();
+            for id in [first, second] {
+                tree.get_mut(id).unwrap().name = Some("Save".into());
+            }
+            (first, second)
+        };
+        let request = |method: &str, path: &str, body: Value| {
+            let (_, _, response) = process_http_request(
+                &handle,
+                Some((method.into(), path.into(), body.to_string())),
+            );
+            serde_json::from_slice::<Value>(&response).unwrap()
+        };
+        let result = request("POST", "/find", json!({"role": "Button", "name": "Save"}));
+        assert_eq!(result["version"], 1);
+        assert_eq!(result["matches"].as_array().unwrap().len(), 2);
+        handle.tree.lock().unwrap().remove(ids.0).unwrap();
+        let result = request("POST", "/find", json!({"role": "Button", "name": "Save"}));
+        assert_eq!(result["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(result["matches"][0]["id"], ids.1.raw());
+        let snapshot = request("GET", "/snapshot", json!({}));
+        assert_eq!(snapshot["version"], 1);
+        assert!(!snapshot["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["id"] == ids.0.raw()));
+        let (_, _, body) =
+            process_http_request(&handle, Some(("POST".into(), "/find".into(), "{}".into())));
+        assert!(String::from_utf8_lossy(&body).contains("provide role"));
+    }
+
+    #[test]
+    fn inspect_reports_semantics_and_ancestor_scroll_clip() {
+        let handle = http_test_handle();
+        let id = {
+            let mut tree = handle.tree.lock().unwrap();
+            let root = tree.root().unwrap();
+            let scroll = tree.add(NodeKind::Scroll, Some(root)).unwrap();
+            tree.get_mut(scroll).unwrap().bounds = tekto_tree::Rect::new(10.0, 10.0, 50.0, 50.0);
+            let button = tree.add(NodeKind::Button, Some(scroll)).unwrap();
+            let node = tree.get_mut(button).unwrap();
+            node.name = Some("Save".into());
+            node.bounds = tekto_tree::Rect::new(20.0, 40.0, 60.0, 40.0);
+            button
+        };
+        let (status, _, body) = process_http_request(
+            &handle,
+            Some((
+                "POST".into(),
+                "/inspect".into(),
+                json!({"id": id.raw()}).to_string(),
+            )),
+        );
+        assert_eq!(status, "200 OK");
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["version"], 1);
+        assert_eq!(value["semantics"]["role"], "Button");
+        assert_eq!(value["semantics"]["label"], "Save");
+        assert_eq!(value["ancestry"].as_array().unwrap().len(), 2);
+        assert_eq!(value["visible_bounds"]["width"], 40.0);
+        assert_eq!(value["visible_bounds"]["height"], 20.0);
+        let (status, _, _) = process_http_request(
+            &handle,
+            Some((
+                "POST".into(),
+                "/inspect".into(),
+                json!({"id": 9999}).to_string(),
+            )),
+        );
+        assert_eq!(status, "404 Not Found");
+    }
+
+    #[test]
+    fn agent_select_all_then_type_replaces_selection() {
+        let handle = http_test_handle();
+        let id = {
+            let mut tree = handle.tree.lock().unwrap();
+            let root = tree.root().unwrap();
+            let field = tree.add(NodeKind::TextField, Some(root)).unwrap();
+            tree.get_mut(field).unwrap().text = Some("old".into());
+            tree.set_focus(field).unwrap();
+            field
+        };
+        assert_eq!(
+            process_http_request(
+                &handle,
+                Some((
+                    "POST".into(),
+                    "/key".into(),
+                    json!({"name":"SelectAll"}).to_string()
+                ))
+            )
+            .0,
+            "200 OK"
+        );
+        assert_eq!(handle.tree().node_dump(id).unwrap().selection, Some((0, 3)));
+        assert_eq!(
+            process_http_request(
+                &handle,
+                Some((
+                    "POST".into(),
+                    "/type".into(),
+                    json!({"id": id.raw(), "text": "new"}).to_string()
+                ))
+            )
+            .0,
+            "200 OK"
+        );
+        assert_eq!(handle.tree().get(id).unwrap().text.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn slider_agent_value_checks_disabled_and_detached() {
+        let handle = http_test_handle();
+        let id = {
+            let mut tree = handle.tree.lock().unwrap();
+            let root = tree.root().unwrap();
+            tree.add(NodeKind::Slider, Some(root)).unwrap()
+        };
+        let request = |value| {
+            Some((
+                "POST".into(),
+                "/set-value".into(),
+                json!({"id": id.raw(), "value": value}).to_string(),
+            ))
+        };
+        assert_eq!(process_http_request(&handle, request(0.75)).0, "200 OK");
+        assert_eq!(handle.tree().get(id).unwrap().progress, 0.75);
+        handle
+            .tree
+            .lock()
+            .unwrap()
+            .patch(
+                id,
+                NodePatch {
+                    disabled: Some(true),
+                    ..NodePatch::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            process_http_request(&handle, request(0.25)).0,
+            "400 Bad Request"
+        );
+        assert_eq!(handle.tree().get(id).unwrap().progress, 0.75);
+        let orphan = handle
+            .tree
+            .lock()
+            .unwrap()
+            .add(NodeKind::Slider, None)
+            .unwrap();
+        let request = Some((
+            "POST".into(),
+            "/set-value".into(),
+            json!({"id": orphan.raw(), "value": 0.5}).to_string(),
+        ));
+        assert_eq!(process_http_request(&handle, request).0, "400 Bad Request");
+    }
+
+    #[test]
     fn named_key_route_and_callback() {
         let handle = http_test_handle();
         let button = {
@@ -1274,7 +1870,7 @@ mod tests {
         }
         assert_eq!(*calls.lock().unwrap(), vec![button]);
         assert_eq!(handle.tree().last_click, Some(button));
-        for body in ["{}", r#"{"name":"Escape"}"#, "not json"] {
+        for body in ["{}", r#"{"name":"Invalid"}"#, "not json"] {
             let (status, _, body) =
                 process_http_request(&handle, Some(("POST".into(), "/key".into(), body.into())));
             assert_eq!(status, "400 Bad Request");
@@ -1290,7 +1886,25 @@ mod tests {
         assert_eq!(key["inputSchema"]["required"], json!(["name"]));
         assert_eq!(
             key["inputSchema"]["properties"]["name"]["enum"],
-            json!(["Tab", "Shift+Tab", "Enter", "Space", "Backspace"])
+            json!([
+                "Tab",
+                "Shift+Tab",
+                "Enter",
+                "Space",
+                "Backspace",
+                "Escape",
+                "ArrowLeft",
+                "ArrowRight",
+                "ArrowUp",
+                "ArrowDown",
+                "Home",
+                "End",
+                "Shift+ArrowLeft",
+                "Shift+ArrowRight",
+                "Shift+Home",
+                "Shift+End",
+                "SelectAll"
+            ])
         );
     }
 
@@ -1361,6 +1975,7 @@ mod tests {
             action_gate: Arc::new(Mutex::new(())),
             click_js: Mutex::new(None),
             input_js: Mutex::new(None),
+            forget_js: Mutex::new(None),
             history: Mutex::new(None),
         }
     }
@@ -1498,6 +2113,34 @@ mod tests {
     }
 
     #[test]
+    fn semantic_routes_work_over_http() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let worker = thread::spawn(move || {
+            let handle = Arc::new(http_test_handle());
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                handle_client(stream, handle.clone()).unwrap();
+            }
+        });
+        let base = format!("http://127.0.0.1:{port}");
+        let (_, snapshot) = http_get(&format!("{base}/snapshot")).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&snapshot).unwrap()["version"],
+            1
+        );
+        let (_, matches) = http_post(&format!("{base}/find"), &json!({"role": "Window"})).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&matches).unwrap()["matches"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn click_sets_focus_and_is_logged() {
         let mut tree = Tree::new();
         let root = tree.add(NodeKind::Window, None).unwrap();
@@ -1513,6 +2156,7 @@ mod tests {
             action_gate: Arc::new(Mutex::new(())),
             click_js: Mutex::new(None),
             input_js: Mutex::new(None),
+            forget_js: Mutex::new(None),
             history: Mutex::new(None),
         };
         handle.click(t).unwrap();
@@ -1558,6 +2202,7 @@ mod tests {
             action_gate: Arc::new(Mutex::new(())),
             click_js: Mutex::new(None),
             input_js: Mutex::new(None),
+            forget_js: Mutex::new(None),
             history: Mutex::new(None),
         };
         let err = handle
@@ -1586,6 +2231,7 @@ mod tests {
             action_gate: Arc::new(Mutex::new(())),
             click_js: Mutex::new(None),
             input_js: Mutex::new(None),
+            forget_js: Mutex::new(None),
             history: Mutex::new(Some(store)),
         };
         let (_s, _c, body) = dispatch(&handle, "GET", "/states", "").unwrap();
@@ -1616,6 +2262,7 @@ mod tests {
             action_gate: Arc::new(Mutex::new(())),
             click_js: Mutex::new(None),
             input_js: Mutex::new(None),
+            forget_js: Mutex::new(None),
             history: Mutex::new(None),
         };
         let listed = off.states_json();
@@ -1696,6 +2343,7 @@ mod tests {
                 action_gate: Arc::new(Mutex::new(())),
                 click_js: Mutex::new(None),
                 input_js: Mutex::new(None),
+                forget_js: Mutex::new(None),
                 history: Mutex::new(None),
             },
             "GET",

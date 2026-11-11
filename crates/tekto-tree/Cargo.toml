@@ -8,5 +8,10 @@ rust-version.workspace = true
 description = "Tekto scene tree with stable node ids"
 publish = false
 
+[features]
+image-png = ["tekto-image/png"]
+
 [dependencies]
+tekto-image.workspace = true
 serde = { workspace = true }
+unicode-segmentation = { workspace = true }

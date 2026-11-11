@@ -28,6 +28,7 @@ tekto-layout = { workspace = true }
 tekto-render = { workspace = true }
 tekto-a11y = { workspace = true }
 tekto-mcp = { workspace = true }
+tekto-native = { workspace = true }
 accesskit = { workspace = true }
 thiserror = { workspace = true }
 

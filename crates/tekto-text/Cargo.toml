@@ -10,3 +10,4 @@ publish = false
 
 [dependencies]
 parley = { workspace = true }
+unicode-segmentation = { workspace = true }

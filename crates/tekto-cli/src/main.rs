@@ -53,8 +53,8 @@ enum Command {
     Test,
     /// Dump the live scene tree from the dev server.
     Tree,
-    /// Print the URL of the live inspector.
-    Inspect,
+    /// Inspect a node by id, or print the live inspector URL.
+    Inspect { id: Option<u64> },
     /// Click a node by id (talks to the dev server).
     Click { id: u64 },
     /// Scroll a container by logical pixels.
@@ -63,7 +63,7 @@ enum Command {
         #[arg(long, allow_hyphen_values = true, value_parser = parse_delta)]
         by: f32,
     },
-    /// Press Tab, Shift+Tab, Enter, Space, or Backspace.
+    /// Press a supported navigation or editing key.
     Key {
         #[arg(value_parser = parse_key_name)]
         name: String,
@@ -215,9 +215,17 @@ fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             let (_, body) = http_get(&format!("{}/tree.txt", ep.base_url()))?;
             print!("{}", String::from_utf8_lossy(&body));
         }
-        Command::Inspect => {
+        Command::Inspect { id } => {
             let ep = read_endpoint()?;
-            println!("{}/inspector", ep.base_url());
+            if let Some(id) = id {
+                let (_, body) = http_post(
+                    &format!("{}/inspect", ep.base_url()),
+                    &serde_json::json!({"id": id}),
+                )?;
+                println!("{}", String::from_utf8_lossy(&body));
+            } else {
+                println!("{}/inspector", ep.base_url());
+            }
         }
         Command::States => {
             let ep = read_endpoint()?;
@@ -328,11 +336,29 @@ mod tests {
 
     #[test]
     fn parses_key_command() {
-        for name in ["Tab", "Shift+Tab", "Enter", "Space", "Backspace"] {
+        for name in [
+            "Tab",
+            "Shift+Tab",
+            "Enter",
+            "Space",
+            "Backspace",
+            "Escape",
+            "ArrowLeft",
+            "ArrowRight",
+            "ArrowUp",
+            "ArrowDown",
+            "Home",
+            "End",
+            "Shift+ArrowLeft",
+            "Shift+ArrowRight",
+            "Shift+Home",
+            "Shift+End",
+            "SelectAll",
+        ] {
             let cli = Cli::try_parse_from(["tekto", "key", name]).unwrap();
             assert!(matches!(cli.command, Command::Key { name: parsed } if parsed == name));
         }
         assert!(Cli::try_parse_from(["tekto", "key"]).is_err());
-        assert!(Cli::try_parse_from(["tekto", "key", "Escape"]).is_err());
+        assert!(Cli::try_parse_from(["tekto", "key", "Invalid"]).is_err());
     }
 }

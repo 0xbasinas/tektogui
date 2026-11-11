@@ -2,6 +2,10 @@
 
 This file is for agents (and humans) working in this repo.
 
+## Editing files
+
+Always change files with the Edit tool, and nothing else. Do not edit files with shell commands or scripts (`sed`, `python`, heredocs, `echo >`, `Set-Content`, and similar). Read the file first, then use Edit with an exact string. If a file does not exist yet, create it with the Write tool. Shell commands are for building, testing, and running only.
+
 ## What Tekto is
 
 Tekto is our own GUI runtime. Do not wrap Electron, Tauri, or Flutter. Apps are general purpose. They can be written in Rust or in TypeScript + JSX. Both must stay first-class.

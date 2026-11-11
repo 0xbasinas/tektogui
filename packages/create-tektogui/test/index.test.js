@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, copyFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { main } from "../src/index.js";
 
 const script = fileURLToPath(new URL("../src/index.js", import.meta.url));
 test("wrapper resolves roots, forwards arguments, and reports failures", async (t) => {
@@ -15,10 +16,8 @@ test("wrapper resolves roots, forwards arguments, and reports failures", async (
   const bin = path.join(tmp, "bin");
   for (const dir of [path.join(root, "crates/tekto"), path.join(root, "crates/tekto-cli"), cwd, bin]) mkdirSync(dir, { recursive: true });
   for (const file of ["Cargo.toml", "crates/tekto/Cargo.toml", "crates/tekto-cli/Cargo.toml"]) writeFileSync(path.join(root, file), "");
-  const capture = path.join(tmp, "capture.json");
-  writeFileSync(path.join(bin, "cargo"), `#!${process.execPath}\nrequire('fs').writeFileSync(process.env.CAPTURE, JSON.stringify({args: process.argv.slice(2), cwd: process.cwd(), root: process.env.TEKTO_ROOT}));\n`, { mode: 0o755 });
   const run = (args, env = {}, entry = script) => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [entry, ...args], { cwd, env: { ...process.env, PATH: bin, CAPTURE: capture, ...env } });
+    const child = spawn(process.execPath, [entry, ...args], { cwd, env: { ...process.env, PATH: bin, ...env } });
     let stdout = "", stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
@@ -26,10 +25,17 @@ test("wrapper resolves roots, forwards arguments, and reports failures", async (
     child.on("close", (status) => resolve({ status, stdout, stderr }));
   });
   for (const rootValue of [root, path.relative(cwd, root)]) {
-    const result = await run(["my-app"], { TEKTO_ROOT: rootValue });
-    assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(readFileSync(capture)), { args: ["run", "-q", "--manifest-path", path.join(root, "Cargo.toml"), "-p", "tekto-cli", "--", "new", "my-app"], cwd, root });
+    let captured;
+    const status = main({ args: ["my-app"], env: { TEKTO_ROOT: rootValue }, cwd,
+      launch: (command, args, options) => { captured = { command, args, cwd: options.cwd, root: options.env.TEKTO_ROOT }; return { status: 0 }; } });
+    assert.equal(status, 0);
+    assert.deepEqual(captured, { command: "cargo", args: ["run", "-q", "--manifest-path", path.join(root, "Cargo.toml"), "-p", "tekto-cli", "--", "new", "my-app"], cwd, root });
   }
+  assert.equal(main({ args: ["app"], env: { TEKTO_ROOT: root }, cwd, launch: () => ({ status: 7 }) }), 7);
+  let message = "";
+  assert.equal(main({ args: ["app"], env: { TEKTO_ROOT: root }, cwd,
+    launch: () => ({ status: null, error: new Error("failed") }), error: text => { message = text; } }), 1);
+  assert.match(message, /could not start cargo: failed/);
   for (const value of ["", "missing", cwd]) {
     const result = await run(["hello"], { TEKTO_ROOT: value });
     assert.equal(result.status, 1);
