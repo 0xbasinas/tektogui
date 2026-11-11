@@ -67,7 +67,7 @@ curl -s -X POST http://127.0.0.1:PORT/patch \
 - `POST /patch` JSON: `{"id":4,"text":"…","name":"…","fill":"#rrggbb","color":"#rrggbb","fontSize":20,"padding":24,"gap":20}` — response is `{ "ok": true, "node": { ... }, "writeback": { ... } }` or an error
 - `POST /click` `{"id":1}`
 - `POST /key` `{"name":"Tab"}` presses `Tab`, `Shift+Tab`, `Enter`, `Space`, or `Backspace` on the focused node.
-- `POST /scroll` `{"id":N,"delta_y":N}` scrolls a scroll container by logical pixels and returns the clamped offset.
+- `POST /scroll` `{"id":N,"delta":N}` scrolls a scroll container by logical pixels and returns the clamped `offset`.
 - `POST /type` `{"id":N,"text":"typed"}` inserts plain characters into a `text_field` (errors if the node is not one). Use `POST /key` for Backspace. No IME.
 - `POST /reload` raw JS bundle, or `{"js":"…"}`
 
