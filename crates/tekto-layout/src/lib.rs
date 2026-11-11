@@ -145,7 +145,11 @@ fn measure_text(
     };
     if !matches!(
         node.kind,
-        NodeKind::Text | NodeKind::Button | NodeKind::TextField | NodeKind::ListItem
+        NodeKind::Text
+            | NodeKind::Button
+            | NodeKind::Checkbox
+            | NodeKind::TextField
+            | NodeKind::ListItem
     ) {
         return Size::ZERO;
     }
@@ -170,7 +174,13 @@ fn measure_text(
     let (w, h) = text.measure(sample, node.font_size, max_width);
     let w = if content.is_empty() { 0.0 } else { w };
     Size {
-        width: known.width.unwrap_or(w),
+        width: known.width.unwrap_or(
+            w + if node.kind == NodeKind::Checkbox {
+                28.0
+            } else {
+                0.0
+            },
+        ),
         height: known.height.unwrap_or(h.max(1.0)),
     }
 }
@@ -259,7 +269,11 @@ fn build(
         let is_text = tree.get(id).is_some_and(|n| {
             matches!(
                 n.kind,
-                NodeKind::Text | NodeKind::Button | NodeKind::TextField | NodeKind::ListItem
+                NodeKind::Text
+                    | NodeKind::Button
+                    | NodeKind::Checkbox
+                    | NodeKind::TextField
+                    | NodeKind::ListItem
             )
         });
         if is_text {
@@ -579,7 +593,11 @@ fn border_height(
     let border_width = definite_length(node.layout.width).unwrap_or(available_width);
     if matches!(
         node.kind,
-        NodeKind::Text | NodeKind::Button | NodeKind::TextField | NodeKind::ListItem
+        NodeKind::Text
+            | NodeKind::Button
+            | NodeKind::Checkbox
+            | NodeKind::TextField
+            | NodeKind::ListItem
     ) {
         return row_box_height(tree, text, id, border_width);
     }

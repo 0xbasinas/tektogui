@@ -210,6 +210,7 @@ fn parse_bool(key: &str, value: &str) -> Result<bool, JsError> {
 /// (plus the JSX alias `title`, which is rewritten to `name` before the host).
 pub const HOST_PROP_KEYS: &[&str] = &[
     "disabled",
+    "checked",
     "width",
     "height",
     "column",
@@ -246,6 +247,7 @@ fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), J
     }
     let mut patch = NodePatch::default();
     match key {
+        "checked" => patch.checked = Some(parse_bool(key, value)?),
         "disabled" => patch.disabled = Some(parse_bool(key, value)?),
         "text" => patch.text = Some(value.into()),
         "name" => patch.name = Some(value.into()),
@@ -895,7 +897,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 listed.contains(&"disabled"),
-                matches!(kind, "button" | "text_field")
+                matches!(kind, "button" | "text_field" | "checkbox")
             );
             for name in &listed {
                 let host = aliases.get(*name).and_then(|v| v.as_str()).unwrap_or(name);

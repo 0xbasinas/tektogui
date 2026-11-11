@@ -111,6 +111,23 @@ pub fn button(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId, Wi
     Ok(id)
 }
 
+/// A labeled checkbox with an initial checked state.
+pub fn checkbox(
+    tree: &mut Tree,
+    parent: NodeId,
+    label: &str,
+    checked: bool,
+) -> Result<NodeId, WidgetError> {
+    let id = tree.add(NodeKind::Checkbox, Some(parent))?;
+    if let Some(n) = tree.get_mut(id) {
+        n.name = Some(label.into());
+        n.text = Some(label.into());
+        n.checked = checked;
+        n.apply_widget_defaults();
+    }
+    Ok(id)
+}
+
 /// A single-line text field. `label` is the accessible name; `value` is `text`.
 ///
 /// The caret starts at the end of `value`. Desktop character keys, Backspace,

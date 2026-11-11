@@ -38,8 +38,9 @@ pub fn route_key(
         };
         let result = route_named_key(tree, action, repeat);
         if tree.focus.is_some_and(|id| {
-            tree.get(id)
-                .is_some_and(|n| n.kind == tekto_tree::NodeKind::Button)
+            tree.get(id).is_some_and(|n| {
+                n.kind == tekto_tree::NodeKind::Button || n.kind == tekto_tree::NodeKind::Checkbox
+            })
         }) {
             return result;
         }

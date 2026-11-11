@@ -37,6 +37,8 @@ JSX lowers through `@tektogui/jsx-runtime` `mount` / `renderToOps` (`window`, `g
 
 ## Disabled controls
 
+Checkboxes support `disabled` with the same behavior. `checkbox(tree, parent, label, checked)` builds a labeled toggle; Space and clicks toggle `Node::checked` and emit `TreeEvent::Changed`. AccessKit reports `Role::CheckBox` and the toggled state. JSX accepts `<checkbox checked={false}>Label</checkbox>`; a JSX change callback is a follow-up.
+
 Buttons and text fields accept `disabled` (Rust `Node` / `NodePatch`, JSX `disabled` prop). Disabled controls are skipped by Tab, reject pointer, keyboard, and agent activation or edits, paint at half opacity, and report AccessKit disabled state. Disabling the focused control moves focus to the root and clears preedit. Enabled controls keep the existing look; snapshots must stay identical when `disabled` is false.
 
 ## Text field limits
