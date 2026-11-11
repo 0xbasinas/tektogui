@@ -24,7 +24,7 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tekto_mcp::{AppHandle, SharedTreeHandle};
+use tekto_mcp::SharedTreeHandle;
 use tekto_render::{paint_tree, CpuRenderer, Renderer};
 use tekto_tree::{ImeEvent, Tree, SCROLL_WHEEL_LINE};
 use winit::application::ApplicationHandler;
@@ -612,14 +612,18 @@ fn deliver_pointer(state: &mut State, op: PointerOp) {
         return;
     }
     let now = pointer_ms(state);
-    let Ok(mut tree) = state.tree.lock() else {
-        return;
+    let changed = if let Some(handle) = &state.handle {
+        crate::pointer_route::deliver_pointer(handle, &mut state.pointer, op, now).unwrap_or(true)
+    } else if let Ok(mut tree) = state.tree.lock() {
+        let effect = apply_pointer_op(&mut state.pointer, &mut tree, op, now);
+        effect.redraw
+            || effect
+                .click_at
+                .is_some_and(|(x, y)| tree.click_at(x, y).is_some())
+    } else {
+        false
     };
-    let effect = apply_pointer_op(&mut state.pointer, &mut tree, op, now);
-    drop(tree);
-    if let Some((x, y)) = effect.click_at {
-        apply_pointer_click(state, x, y);
-    } else if effect.redraw {
+    if changed {
         state.window.request_redraw();
     }
 }
@@ -634,24 +638,6 @@ fn apply_wheel(state: &mut State, x: f32, y: f32, delta_y: f32) {
     if changed {
         state.window.request_redraw();
     }
-}
-
-fn apply_pointer_click(state: &mut State, x: f32, y: f32) {
-    let id = {
-        let Ok(tree) = state.tree.lock() else {
-            return;
-        };
-        tree.hit(x, y)
-    };
-    let Some(id) = id else {
-        return;
-    };
-    if let Some(handle) = &state.handle {
-        let _ = handle.click(id);
-    } else if let Ok(mut tree) = state.tree.lock() {
-        let _ = tree.click(id);
-    }
-    state.window.request_redraw();
 }
 
 /// Turn the platform IME on only while a text field is focused, and tell it
@@ -727,9 +713,9 @@ fn apply_ime(state: &mut State, ime: Ime) {
 }
 
 fn apply_field_key(state: &mut State, event: &KeyEvent) {
-    let changed = state.tree.lock().ok().is_some_and(|mut tree| {
-        crate::key_route::route_key(
-            &mut tree,
+    let changed = if let Some(handle) = &state.handle {
+        crate::key_route::deliver_key(
+            handle,
             &event.logical_key,
             event.text.as_deref(),
             event.state,
@@ -737,7 +723,21 @@ fn apply_field_key(state: &mut State, event: &KeyEvent) {
             state.modifiers.state(),
             &mut state.last_ime_commit,
         )
-    });
+        .unwrap_or(true)
+    } else if let Ok(mut tree) = state.tree.lock() {
+        let (changed, click) = crate::key_route::route_key(
+            &mut tree,
+            &event.logical_key,
+            event.text.as_deref(),
+            event.state,
+            event.repeat,
+            state.modifiers.state(),
+            &mut state.last_ime_commit,
+        );
+        changed || click.is_some_and(|id| tree.click(id).is_ok())
+    } else {
+        false
+    };
     if changed {
         state.window.request_redraw();
     }
@@ -761,7 +761,7 @@ pub fn run_android_with_session(
     android_app: winit::platform::android::activity::AndroidApp,
     session: Option<crate::DevSession>,
 ) -> Result<(), PlatformError> {
-    run_event_loop(runtime, opts, Some(android_app), session)
+    run_event_loop(runtime, opts, Some(android_app), session, None)
 }
 
 pub fn run_windowed(runtime: AppRuntime, opts: WindowOptions) -> Result<(), PlatformError> {
@@ -788,7 +788,18 @@ pub fn run_windowed_with_session(
     opts: WindowOptions,
     session: Option<crate::DevSession>,
 ) -> Result<(), PlatformError> {
-    run_event_loop(runtime, opts, None, session)
+    run_event_loop(runtime, opts, None, session, None)
+}
+
+/// Start a window with a live handle without requiring an HTTP server.
+#[cfg(not(target_os = "android"))]
+pub fn run_windowed_with_handle(
+    runtime: AppRuntime,
+    opts: WindowOptions,
+    handle: Arc<SharedTreeHandle>,
+    viewport: Arc<Mutex<Viewport>>,
+) -> Result<(), PlatformError> {
+    run_event_loop(runtime, opts, None, None, Some((handle, viewport)))
 }
 
 #[cfg(target_os = "android")]
@@ -801,6 +812,7 @@ fn run_event_loop(
     opts: WindowOptions,
     android_app: Option<AndroidAppArg>,
     existing_session: Option<crate::DevSession>,
+    standalone: Option<(Arc<SharedTreeHandle>, Arc<Mutex<Viewport>>)>,
 ) -> Result<(), PlatformError> {
     let mut prepared = runtime.clone();
     if tekto_tree::reduced_motion_requested() {
@@ -830,6 +842,14 @@ fn run_event_loop(
         eprintln!("Tekto dev server at {}", ep.base_url());
         eprintln!("Try: tekto tree    or    tekto screenshot    or    tekto click <id>");
         (std::sync::Arc::clone(&handle.tree), Some(handle), viewport)
+    } else if let Some((handle, viewport)) = standalone {
+        let proxy = event_loop.create_proxy();
+        if let Ok(mut slot) = handle.on_change.lock() {
+            *slot = Some(Arc::new(move || {
+                let _ = proxy.send_event(AppEvent::TreeChanged);
+            }));
+        }
+        (Arc::clone(&handle.tree), Some(handle), viewport)
     } else if opts.dev_server {
         let proxy = event_loop.create_proxy();
         match crate::start_handle(&prepared, opts.width, opts.height) {

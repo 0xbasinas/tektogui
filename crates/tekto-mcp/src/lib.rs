@@ -101,11 +101,18 @@ pub type OnChangeFn = Arc<dyn Fn() + Send + Sync>;
 /// Evaluates a JS bundle and swaps the tree. Installed by `tekto dev --js`.
 pub type ApplyJsFn = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
+pub type ClickJsFn = Arc<dyn Fn(NodeId) -> Result<(), String> + Send + Sync>;
+
 pub struct SharedTreeHandle {
+    /// Serializes supported handle actions with retained session reloads.
+    pub action_gate: Arc<Mutex<()>>,
+    pub click_js: Mutex<Option<ClickJsFn>>,
+    /// Direct concurrent mutation is unsupported while a JS session is active.
+    /// Use handle operations so they are ordered with clicks and reloads.
     pub tree: Arc<Mutex<Tree>>,
     pub render: RenderFn,
     pub logs: Arc<Mutex<Vec<String>>>,
-    /// Called after a live patch (and later, clicks) so a window can redraw
+    /// Called after a live patch or click so a window can redraw
     /// and refresh AccessKit. Also used to wake the loop for a JS reload.
     pub on_change: Mutex<Option<OnChangeFn>>,
     /// A bundled JS IIFE waiting to be evaluated on the app thread
@@ -120,6 +127,43 @@ pub struct SharedTreeHandle {
 }
 
 impl SharedTreeHandle {
+    /// Run a routed action under the same gate as reload and patch. The router
+    /// may update non-click state and returns the node to activate, if any.
+    pub fn route_action(
+        &self,
+        route: impl FnOnce(&mut Tree) -> (bool, Option<NodeId>),
+    ) -> Result<bool, McpError> {
+        let _gate = self
+            .action_gate
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?;
+        let (changed, id) = {
+            let mut tree = self.tree.lock().map_err(|e| McpError::msg(e.to_string()))?;
+            let (changed, id) = route(&mut tree);
+            if let Some(id) = id {
+                tree.click(id).map_err(|e| McpError::msg(e.to_string()))?;
+            }
+            (changed, id)
+        };
+        if let Some(id) = id {
+            self.log(format!("clicked #{id}"));
+        }
+        if changed || id.is_some() {
+            self.notify_change();
+        }
+        if let Some(id) = id {
+            let hook = self
+                .click_js
+                .lock()
+                .map_err(|e| McpError::msg(e.to_string()))?
+                .clone();
+            if let Some(hook) = hook {
+                hook(id).map_err(McpError::msg)?;
+            }
+        }
+        Ok(changed || id.is_some())
+    }
+
     fn notify_change(&self) {
         if let Ok(cb) = self.on_change.lock() {
             if let Some(f) = cb.as_ref() {
@@ -197,6 +241,10 @@ impl AppHandle for SharedTreeHandle {
     }
 
     fn patch(&self, id: NodeId, patch: NodePatch) -> Result<(), McpError> {
+        let _gate = self
+            .action_gate
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?;
         let mut tree = self.tree.lock().expect("tree lock");
         let snapshot = tree
             .get(id)
@@ -215,17 +263,14 @@ impl AppHandle for SharedTreeHandle {
     }
 
     fn click(&self, id: NodeId) -> Result<(), McpError> {
-        let mut tree = self.tree.lock().expect("tree lock");
-        tree.click(id).map_err(|e| McpError::msg(e.to_string()))?;
-        drop(tree);
-        if let Ok(mut logs) = self.logs.lock() {
-            logs.push(format!("clicked #{id}"));
-        }
-        self.notify_change();
-        Ok(())
+        self.route_action(|_| (false, Some(id))).map(|_| ())
     }
 
     fn type_text(&self, id: NodeId, text: &str) -> Result<(), McpError> {
+        let _gate = self
+            .action_gate
+            .lock()
+            .map_err(|e| McpError::msg(e.to_string()))?;
         let mut tree = self.tree.lock().expect("tree lock");
         tree.insert_text(id, text)
             .map_err(|e| McpError::msg(e.to_string()))?;
@@ -385,7 +430,8 @@ const IO_DEADLINE: Duration = Duration::from_secs(5);
 
 fn serve(listener: TcpListener, handle: Arc<dyn AppHandle>, running: Arc<AtomicBool>) {
     let active = Arc::new(AtomicUsize::new(0));
-    // Keep multi-step operations, including patch and writeback, in request order.
+    // Keep multi-step HTTP operations, including patch and writeback, in order.
+    // Clicks use the handle action gate instead, so callbacks run outside this lock.
     let dispatch_lock = Arc::new(Mutex::new(()));
     for stream in listener.incoming() {
         if !running.load(Ordering::Relaxed) {
@@ -525,7 +571,10 @@ fn handle_client_locked(
         stream: &mut stream,
         deadline: Instant::now() + IO_DEADLINE,
     })?;
-    let (status, content_type, body_bytes) = {
+    let (status, content_type, body_bytes) = if matches!(&request, Some((method, path, _)) if method == "POST" && path == "/click")
+    {
+        process_http_request(handle.as_ref(), request)
+    } else {
         let _guard = lock.lock().map_err(|e| McpError::msg(e.to_string()))?;
         process_http_request(handle.as_ref(), request)
     };
@@ -1068,6 +1117,8 @@ mod tests {
             pending_js: Mutex::new(None),
             apply_js: Mutex::new(Some(Arc::new(|_| Ok(())))),
             last_writeback: Mutex::new(None),
+            action_gate: Arc::new(Mutex::new(())),
+            click_js: Mutex::new(None),
             history: Mutex::new(None),
         }
     }
@@ -1170,6 +1221,8 @@ mod tests {
             pending_js: Mutex::new(None),
             apply_js: Mutex::new(None),
             last_writeback: Mutex::new(None),
+            action_gate: Arc::new(Mutex::new(())),
+            click_js: Mutex::new(None),
             history: Mutex::new(None),
         };
         handle.click(t).unwrap();
@@ -1212,6 +1265,8 @@ mod tests {
             pending_js: Mutex::new(None),
             apply_js: Mutex::new(None),
             last_writeback: Mutex::new(None),
+            action_gate: Arc::new(Mutex::new(())),
+            click_js: Mutex::new(None),
             history: Mutex::new(None),
         };
         let err = handle
@@ -1237,6 +1292,8 @@ mod tests {
             pending_js: Mutex::new(None),
             apply_js: Mutex::new(None),
             last_writeback: Mutex::new(None),
+            action_gate: Arc::new(Mutex::new(())),
+            click_js: Mutex::new(None),
             history: Mutex::new(Some(store)),
         };
         let (_s, _c, body) = dispatch(&handle, "GET", "/states", "").unwrap();
@@ -1264,6 +1321,8 @@ mod tests {
             pending_js: Mutex::new(None),
             apply_js: Mutex::new(None),
             last_writeback: Mutex::new(None),
+            action_gate: Arc::new(Mutex::new(())),
+            click_js: Mutex::new(None),
             history: Mutex::new(None),
         };
         let listed = off.states_json();
@@ -1341,6 +1400,8 @@ mod tests {
                 pending_js: Mutex::new(None),
                 apply_js: Mutex::new(None),
                 last_writeback: Mutex::new(None),
+                action_gate: Arc::new(Mutex::new(())),
+                click_js: Mutex::new(None),
                 history: Mutex::new(None),
             },
             "GET",
