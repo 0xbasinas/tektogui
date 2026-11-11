@@ -36,7 +36,7 @@ Nothing unexpected showed up in the default graph that we should gate or drop in
 
 ## CI caches and times
 
-Linux `fmt` + `clippy -D warnings` + `cargo test --workspace --all-targets` runs on every PR and every push. That one test command is what runs the record/replay integration test and the headless Notes PNG compare. Windows and Android compile jobs run only on `push` to `nightly`, or on `workflow_dispatch` with `full=true`. The WASM job (`cargo check -p tekto-wasm --target wasm32-unknown-unknown`, plus `tekto` with `--no-default-features --features cpu,js`) runs on `push` to `nightly` or any `workflow_dispatch`. It is not on PR CI. Swatinem/rust-cache and concurrency cancel are on.
+Linux `fmt` + `clippy -D warnings` + `cargo test --workspace --all-targets` runs on every PR and every push. That one test command is what runs the record/replay integration test and the headless Notes PNG compare. Windows and Android compile jobs run only on `push` to `nightly`, or on `workflow_dispatch` with `full=true`. The WASM and QuickJS job runs on `push` to `nightly` or any `workflow_dispatch`, not on PR CI. It builds the WASM core, checks `tekto` with `--no-default-features --features cpu,js`, runs the required Node WASM and `tekto-js` QuickJS tests, verifies the existing owner tests are discovered and runs all `tekto` QuickJS owner tests, and compile-checks `tekto-cli` with QuickJS. Both QuickJS test steps set `TEKTO_REQUIRE_ESBUILD=1`, so esbuild-dependent owner and example regressions fail instead of skipping when esbuild is missing. Swatinem/rust-cache and concurrency cancel are on. The added owner and CLI steps have not yet been timed in CI.
 
 Times from GitHub-hosted Linux (UTC, job "Linux check", step "Test (includes headless snapshot)"):
 
