@@ -704,6 +704,80 @@ pub fn notes_tree(width: f32, height: f32) -> Result<Tree, WidgetError> {
     Ok(tree)
 }
 
+/// Row when the viewport is wide enough, column otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Axis {
+    Row,
+    Column,
+}
+
+/// Choose a layout axis for one viewport width. A non-finite width counts as wide.
+pub fn responsive_axis(viewport_width: f32, breakpoint: f32) -> Axis {
+    if viewport_width.is_finite() && viewport_width < breakpoint {
+        Axis::Column
+    } else {
+        Axis::Row
+    }
+}
+
+/// Switch an existing container between a row and a column.
+pub fn apply_axis(tree: &mut Tree, container: NodeId, axis: Axis) {
+    if let Some(node) = tree.get_mut(container) {
+        node.layout.column = axis == Axis::Column;
+    }
+}
+
+/// The two panes and their shared container.
+pub struct SplitPane {
+    pub root: NodeId,
+    pub primary: NodeId,
+    pub secondary: NodeId,
+}
+
+/// Two equal panes side by side. The secondary pane collapses when the
+/// viewport is narrower than `collapse_below`, leaving the primary pane the
+/// full width. A collapsed pane keeps its nodes and state; it is only
+/// excluded from layout, paint, focus, hit testing, and accessibility.
+pub fn split_pane(
+    tree: &mut Tree,
+    parent: NodeId,
+    collapse_below: f32,
+    gap: f32,
+) -> Result<SplitPane, WidgetError> {
+    if !collapse_below.is_finite() || collapse_below <= 0.0 {
+        return Err(WidgetError(TreeError {
+            message: "split pane needs a finite collapse width above zero".into(),
+        }));
+    }
+    let gap = if gap.is_finite() { gap.max(0.0) } else { 0.0 };
+    let root = tree.add(NodeKind::Group, Some(parent))?;
+    if let Some(node) = tree.get_mut(root) {
+        node.layout.column = false;
+        node.layout.gap = gap;
+        node.grow = 1.0;
+    }
+    let primary = tree.add(NodeKind::Group, Some(root))?;
+    if let Some(node) = tree.get_mut(primary) {
+        node.grow = 1.0;
+        node.layout.column = true;
+        // A zero basis plus grow makes the two panes equal rather than
+        // content-sized, without needing percentage widths in the tree.
+        node.layout.width = 0.0;
+    }
+    let secondary = tree.add(NodeKind::Group, Some(root))?;
+    if let Some(node) = tree.get_mut(secondary) {
+        node.grow = 1.0;
+        node.layout.column = true;
+        node.layout.width = 0.0;
+        node.collapse_below = Some(collapse_below);
+    }
+    Ok(SplitPane {
+        root,
+        primary,
+        secondary,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

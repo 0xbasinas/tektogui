@@ -39,6 +39,7 @@ pub fn layout_tree_with_text(
     let Some(root) = tree.root() else {
         return;
     };
+    apply_collapse(tree, viewport_width);
     virtualize_lists(tree, text);
     // The viewport is the window: keep the root's layout size in sync so a
     // resize actually relayouts children (padding, banner width, and so on).
@@ -437,6 +438,7 @@ fn style_for(tree: &Tree, id: NodeId, is_root: bool) -> Style {
         } else {
             FlexDirection::Row
         },
+        flex_grow: node.grow.max(0.0),
         size,
         padding: length(ls.padding),
         gap: Size {
@@ -477,6 +479,42 @@ fn length(value: f32) -> Rect<LengthPercentage> {
         top: LengthPercentage::length(value),
         bottom: LengthPercentage::length(value),
     }
+}
+
+/// Mark responsive panes collapsed or expanded for this viewport width.
+///
+/// A node with `collapse_below` is hidden when the viewport is narrower than
+/// its threshold. Hidden subtrees drop out of layout, paint, focus, hit
+/// testing, and accessibility because [`Tree::is_visible`] reports false.
+/// If focus was inside a pane that just collapsed, it moves to the nearest
+/// visible ancestor.
+fn apply_collapse(tree: &mut Tree, viewport_width: f32) {
+    let ids: Vec<NodeId> = tree.ids().collect();
+    let mut changed = false;
+    for id in ids {
+        if let Some(node) = tree.get_mut(id) {
+            let collapsed = node
+                .collapse_below
+                .is_some_and(|below| viewport_width < below);
+            if node.collapsed != collapsed {
+                node.collapsed = collapsed;
+                changed = true;
+            }
+        }
+    }
+    if !changed {
+        return;
+    }
+    let Some(mut target) = tree.focus else {
+        return;
+    };
+    while !tree.is_visible(target) {
+        match tree.get(target).and_then(|node| node.parent) {
+            Some(parent) => target = parent,
+            None => break,
+        }
+    }
+    let _ = tree.set_focus(target);
 }
 
 fn build(

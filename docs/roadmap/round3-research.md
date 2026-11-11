@@ -180,15 +180,9 @@ These three work well together, and can share the `tekto-test` crate above.
 
 ### Responsive layout helpers
 
-- **Name:** Viewport breakpoints and a collapsing split pane.
-- **What it does:** Expose viewport size and a small helper to choose row or column, plus a split pane that can collapse to one pane on a narrow width. Inactive content must have clear focus and accessibility behaviour.
-- **Why:** Avalonia's responsive queries and SwiftUI split views show why one fixed layout is not enough on desktop and web.
-- **Priority:** medium. **Size:** M.
-- **Crates it touches:** `tekto-layout`, `tekto-widgets`.
-- **Design notes:** Stay on Taffy. No CSS media-query language, no DOM API, no automatic navigation policy, no multi-window management in this slice.
-- **DX fit:** Original code, no new DSL, no new deps. Agents can still see both panes' ids when they exist, and a clear state when one is hidden.
-- **Acceptance:** Headless resize tests, minimum sizes, and focus when a pane collapses.
-- **Licence:** Own MIT code. Avalonia and SwiftUI are ideas only.
+**Implemented:** `responsive_axis(viewport_width, breakpoint)` returns `Axis::Row` or `Axis::Column`, and `apply_axis` switches an existing container. `split_pane(tree, parent, collapse_below, gap)` builds a row of two equal panes (`grow` plus a zero width basis), marks the secondary pane with `collapse_below`, and returns both ids. Layout compares `collapse_below` against the viewport width, sets `Node::collapsed`, and `Tree::is_visible` excludes that subtree, so it drops out of layout, paint, hit testing, focus, and AccessKit while keeping its nodes and state. If focus was inside a pane that collapses, layout moves it to the nearest visible ancestor. `grow` and `collapseBelow` are HostOp props too, so TSX groups can build the same layout; `components.json` and the generated JSX declarations include them. Headless tests cover equal pane widths, collapse and restore at a breakpoint, focus rescue, the axis helper, and rejected breakpoints.
+
+**Remaining:** Collapse is driven by the viewport width, not the pane's own content box, so a split pane nested inside a narrow column does not re-evaluate its parent's width. There is no animation on collapse, no draggable divider, and no stored per-breakpoint layout. Only `split_pane` uses `grow` today.
 
 ### Pointer capture and in-app drag
 

@@ -43,11 +43,11 @@ pub use tekto_tree::{
 };
 
 pub use tekto_widgets::{
-    banner, button, checkbox, dialog, image, list, list_item, menu, menu_item, notes_tree,
-    progress, radio, radio_group, scroll, select, select_option, slider, switch, tab, tab_list,
-    tab_panel, text, text_area, text_field, title_on_banner, window, ListIds, ListRow,
-    BANNER_HEIGHT, BANNER_PADDING, BODY_SIZE, LIST_GAP, LIST_ROW_PADDING, PAGE_PADDING, STACK_GAP,
-    TITLE_SIZE,
+    apply_axis, banner, button, checkbox, dialog, image, list, list_item, menu, menu_item,
+    notes_tree, progress, radio, radio_group, responsive_axis, scroll, select, select_option,
+    slider, split_pane, switch, tab, tab_list, tab_panel, text, text_area, text_field,
+    title_on_banner, window, Axis, ListIds, ListRow, SplitPane, BANNER_HEIGHT, BANNER_PADDING,
+    BODY_SIZE, LIST_GAP, LIST_ROW_PADDING, PAGE_PADDING, STACK_GAP, TITLE_SIZE,
 };
 
 /// Layout, paint with the CPU renderer, and write a PNG if `out` is set.
