@@ -1176,6 +1176,26 @@ impl Tree {
     /// Attach an existing node as the last child of `parent`.
     /// The child may be an orphan, or it is moved from its previous parent.
     pub fn append(&mut self, parent: NodeId, child: NodeId) -> Result<(), TreeError> {
+        self.attach_child(parent, child, None)
+    }
+
+    /// Attach `child` under `parent` at `index`, clamped to the child count.
+    /// The child keeps its id and is moved from any previous parent.
+    pub fn insert_child_at(
+        &mut self,
+        parent: NodeId,
+        index: usize,
+        child: NodeId,
+    ) -> Result<(), TreeError> {
+        self.attach_child(parent, child, Some(index))
+    }
+
+    fn attach_child(
+        &mut self,
+        parent: NodeId,
+        child: NodeId,
+        index: Option<usize>,
+    ) -> Result<(), TreeError> {
         if parent == child {
             return Err(TreeError {
                 message: "cannot append a node to itself".into(),
@@ -1227,7 +1247,11 @@ impl Tree {
                 node.list_slots.retain(|id| *id != child);
             }
         }
-        self.nodes.get_mut(&parent).unwrap().children.push(child);
+        let parent_node = self.nodes.get_mut(&parent).unwrap();
+        let at = index
+            .map(|index| index.min(parent_node.children.len()))
+            .unwrap_or(parent_node.children.len());
+        parent_node.children.insert(at, child);
         self.nodes.get_mut(&child).unwrap().parent = Some(parent);
         if matches!(self.nodes[&child].kind, NodeKind::Radio | NodeKind::Tab)
             && self.nodes[&child].checked
@@ -2337,6 +2361,21 @@ fn image_dump(node: &Node) -> Option<ImageDump> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insert_child_at_positions_and_moves_a_node() {
+        let mut tree = Tree::new();
+        let root = tree.add(NodeKind::Window, None).unwrap();
+        let a = tree.add(NodeKind::Rect, Some(root)).unwrap();
+        let b = tree.add(NodeKind::Rect, Some(root)).unwrap();
+        let c = tree.add(NodeKind::Rect, Some(root)).unwrap();
+        tree.insert_child_at(root, 1, c).unwrap();
+        assert_eq!(tree.get(root).unwrap().children, vec![a, c, b]);
+        // A large index is clamped to the end.
+        tree.insert_child_at(root, 99, a).unwrap();
+        assert_eq!(tree.get(root).unwrap().children, vec![c, b, a]);
+        assert!(tree.insert_child_at(root, 0, root).is_err());
+    }
 
     #[test]
     fn pointer_capture_releases_on_remove_and_focus_change() {

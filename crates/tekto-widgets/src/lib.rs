@@ -4,6 +4,9 @@
 use tekto_text::TextEngine;
 use tekto_tree::{Color, LayoutStyle, Node, NodeId, NodeKind, Tree, TreeError};
 
+mod lazy;
+pub use lazy::KeyedList;
+
 pub use tekto_tree::{BODY_SIZE, PAGE_PADDING, STACK_GAP};
 /// Default title text size.
 pub const TITLE_SIZE: f32 = 22.0;
