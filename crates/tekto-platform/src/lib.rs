@@ -195,6 +195,13 @@ mod gpu_policy;
     )
 ))]
 mod pointer_route;
+
+#[cfg(all(
+    feature = "desktop",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+mod key_route;
 pub use gpu_policy::{gpu_paint_allowed, wants_gpu_paint};
 
 #[cfg(any(test, all(feature = "desktop", target_os = "android")))]
