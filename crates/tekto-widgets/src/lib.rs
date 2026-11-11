@@ -4,12 +4,7 @@
 use tekto_text::TextEngine;
 use tekto_tree::{Color, LayoutStyle, Node, NodeId, NodeKind, Tree, TreeError};
 
-/// Space used around the window content.
-pub const PAGE_PADDING: f32 = 24.0;
-/// Space between stacked children (body sits comfortably under the banner).
-pub const STACK_GAP: f32 = 20.0;
-/// Default body text size.
-pub const BODY_SIZE: f32 = 20.0;
+pub use tekto_tree::{BODY_SIZE, PAGE_PADDING, STACK_GAP};
 /// Default title text size.
 pub const TITLE_SIZE: f32 = 22.0;
 /// Quiet header band. Title is padded and vertically centered inside it.
@@ -49,17 +44,9 @@ pub fn window(
     let id = tree.add(NodeKind::Window, None)?;
     if let Some(n) = tree.get_mut(id) {
         n.name = Some(title.into());
-        n.fill = Some(Color::PAGE);
-        n.layout = LayoutStyle {
-            width,
-            height,
-            padding: PAGE_PADDING,
-            gap: STACK_GAP,
-            column: true,
-            justify_center: false,
-            x: f32::NAN,
-            y: f32::NAN,
-        };
+        n.apply_widget_defaults();
+        n.layout.width = width;
+        n.layout.height = height;
     }
     Ok(id)
 }
@@ -119,10 +106,7 @@ pub fn button(tree: &mut Tree, parent: NodeId, label: &str) -> Result<NodeId, Wi
     if let Some(n) = tree.get_mut(id) {
         n.name = Some(label.into());
         n.text = Some(label.into());
-        n.fill = Some(Color::BANNER);
-        n.color = Some(Color::ON_BANNER);
-        n.font_size = BODY_SIZE;
-        n.layout.padding = 12.0;
+        n.apply_widget_defaults();
     }
     Ok(id)
 }
@@ -142,11 +126,8 @@ pub fn text_field(
     if let Some(n) = tree.get_mut(id) {
         n.name = Some(label.into());
         n.text = Some(value.into());
-        n.fill = Some(Color::FIELD);
-        n.color = Some(Color::INK);
-        n.font_size = BODY_SIZE;
+        n.apply_widget_defaults();
         n.caret = value.chars().count();
-        n.layout.padding = 10.0;
     }
     Ok(id)
 }
