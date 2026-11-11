@@ -31,12 +31,16 @@ impl Tree {
             .find_map(|(tab, id)| (*id == panel).then_some(*tab))
     }
 
-    /// Whether a node and its ancestors are in active tab panels.
+    /// Whether a node and its ancestors are in active tab panels and not
+    /// inside a collapsed responsive pane.
     pub fn is_visible(&self, mut id: NodeId) -> bool {
         loop {
             let Some(node) = self.get(id) else {
                 return false;
             };
+            if node.collapsed {
+                return false;
+            }
             if let Some(tab) = self.tab_for_panel(id) {
                 if self.get(tab).is_none_or(|n| !n.checked) {
                     return false;

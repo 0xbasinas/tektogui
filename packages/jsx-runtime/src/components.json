@@ -30,7 +30,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
@@ -60,7 +62,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number", "description": "Share of the parent row or column; zero keeps the natural size."},
+        {"name": "collapseBelow", "type": "number", "description": "Hide this subtree when the viewport is narrower than this width."}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
@@ -90,7 +94,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
@@ -123,7 +129,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
@@ -153,7 +161,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
@@ -184,7 +194,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "Focus the slider."},
@@ -215,7 +227,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
@@ -246,7 +260,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "Selects this option."}
@@ -276,7 +292,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
@@ -307,7 +325,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "Selects this option."}
@@ -339,7 +359,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
@@ -369,7 +391,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
@@ -399,7 +423,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
@@ -434,7 +460,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "Button activation delivers the callback in desktop QuickJS and the WASM host."}
@@ -466,7 +494,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "Button activation delivers the callback in desktop QuickJS and the WASM host."}
@@ -493,7 +523,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
@@ -528,7 +560,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "Button activation delivers the callback in desktop QuickJS and the WASM host."}
@@ -556,7 +590,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "Toggles the checkbox."}
@@ -587,7 +623,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "Toggles the switch."}
@@ -623,7 +661,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "Focuses the field, moves the caret to the end, and clears a preedit."},
@@ -653,7 +693,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."},
@@ -684,7 +726,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "ui.click sets focus and last_click. No onClick prop."}
@@ -714,7 +758,9 @@
         {"name": "padding", "type": "number"},
         {"name": "gap", "type": "number"},
         {"name": "column", "type": "boolean"},
-        {"name": "justifyCenter", "type": "boolean"}
+        {"name": "justifyCenter", "type": "boolean"},
+        {"name": "grow", "type": "number"},
+        {"name": "collapseBelow", "type": "number"}
       ],
       "events": [
         {"name": "click", "description": "Pointer click. Agents use ui.click with the row id."}

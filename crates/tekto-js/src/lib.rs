@@ -358,12 +358,14 @@ pub const HOST_PROP_KEYS: &[&str] = &[
     "border_width",
     "padding",
     "gap",
+    "grow",
+    "collapseBelow",
 ];
 
 fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), JsError> {
     match key {
         "width" | "height" | "column" | "justifyCenter" | "justify_center" | "testKey"
-        | "imageSource" | "imageFit" | "decorative" | "multiline" => {
+        | "imageSource" | "imageFit" | "decorative" | "multiline" | "grow" | "collapseBelow" => {
             let node = tree
                 .get_mut(id)
                 .ok_or_else(|| JsError::Message(format!("unknown node {id}")))?;
@@ -371,6 +373,11 @@ fn set_prop(tree: &mut Tree, id: NodeId, key: &str, value: &str) -> Result<(), J
                 "width" => node.layout.width = parse_dim(key, value)?,
                 "height" => node.layout.height = parse_dim(key, value)?,
                 "column" => node.layout.column = parse_bool(key, value)?,
+                "grow" => node.grow = parse_f32(key, value)?.max(0.0),
+                "collapseBelow" => {
+                    let below = parse_f32(key, value)?;
+                    node.collapse_below = (below.is_finite() && below > 0.0).then_some(below);
+                }
                 "testKey" => node.test_key = (!value.is_empty()).then(|| value.to_owned()),
                 "multiline" => {
                     if node.kind != NodeKind::TextField {

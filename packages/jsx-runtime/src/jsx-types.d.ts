@@ -21,6 +21,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -43,6 +45,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -65,6 +69,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -90,6 +96,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -112,6 +120,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -135,6 +145,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -157,6 +169,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -180,6 +194,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -202,6 +218,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -225,6 +243,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       onClick?: () => void;
       contextMenu?: TektoElement;
       panel?: TektoElement;
@@ -249,6 +269,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -271,6 +293,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -293,6 +317,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -316,6 +342,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       onClick?: () => void;
       contextMenu?: TektoElement;
       children?: unknown;
@@ -340,6 +368,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       onInput?: (value: string) => void;
       contextMenu?: TektoElement;
       children?: unknown;
@@ -363,6 +393,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -386,6 +418,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       onClick?: () => void;
       contextMenu?: TektoElement;
       children?: unknown;
@@ -410,6 +444,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -433,6 +469,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -457,6 +495,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       onInput?: (value: string) => void;
       contextMenu?: TektoElement;
       children?: unknown;
@@ -480,6 +520,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -502,6 +544,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };
@@ -524,6 +568,8 @@ export namespace JSX {
       gap?: number;
       column?: boolean;
       justifyCenter?: boolean;
+      grow?: number;
+      collapseBelow?: number;
       contextMenu?: TektoElement;
       children?: unknown;
     };

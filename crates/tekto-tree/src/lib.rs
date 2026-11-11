@@ -561,6 +561,15 @@ pub struct Node {
     pub color: Option<Color>,
     pub font_size: f32,
     pub layout: LayoutStyle,
+    /// Share of the parent's row or column. Zero keeps the natural size.
+    #[serde(default)]
+    pub grow: f32,
+    /// Collapse this subtree when the viewport is narrower than this width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collapse_below: Option<f32>,
+    /// Set by layout when [`Self::collapse_below`] is triggered.
+    #[serde(default)]
+    pub collapsed: bool,
     pub bounds: Rect,
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
@@ -705,6 +714,9 @@ impl Node {
             color: None,
             font_size: 16.0,
             layout: LayoutStyle::default(),
+            grow: 0.0,
+            collapse_below: None,
+            collapsed: false,
             bounds: Rect::default(),
             parent: None,
             children: Vec::new(),
