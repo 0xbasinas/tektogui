@@ -38,6 +38,8 @@ struct Inner {
     /// Last uploaded image keyed by [`tekto_image::Image::id`]. The pixel
     /// copy and format conversion happen once per image, not once per frame.
     image: Option<(u64, vello::peniko::ImageData)>,
+    /// Reused until the presentation format changes.
+    blit: Option<BlitResources>,
     /// On-screen surface, when the host asked for direct presentation.
     surface: Option<wgpu::Surface<'static>>,
     config: Option<wgpu::SurfaceConfiguration>,
@@ -268,6 +270,7 @@ impl GpuRenderer {
                 clip_depth: 0,
                 pixels: None,
                 image: None,
+                blit: None,
                 surface: None,
                 config: None,
             }),
@@ -286,7 +289,7 @@ impl GpuRenderer {
             inner.clip_depth -= 1;
         }
         let src = color_target(&mut inner)?;
-        blit_texture(&inner, &src, target, target_format)
+        blit_texture(&mut inner, &src, target, target_format)
     }
 
     pub fn set_scale(&mut self, scale: f32) {
@@ -662,13 +665,17 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-fn blit_texture(
-    inner: &Inner,
-    src: &wgpu::Texture,
-    target: &wgpu::Texture,
+struct BlitResources {
+    format: wgpu::TextureFormat,
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::RenderPipeline,
+    sampler: wgpu::Sampler,
+}
+
+fn create_blit_resources(
+    device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
-) -> Result<(), RenderError> {
-    let device = &inner.device;
+) -> BlitResources {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("tekto-blit"),
         source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()),
@@ -724,7 +731,6 @@ fn blit_texture(
         multiview_mask: None,
         cache: None,
     });
-    let view = src.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("tekto-blit"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -735,9 +741,33 @@ fn blit_texture(
         mipmap_filter: wgpu::MipmapFilterMode::Nearest,
         ..wgpu::SamplerDescriptor::default()
     });
+    BlitResources {
+        format: target_format,
+        layout: bind_layout,
+        pipeline,
+        sampler,
+    }
+}
+
+fn blit_texture(
+    inner: &mut Inner,
+    src: &wgpu::Texture,
+    target: &wgpu::Texture,
+    target_format: wgpu::TextureFormat,
+) -> Result<(), RenderError> {
+    if inner
+        .blit
+        .as_ref()
+        .is_none_or(|blit| blit.format != target_format)
+    {
+        inner.blit = Some(create_blit_resources(&inner.device, target_format));
+    }
+    let blit = inner.blit.as_ref().expect("blit resources initialized");
+    let device = &inner.device;
+    let view = src.create_view(&wgpu::TextureViewDescriptor::default());
     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("tekto-blit"),
-        layout: &bind_layout,
+        layout: &blit.layout,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -745,7 +775,7 @@ fn blit_texture(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: wgpu::BindingResource::Sampler(&sampler),
+                resource: wgpu::BindingResource::Sampler(&blit.sampler),
             },
         ],
     });
@@ -770,7 +800,7 @@ fn blit_texture(
             timestamp_writes: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&pipeline);
+        pass.set_pipeline(&blit.pipeline);
         pass.set_bind_group(0, &bind, &[]);
         pass.draw(0..3, 0..1);
     }
@@ -939,6 +969,105 @@ pub async fn paint_tree_webgpu(
 mod tests {
     use super::*;
     use tekto_tree::{Color, Rect};
+
+    #[test]
+    fn gpu_present_reuses_resources_and_handles_format_changes() {
+        let mut renderer = match GpuRenderer::new(64, 4) {
+            Ok(renderer) => renderer,
+            Err(err) => {
+                eprintln!("gpu adapter unavailable: {err}");
+                return;
+            }
+        };
+        let mut previous: Option<(wgpu::TextureFormat, wgpu::RenderPipeline)> = None;
+        for (format, clear, expected) in [
+            (
+                wgpu::TextureFormat::Rgba8Unorm,
+                Color::rgb(200, 30, 10),
+                [200, 30, 10, 255],
+            ),
+            (
+                wgpu::TextureFormat::Rgba8Unorm,
+                Color::rgb(10, 40, 190),
+                [10, 40, 190, 255],
+            ),
+            (
+                wgpu::TextureFormat::Bgra8Unorm,
+                Color::rgb(70, 20, 180),
+                [180, 20, 70, 255],
+            ),
+        ] {
+            renderer.begin_frame(clear);
+            let target = {
+                let inner = renderer.inner.borrow();
+                inner.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("test-present-target"),
+                    size: wgpu::Extent3d {
+                        width: 64,
+                        height: 4,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                })
+            };
+            renderer.present_to(&target, format).expect("present");
+            let inner = renderer.inner.borrow();
+            let blit = inner.blit.as_ref().unwrap();
+            assert_eq!(blit.format, format);
+            if let Some((old_format, old_pipeline)) = &previous {
+                assert_eq!(old_pipeline == &blit.pipeline, *old_format == format);
+            }
+            previous = Some((format, blit.pipeline.clone()));
+            let buffer = inner.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("test-present-readback"),
+                size: 64 * 4 * 4,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = inner
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            encoder.copy_texture_to_buffer(
+                target.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(256),
+                        rows_per_image: Some(4),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: 64,
+                    height: 4,
+                    depth_or_array_layers: 1,
+                },
+            );
+            let submission = inner.queue.submit([encoder.finish()]);
+            let slice = buffer.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+            inner
+                .device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(submission),
+                    timeout: Some(Duration::from_secs(10)),
+                })
+                .expect("poll");
+            rx.recv().expect("map callback").expect("map");
+            let pixels = slice.get_mapped_range();
+            assert_eq!(&pixels[..4], &expected);
+            drop(pixels);
+            buffer.unmap();
+        }
+    }
 
     #[test]
     fn gpu_paints_rect_text_and_clip_or_reports_no_adapter() {
