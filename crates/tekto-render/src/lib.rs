@@ -571,10 +571,10 @@ pub use cpu::CpuRenderer;
 
 #[cfg(feature = "gpu")]
 mod gpu;
-#[cfg(feature = "gpu")]
-pub use gpu::GpuRenderer;
 #[cfg(all(feature = "gpu", target_arch = "wasm32"))]
 pub use gpu::{paint_tree_webgpu, WebCanvas};
+#[cfg(feature = "gpu")]
+pub use gpu::{GpuRenderer, SurfaceDiagnostics};
 
 /// Placeholder used when the crate is built without the `gpu` feature.
 #[cfg(not(feature = "gpu"))]

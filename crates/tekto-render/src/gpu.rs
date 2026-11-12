@@ -21,6 +21,14 @@ use vello::{AaConfig, AaSupport, Glyph, RenderParams, RendererOptions, Scene};
 #[cfg(target_arch = "wasm32")]
 pub type WebCanvas = wgpu::web_sys::HtmlCanvasElement;
 
+/// Sizes and acquisition result from the most recent window-surface attempt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SurfaceDiagnostics {
+    pub configured: Option<(u32, u32)>,
+    pub acquired: Option<(u32, u32)>,
+    pub acquisition: &'static str,
+}
+
 struct Inner {
     width: u32,
     height: u32,
@@ -41,6 +49,7 @@ struct Inner {
     /// On-screen surface, when the host asked for direct presentation.
     surface: Option<wgpu::Surface<'static>>,
     config: Option<wgpu::SurfaceConfiguration>,
+    surface_diagnostics: SurfaceDiagnostics,
 }
 
 pub struct GpuRenderer {
@@ -184,6 +193,10 @@ impl GpuRenderer {
             (surface, config) => {
                 inner.surface = surface;
                 inner.config = config;
+                inner.surface_diagnostics = SurfaceDiagnostics {
+                    acquisition: "no_surface",
+                    ..SurfaceDiagnostics::default()
+                };
                 return Ok(false);
             }
         };
@@ -192,36 +205,58 @@ impl GpuRenderer {
             config.height = height;
             surface.configure(&inner.device, &config);
         }
+        inner.surface_diagnostics = SurfaceDiagnostics {
+            configured: Some((config.width, config.height)),
+            acquired: None,
+            acquisition: "pending",
+        };
         drop(inner);
         let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Success(frame) => {
+                self.record_acquisition(
+                    "success",
+                    Some((frame.texture.width(), frame.texture.height())),
+                );
+                frame
+            }
+            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                self.record_acquisition(
+                    "suboptimal",
+                    Some((frame.texture.width(), frame.texture.height())),
+                );
+                frame
+            }
             wgpu::CurrentSurfaceTexture::Timeout => {
                 let mut inner = self.inner.borrow_mut();
+                inner.surface_diagnostics.acquisition = "timeout";
                 inner.surface = Some(surface);
                 inner.config = Some(config);
                 return Err(RenderError::msg("surface timeout"));
             }
             wgpu::CurrentSurfaceTexture::Occluded => {
                 let mut inner = self.inner.borrow_mut();
+                inner.surface_diagnostics.acquisition = "occluded";
                 inner.surface = Some(surface);
                 inner.config = Some(config);
                 return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 let mut inner = self.inner.borrow_mut();
+                inner.surface_diagnostics.acquisition = "outdated";
                 inner.surface = Some(surface);
                 inner.config = Some(config);
                 return Err(RenderError::msg("surface outdated"));
             }
             wgpu::CurrentSurfaceTexture::Lost => {
                 let mut inner = self.inner.borrow_mut();
+                inner.surface_diagnostics.acquisition = "lost";
                 inner.surface = Some(surface);
                 inner.config = Some(config);
                 return Err(RenderError::msg("surface lost"));
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 let mut inner = self.inner.borrow_mut();
+                inner.surface_diagnostics.acquisition = "validation";
                 inner.surface = Some(surface);
                 inner.config = Some(config);
                 return Err(RenderError::msg("surface validation"));
@@ -234,6 +269,16 @@ impl GpuRenderer {
         inner.config = Some(config);
         result?;
         Ok(true)
+    }
+
+    fn record_acquisition(&self, result: &'static str, size: Option<(u32, u32)>) {
+        let mut inner = self.inner.borrow_mut();
+        inner.surface_diagnostics.acquisition = result;
+        inner.surface_diagnostics.acquired = size;
+    }
+
+    pub fn surface_diagnostics(&self) -> SurfaceDiagnostics {
+        self.inner.borrow().surface_diagnostics
     }
 
     fn from_device(
@@ -270,6 +315,7 @@ impl GpuRenderer {
                 image: None,
                 surface: None,
                 config: None,
+                surface_diagnostics: SurfaceDiagnostics::default(),
             }),
         })
     }
@@ -954,6 +1000,15 @@ mod tests {
                 return;
             }
         };
+        assert!(!renderer.present_window(64, 48).unwrap());
+        assert_eq!(
+            renderer.surface_diagnostics(),
+            SurfaceDiagnostics {
+                configured: None,
+                acquired: None,
+                acquisition: "no_surface",
+            }
+        );
         renderer.begin_frame(Color::PAGE);
         renderer.fill_rect(Rect::new(0.0, 0.0, 40.0, 30.0), Color::BANNER);
         renderer.push_clip(Rect::new(0.0, 0.0, 10.0, 48.0));
