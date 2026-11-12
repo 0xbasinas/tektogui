@@ -75,14 +75,47 @@ Each line contains a process-wide sequence number, elapsed milliseconds since
 the current window surface started, physical `window_before` and `window_after`
 sizes around the direct present attempt, a `forced` resize size if any, the
 physical size `requested`, the actual `renderer` size, the scale, GPU surface `configured` and `acquired`
-sizes, acquisition result, direct-present result, and CPU-side layout, paint
-and direct-present durations. `-` means unavailable, not zero. The GPU direct
-time is not GPU completion time; the fallback status does not say whether the
-subsequent softbuffer presentation succeeded. Lines contain no app text or
-paths. Capture the trace soon after reproducing the problem because older
-entries are evicted. A size mismatch is evidence for investigation, not proof
-of the cause of a black strip. Record the machine, OS, GPU, driver, and repro
-steps separately; compare frames with and without the artifact.
+sizes, acquisition result, direct-present result, renderer resize status,
+whether layout and paint ran, fallback renderer, readback status, softbuffer resize and final
+outcome. `source_pixels` and `buffer_pixels` are counts after conversion and
+buffer acquisition. Compare them when investigating incomplete copies; `-`
+means unavailable, not zero. The CPU-side timings include total frame time
+up to the recorded outcome, layout, paint and direct-present time. Direct time
+does not measure GPU completion, and a successful present call does not prove
+the compositor displayed the expected frame. Frames retired before the direct
+attempt are not recorded. Lines contain no app text, paths or error messages;
+some errors also appear on stderr, while resize failures report only status.
+Capture the trace soon
+after reproducing the problem because older entries are evicted.
+
+When investigating a black strip, compare `window_before` and `window_after`
+with `requested`, `renderer`, `configured` and `acquired` around the affected
+frame, then inspect `acquisition`, `direct`, `soft_resize` and `outcome`. A
+mismatch is evidence for investigation, not proof of the cause. Record the
+machine, OS, GPU, driver, and repro steps separately; compare frames with and
+without the artifact. If an agent cannot retrieve a trace, check that the
+variable was set before process startup and the app has a dev-server handle.
+
+For example, `acquisition=outdated direct=error_fallback
+soft_resize=ok outcome=softbuffer_presented` means the direct GPU attempt
+reported an outdated surface and the later software-buffer present call
+returned success. It does not establish what appeared on screen. A
+`tree_lock_failed` layout or paint status means that stage could not lock the
+tree; `skipped_clean` means layout was intentionally skipped. `renderer_resize`
+and `soft_resize` report the corresponding calls, and `not_attempted` means
+the software-buffer path was not reached. `fallback_renderer` names the
+renderer used for readback when that path runs; on direct GPU success it is
+the active renderer. `readback=initial_error_cpu_ok` means the initial
+readback failed but a CPU repaint and readback succeeded. `frame_ms` ends when the traced outcome is recorded and
+does not include later IME synchronization.
+
+For a missing or clipped control, combine the frame trace with `ui.inspect`
+for bounds and ancestor clips, `ui.accesskit` for semantics, and
+`ui.screenshot` for the CPU-rendered scene. The screenshot is not a capture
+of the GPU swapchain or the OS compositor. Reproduce the same state with CPU
+and GPU, record the exact steps and timestamps, and attach only logs and
+images the app owner is comfortable sharing. Trace data can identify where
+to look; it does not replace a real device check.
 | `app.components` | JSON schema of widgets, props, and events. No running app required |
 
 `app.components` (and the dev-server route `GET /components`, which does need a running server) returns `packages/jsx-runtime/src/components.json`. That file is the list `@tektogui/jsx-runtime` mounts. Kinds match `NodeKind` (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`, `list`, `list_item`). Each kind lists every prop the host `setProp` accepts (`width`, `height`, `column`, `justifyCenter`, `text`, `name`, `fill`, `color`, `fontSize`, `radius`, `borderColor`, `borderWidth`, `padding`, `gap`), because JSX forwards that set on every kind. `title` is an alias of `name` (`font_size` and `justify_center` are the snake_case aliases). Host actions include `click` on every kind, plus `type`, `key`, and `ime` on `text_field`, and `scroll` on `scroll`. Retained desktop QuickJS and the WASM host support button `onClick`, field `onInput`, and reactive `text` on text nodes; see the [counter example](tsx-events.md). The Rust `banner()` helper is a `rect`, not its own kind.

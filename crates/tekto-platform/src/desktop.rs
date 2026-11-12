@@ -581,6 +581,14 @@ impl Painter {
         }
     }
 
+    fn kind(&self) -> &'static str {
+        match self {
+            Painter::Cpu(_) => "cpu",
+            #[cfg(feature = "gpu")]
+            Painter::Gpu(_) => "gpu",
+        }
+    }
+
     fn resize(&mut self, width: u32, height: u32) -> Result<(), tekto_render::RenderError> {
         match self {
             Painter::Cpu(renderer) => renderer.resize(width, height),
@@ -676,7 +684,14 @@ fn window_insets(_state: &State, _scale: f32) -> WindowInsets {
     WindowInsets::default()
 }
 
-fn relayout_window(state: &mut State, forced: Option<(u32, u32)>) -> (u32, u32) {
+struct LayoutResult {
+    width: u32,
+    height: u32,
+    resize: &'static str,
+    layout: &'static str,
+}
+
+fn relayout_window(state: &mut State, forced: Option<(u32, u32)>) -> LayoutResult {
     let (lw, lh, scale, pw, ph) = window_logical_and_physical(&state.window);
     // A pending resize rect is the size this frame must paint, even if winit
     // has not delivered the new WM_SIZE yet.
@@ -691,7 +706,11 @@ fn relayout_window(state: &mut State, forced: Option<(u32, u32)>) -> (u32, u32) 
     } else {
         lh
     };
-    let _ = state.renderer.resize(pw, ph);
+    let resize = if state.renderer.resize(pw, ph).is_ok() {
+        "ok"
+    } else {
+        "error"
+    };
     state.renderer.set_scale(scale);
     let next = Viewport {
         width: lw.round().max(1.0) as u32,
@@ -712,7 +731,7 @@ fn relayout_window(state: &mut State, forced: Option<(u32, u32)>) -> (u32, u32) 
     let insets = window_insets(state, scale);
     #[cfg(not(target_os = "android"))]
     let insets = window_insets(&*state, scale);
-    if let Ok(mut tree) = state.tree.lock() {
+    let layout = if let Ok(mut tree) = state.tree.lock() {
         // A colour or opacity tween only repaints. Skipping layout keeps
         // Taffy and Parley off the frame path for those animations.
         #[cfg(target_os = "android")]
@@ -724,8 +743,20 @@ fn relayout_window(state: &mut State, forced: Option<(u32, u32)>) -> (u32, u32) 
         }
         let now_ms = state.anim_origin.elapsed().as_secs_f64() * 1000.0;
         tree.advance(now_ms);
+        if needs_layout {
+            "ran"
+        } else {
+            "skipped_clean"
+        }
+    } else {
+        "tree_lock_failed"
+    };
+    LayoutResult {
+        width: pw,
+        height: ph,
+        resize,
+        layout,
     }
-    (pw, ph)
 }
 
 fn redraw(state: &mut State) {
@@ -746,23 +777,27 @@ fn redraw(state: &mut State) {
             forced = Some((rect.2, rect.3));
         }
     }
-    let (pw, ph) = relayout_window(state, forced);
+    let layout = relayout_window(state, forced);
+    let (pw, ph) = (layout.width, layout.height);
     let layout_done = Instant::now();
     if !crate::lifecycle::may_present(state.epoch) {
         return;
     }
-    if let Ok(tree) = state.tree.lock() {
+    let paint_status = if let Ok(tree) = state.tree.lock() {
         state.renderer.paint(&tree, state.clear);
         publish_accesskit(
             &tree,
             #[cfg(feature = "a11y-os")]
             &mut state.adapter,
         );
-    }
+        "ran"
+    } else {
+        "tree_lock_failed"
+    };
     let paint_done = Instant::now();
     let window_before = frame_trace_enabled().then(|| state.window.inner_size());
     let direct = state.renderer.present_window(pw, ph);
-    if let Some(window_before) = window_before {
+    let mut trace = window_before.map(|window_before| {
         let window_after = state.window.inner_size();
         let direct_status = match &direct {
             None => "cpu",
@@ -771,28 +806,41 @@ fn redraw(state: &mut State) {
             Some(Err(_)) => "error_fallback",
         };
         let surface = state.renderer.surface_trace();
-        record_frame_trace(
-            state.handle.as_deref(),
-            FrameTrace {
-                window_before: (window_before.width, window_before.height),
-                window_after: (window_after.width, window_after.height),
-                forced,
-                requested: (pw, ph),
-                renderer: state.renderer.size(),
-                scale: state.renderer.scale(),
-                configured: surface.configured,
-                acquired: surface.acquired,
-                acquisition: surface.acquisition,
-                direct_status,
-                elapsed_ms: state.anim_origin.elapsed().as_secs_f64() * 1000.0,
-                layout_ms: (layout_done - frame_start).as_secs_f64() * 1000.0,
-                paint_ms: (paint_done - layout_done).as_secs_f64() * 1000.0,
-                direct_ms: (Instant::now() - paint_done).as_secs_f64() * 1000.0,
-            },
-        );
-    }
+        FrameTrace {
+            window_before: (window_before.width, window_before.height),
+            window_after: (window_after.width, window_after.height),
+            forced,
+            requested: (pw, ph),
+            renderer: state.renderer.size(),
+            scale: state.renderer.scale(),
+            configured: surface.configured,
+            acquired: surface.acquired,
+            acquisition: surface.acquisition,
+            direct_status,
+            renderer_resize: layout.resize,
+            layout_status: layout.layout,
+            paint_status,
+            fallback_renderer: state.renderer.kind(),
+            readback: "not_attempted",
+            soft_resize: "not_attempted",
+            outcome: "pending",
+            source_pixels: None,
+            buffer_pixels: None,
+            frame_ms: 0.0,
+            elapsed_ms: state.anim_origin.elapsed().as_secs_f64() * 1000.0,
+            layout_ms: (layout_done - frame_start).as_secs_f64() * 1000.0,
+            paint_ms: (paint_done - layout_done).as_secs_f64() * 1000.0,
+            direct_ms: (Instant::now() - paint_done).as_secs_f64() * 1000.0,
+        }
+    });
     match direct {
         Some(Ok(true)) => {
+            finish_frame_trace(
+                state.handle.as_deref(),
+                &mut trace,
+                "gpu_presented",
+                frame_start,
+            );
             if frame_log_enabled() {
                 eprintln!(
                     "tekto frame {:.2} ms (layout {:.2}, paint {:.2}, gpu present {:.2})",
@@ -811,7 +859,12 @@ fn redraw(state: &mut State) {
         }
     }
     let rgba = match state.renderer.rgba8() {
-        Ok(pixels) => pixels,
+        Ok(pixels) => {
+            if let Some(trace) = trace.as_mut() {
+                trace.readback = "ok";
+            }
+            pixels
+        }
         Err(err) => {
             // A destroyed window must not be locked. Other GPU failures
             // paint once more on the CPU path, then present only if the
@@ -820,40 +873,91 @@ fn redraw(state: &mut State) {
                 || tekto_render::classify_present_failure(&err.to_string())
                     == tekto_render::PresentFailure::SurfaceLost
             {
+                if let Some(trace) = trace.as_mut() {
+                    trace.readback = "surface_lost";
+                }
                 eprintln!("tekto: surface lost ({err}); skipping present");
+                finish_frame_trace(
+                    state.handle.as_deref(),
+                    &mut trace,
+                    "readback_surface_lost",
+                    frame_start,
+                );
                 return;
             }
             eprintln!("tekto: GPU frame failed ({err}); using CPU");
             let scale = state.renderer.scale();
             state.renderer = Painter::cpu(pw, ph);
+            if let Some(trace) = trace.as_mut() {
+                trace.fallback_renderer = "cpu";
+            }
             state.renderer.set_scale(scale);
             if let Ok(tree) = state.tree.lock() {
                 state.renderer.paint(&tree, state.clear);
             }
             match state.renderer.rgba8() {
-                Ok(pixels) => pixels,
+                Ok(pixels) => {
+                    if let Some(trace) = trace.as_mut() {
+                        trace.readback = "initial_error_cpu_ok";
+                    }
+                    pixels
+                }
                 Err(err) => {
+                    if let Some(trace) = trace.as_mut() {
+                        trace.readback = "initial_error_cpu_error";
+                    }
                     eprintln!("tekto: CPU frame failed ({err}); skipping present");
+                    finish_frame_trace(
+                        state.handle.as_deref(),
+                        &mut trace,
+                        "cpu_readback_error",
+                        frame_start,
+                    );
                     return;
                 }
             }
         }
     };
     if !crate::lifecycle::may_present(state.epoch) {
+        finish_frame_trace(
+            state.handle.as_deref(),
+            &mut trace,
+            "retired_before_softbuffer",
+            frame_start,
+        );
         return;
     }
     let Some(width) = NonZeroU32::new(pw) else {
+        finish_frame_trace(
+            state.handle.as_deref(),
+            &mut trace,
+            "zero_width",
+            frame_start,
+        );
         return;
     };
     let Some(height) = NonZeroU32::new(ph) else {
+        finish_frame_trace(
+            state.handle.as_deref(),
+            &mut trace,
+            "zero_height",
+            frame_start,
+        );
         return;
     };
     let resize_start = Instant::now();
-    let _ = state.surface.resize(width, height);
+    let resized = state.surface.resize(width, height);
+    if let Some(trace) = trace.as_mut() {
+        trace.soft_resize = if resized.is_ok() { "ok" } else { "error" };
+    }
     let resize_done = Instant::now();
     match state.surface.buffer_mut() {
         Ok(mut buf) => {
             let pixels = rgba_to_u32_softbuffer(&rgba);
+            if let Some(trace) = trace.as_mut() {
+                trace.source_pixels = Some(pixels.len());
+                trace.buffer_pixels = Some(buf.len());
+            }
             let convert_done = Instant::now();
             for (dst, src) in buf.iter_mut().zip(pixels.iter()) {
                 *dst = *src;
@@ -861,7 +965,7 @@ fn redraw(state: &mut State) {
             let copy_done = Instant::now();
             // present() fails if the Android window was destroyed after
             // the epoch check. Ignore that error; do not panic.
-            let _ = buf.present();
+            let presented = buf.present();
             let present_done = Instant::now();
             if frame_log_enabled() {
                 eprintln!(
@@ -872,9 +976,21 @@ fn redraw(state: &mut State) {
                     (present_done - copy_done).as_secs_f64() * 1000.0
                 );
             }
+            let outcome = if presented.is_ok() {
+                "softbuffer_presented"
+            } else {
+                "softbuffer_present_error"
+            };
+            finish_frame_trace(state.handle.as_deref(), &mut trace, outcome, frame_start);
         }
         Err(err) => {
             eprintln!("tekto: window surface unavailable ({err}); not presenting");
+            finish_frame_trace(
+                state.handle.as_deref(),
+                &mut trace,
+                "softbuffer_buffer_error",
+                frame_start,
+            );
         }
     }
     if frame_log_enabled() {
@@ -899,6 +1015,7 @@ fn frame_log_enabled() -> bool {
 const FRAME_TRACE_LIMIT: usize = 256;
 const FRAME_TRACE_PREFIX: &str = "frame_trace ";
 
+#[derive(Default)]
 struct FrameTrace {
     window_before: (u32, u32),
     window_after: (u32, u32),
@@ -910,6 +1027,16 @@ struct FrameTrace {
     acquired: Option<(u32, u32)>,
     acquisition: &'static str,
     direct_status: &'static str,
+    renderer_resize: &'static str,
+    layout_status: &'static str,
+    paint_status: &'static str,
+    fallback_renderer: &'static str,
+    readback: &'static str,
+    soft_resize: &'static str,
+    outcome: &'static str,
+    source_pixels: Option<usize>,
+    buffer_pixels: Option<usize>,
+    frame_ms: f64,
     elapsed_ms: f64,
     layout_ms: f64,
     paint_ms: f64,
@@ -944,13 +1071,30 @@ fn push_frame_trace(logs: &mut Vec<String>, line: String) {
 
 fn format_frame_trace(seq: u64, trace: FrameTrace) -> String {
     format!(
-        "{FRAME_TRACE_PREFIX}seq={seq} elapsed_ms={:.2} window_before={} window_after={} forced={} requested={} renderer={} scale={:.3} configured={} acquired={} acquisition={} direct={} layout_ms={:.2} paint_ms={:.2} direct_ms={:.2}",
+        "{FRAME_TRACE_PREFIX}seq={seq} elapsed_ms={:.2} window_before={} window_after={} forced={} requested={} renderer={} scale={:.3} configured={} acquired={} acquisition={} direct={} renderer_resize={} layout={} paint={} fallback_renderer={} readback={} soft_resize={} outcome={} source_pixels={} buffer_pixels={} frame_ms={:.2} layout_ms={:.2} paint_ms={:.2} direct_ms={:.2}",
         trace.elapsed_ms,
         trace_size(Some(trace.window_before)), trace_size(Some(trace.window_after)),
         trace_size(trace.forced), trace_size(Some(trace.requested)), trace_size(Some(trace.renderer)), trace.scale,
         trace_size(trace.configured), trace_size(trace.acquired), trace.acquisition,
-        trace.direct_status, trace.layout_ms, trace.paint_ms, trace.direct_ms,
+        trace.direct_status, trace.renderer_resize, trace.layout_status, trace.paint_status,
+        trace.fallback_renderer, trace.readback, trace.soft_resize, trace.outcome,
+        trace.source_pixels.map_or_else(|| "-".into(), |n| n.to_string()),
+        trace.buffer_pixels.map_or_else(|| "-".into(), |n| n.to_string()),
+        trace.frame_ms, trace.layout_ms, trace.paint_ms, trace.direct_ms,
     )
+}
+
+fn finish_frame_trace(
+    handle: Option<&SharedTreeHandle>,
+    trace: &mut Option<FrameTrace>,
+    outcome: &'static str,
+    started: Instant,
+) {
+    if let Some(mut trace) = trace.take() {
+        trace.outcome = outcome;
+        trace.frame_ms = started.elapsed().as_secs_f64() * 1000.0;
+        record_frame_trace(handle, trace);
+    }
 }
 
 fn record_frame_trace(handle: Option<&SharedTreeHandle>, trace: FrameTrace) {
@@ -1732,10 +1876,18 @@ mod tests {
                 acquired: Some((801, 600)),
                 acquisition: "suboptimal",
                 direct_status: "presented",
+                renderer_resize: "ok",
+                layout_status: "skipped_clean",
+                paint_status: "ran",
+                fallback_renderer: "gpu",
+                readback: "not_attempted",
+                soft_resize: "not_attempted",
+                outcome: "gpu_presented",
                 elapsed_ms: 12.0,
                 layout_ms: 1.0,
                 paint_ms: 2.0,
                 direct_ms: 3.0,
+                ..FrameTrace::default()
             },
         );
         assert!(line.contains("seq=7 elapsed_ms=12.00 window_before=800x600 window_after=801x600"));
@@ -1743,6 +1895,10 @@ mod tests {
         assert!(line.contains(
             "configured=802x600 acquired=801x600 acquisition=suboptimal direct=presented"
         ));
+        assert!(line.contains("renderer_resize=ok layout=skipped_clean paint=ran"));
+        assert!(
+            line.contains("fallback_renderer=gpu readback=not_attempted soft_resize=not_attempted outcome=gpu_presented")
+        );
     }
 
     #[test]
@@ -1752,31 +1908,47 @@ mod tests {
         tree.add(tekto_tree::NodeKind::Window, None).unwrap();
         let runtime = AppRuntime::new(tree, "test");
         let (handle, _) = crate::create_handle(&runtime, 100, 80);
-        record_frame_trace(
+        let mut trace = Some(FrameTrace {
+            window_before: (100, 80),
+            window_after: (100, 80),
+            forced: None,
+            requested: (100, 80),
+            renderer: (100, 80),
+            scale: 1.0,
+            configured: None,
+            acquired: None,
+            acquisition: "not_gpu",
+            direct_status: "cpu",
+            elapsed_ms: 1.0,
+            layout_ms: 0.1,
+            paint_ms: 0.2,
+            direct_ms: 0.0,
+            soft_resize: "error",
+            source_pixels: Some(8000),
+            buffer_pixels: Some(7999),
+            ..FrameTrace::default()
+        });
+        finish_frame_trace(
             Some(&handle),
-            FrameTrace {
-                window_before: (100, 80),
-                window_after: (100, 80),
-                forced: None,
-                requested: (100, 80),
-                renderer: (100, 80),
-                scale: 1.0,
-                configured: None,
-                acquired: None,
-                acquisition: "not_gpu",
-                direct_status: "cpu",
-                elapsed_ms: 1.0,
-                layout_ms: 0.1,
-                paint_ms: 0.2,
-                direct_ms: 0.0,
-            },
+            &mut trace,
+            "softbuffer_present_error",
+            Instant::now(),
         );
-        assert!(handle
-            .logs()
+        finish_frame_trace(Some(&handle), &mut trace, "duplicate", Instant::now());
+        let lines = handle.logs();
+        assert!(lines
             .iter()
             .any(|line| line.starts_with(FRAME_TRACE_PREFIX)
                 && line.contains("requested=100x80 renderer=100x80")
-                && line.contains("acquisition=not_gpu direct=cpu")));
+                && line.contains("acquisition=not_gpu direct=cpu")
+                && line.contains("soft_resize=error outcome=softbuffer_present_error source_pixels=8000 buffer_pixels=7999")));
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with(FRAME_TRACE_PREFIX))
+                .count(),
+            1
+        );
     }
 
     #[test]
