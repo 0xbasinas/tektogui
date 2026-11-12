@@ -65,6 +65,24 @@ Tools in the first slice:
 | `app.states` | List time-travel frames. `enabled` is false unless the app opted in |
 | `app.restore` | Jump that store to a recorded `index` |
 | `app.logs` | Recent log lines |
+
+For resize and presentation investigations, start the window with
+`TEKTO_FRAME_TRACE=1` (and the optional `gpu` feature when testing GPU). A
+dev-server handle keeps the latest 256 `frame_trace` entries in `app.logs`;
+without a dev-server handle, the first 256 are written to stderr and then
+logging stops. Tracing is off by default and works in release builds too.
+Each line contains a process-wide sequence number, elapsed milliseconds since
+the current window surface started, physical `window_before` and `window_after`
+sizes around the direct present attempt, a `forced` resize size if any, the
+physical size `requested`, the actual `renderer` size, the scale, GPU surface `configured` and `acquired`
+sizes, acquisition result, direct-present result, and CPU-side layout, paint
+and direct-present durations. `-` means unavailable, not zero. The GPU direct
+time is not GPU completion time; the fallback status does not say whether the
+subsequent softbuffer presentation succeeded. Lines contain no app text or
+paths. Capture the trace soon after reproducing the problem because older
+entries are evicted. A size mismatch is evidence for investigation, not proof
+of the cause of a black strip. Record the machine, OS, GPU, driver, and repro
+steps separately; compare frames with and without the artifact.
 | `app.components` | JSON schema of widgets, props, and events. No running app required |
 
 `app.components` (and the dev-server route `GET /components`, which does need a running server) returns `packages/jsx-runtime/src/components.json`. That file is the list `@tektogui/jsx-runtime` mounts. Kinds match `NodeKind` (`window`, `group`, `rect`, `text`, `button`, `text_field`, `scroll`, `list`, `list_item`). Each kind lists every prop the host `setProp` accepts (`width`, `height`, `column`, `justifyCenter`, `text`, `name`, `fill`, `color`, `fontSize`, `radius`, `borderColor`, `borderWidth`, `padding`, `gap`), because JSX forwards that set on every kind. `title` is an alias of `name` (`font_size` and `justify_center` are the snake_case aliases). Host actions include `click` on every kind, plus `type`, `key`, and `ime` on `text_field`, and `scroll` on `scroll`. Retained desktop QuickJS and the WASM host support button `onClick`, field `onInput`, and reactive `text` on text nodes; see the [counter example](tsx-events.md). The Rust `banner()` helper is a `rect`, not its own kind.

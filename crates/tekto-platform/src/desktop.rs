@@ -514,6 +514,12 @@ enum Painter {
     Gpu(Box<tekto_render::GpuRenderer>),
 }
 
+struct SurfaceTrace {
+    configured: Option<(u32, u32)>,
+    acquired: Option<(u32, u32)>,
+    acquisition: &'static str,
+}
+
 impl Painter {
     fn new(window: &Window, width: u32, height: u32) -> Self {
         #[cfg(not(feature = "gpu"))]
@@ -567,6 +573,14 @@ impl Painter {
         }
     }
 
+    fn size(&self) -> (u32, u32) {
+        match self {
+            Painter::Cpu(renderer) => (renderer.width(), renderer.height()),
+            #[cfg(feature = "gpu")]
+            Painter::Gpu(renderer) => (renderer.width(), renderer.height()),
+        }
+    }
+
     fn resize(&mut self, width: u32, height: u32) -> Result<(), tekto_render::RenderError> {
         match self {
             Painter::Cpu(renderer) => renderer.resize(width, height),
@@ -615,6 +629,25 @@ impl Painter {
             Painter::Cpu(_) => None,
             #[cfg(feature = "gpu")]
             Painter::Gpu(renderer) => Some(renderer.present_window(width, height)),
+        }
+    }
+
+    fn surface_trace(&self) -> SurfaceTrace {
+        match self {
+            Painter::Cpu(_) => SurfaceTrace {
+                configured: None,
+                acquired: None,
+                acquisition: "not_gpu",
+            },
+            #[cfg(feature = "gpu")]
+            Painter::Gpu(renderer) => {
+                let info = renderer.surface_diagnostics();
+                SurfaceTrace {
+                    configured: info.configured,
+                    acquired: info.acquired,
+                    acquisition: info.acquisition,
+                }
+            }
         }
     }
 }
@@ -727,7 +760,38 @@ fn redraw(state: &mut State) {
         );
     }
     let paint_done = Instant::now();
-    match state.renderer.present_window(pw, ph) {
+    let window_before = frame_trace_enabled().then(|| state.window.inner_size());
+    let direct = state.renderer.present_window(pw, ph);
+    if let Some(window_before) = window_before {
+        let window_after = state.window.inner_size();
+        let direct_status = match &direct {
+            None => "cpu",
+            Some(Ok(true)) => "presented",
+            Some(Ok(false)) => "fallback",
+            Some(Err(_)) => "error_fallback",
+        };
+        let surface = state.renderer.surface_trace();
+        record_frame_trace(
+            state.handle.as_deref(),
+            FrameTrace {
+                window_before: (window_before.width, window_before.height),
+                window_after: (window_after.width, window_after.height),
+                forced,
+                requested: (pw, ph),
+                renderer: state.renderer.size(),
+                scale: state.renderer.scale(),
+                configured: surface.configured,
+                acquired: surface.acquired,
+                acquisition: surface.acquisition,
+                direct_status,
+                elapsed_ms: state.anim_origin.elapsed().as_secs_f64() * 1000.0,
+                layout_ms: (layout_done - frame_start).as_secs_f64() * 1000.0,
+                paint_ms: (paint_done - layout_done).as_secs_f64() * 1000.0,
+                direct_ms: (Instant::now() - paint_done).as_secs_f64() * 1000.0,
+            },
+        );
+    }
+    match direct {
         Some(Ok(true)) => {
             if frame_log_enabled() {
                 eprintln!(
@@ -830,6 +894,84 @@ fn frame_log_enabled() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| cfg!(debug_assertions) && std::env::var_os("TEKTO_FRAME_LOG").is_some())
+}
+
+const FRAME_TRACE_LIMIT: usize = 256;
+const FRAME_TRACE_PREFIX: &str = "frame_trace ";
+
+struct FrameTrace {
+    window_before: (u32, u32),
+    window_after: (u32, u32),
+    forced: Option<(u32, u32)>,
+    requested: (u32, u32),
+    renderer: (u32, u32),
+    scale: f32,
+    configured: Option<(u32, u32)>,
+    acquired: Option<(u32, u32)>,
+    acquisition: &'static str,
+    direct_status: &'static str,
+    elapsed_ms: f64,
+    layout_ms: f64,
+    paint_ms: f64,
+    direct_ms: f64,
+}
+
+fn frame_trace_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("TEKTO_FRAME_TRACE").is_some_and(|v| v == "1"))
+}
+
+fn trace_size(size: Option<(u32, u32)>) -> String {
+    size.map_or_else(|| "-".to_owned(), |(w, h)| format!("{w}x{h}"))
+}
+
+fn push_frame_trace(logs: &mut Vec<String>, line: String) {
+    let count = logs
+        .iter()
+        .filter(|line| line.starts_with(FRAME_TRACE_PREFIX))
+        .count();
+    if count >= FRAME_TRACE_LIMIT {
+        if let Some(index) = logs
+            .iter()
+            .position(|line| line.starts_with(FRAME_TRACE_PREFIX))
+        {
+            logs.remove(index);
+        }
+    }
+    logs.push(line);
+}
+
+fn format_frame_trace(seq: u64, trace: FrameTrace) -> String {
+    format!(
+        "{FRAME_TRACE_PREFIX}seq={seq} elapsed_ms={:.2} window_before={} window_after={} forced={} requested={} renderer={} scale={:.3} configured={} acquired={} acquisition={} direct={} layout_ms={:.2} paint_ms={:.2} direct_ms={:.2}",
+        trace.elapsed_ms,
+        trace_size(Some(trace.window_before)), trace_size(Some(trace.window_after)),
+        trace_size(trace.forced), trace_size(Some(trace.requested)), trace_size(Some(trace.renderer)), trace.scale,
+        trace_size(trace.configured), trace_size(trace.acquired), trace.acquisition,
+        trace.direct_status, trace.layout_ms, trace.paint_ms, trace.direct_ms,
+    )
+}
+
+fn record_frame_trace(handle: Option<&SharedTreeHandle>, trace: FrameTrace) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    static STDERR_COUNT: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
+    let line = format_frame_trace(seq, trace);
+    if let Some(handle) = handle {
+        if let Ok(mut logs) = handle.logs.lock() {
+            push_frame_trace(&mut logs, line);
+        }
+    } else {
+        let count = STDERR_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if count <= FRAME_TRACE_LIMIT as u64 {
+            eprintln!("{line}");
+            if count == FRAME_TRACE_LIMIT as u64 {
+                eprintln!("frame_trace limit reached; restart to capture another window");
+            }
+        }
+    }
 }
 
 #[cfg(all(feature = "gpu", target_os = "android"))]
@@ -1560,6 +1702,82 @@ fn run_event_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_trace_ring_keeps_recent_entries_and_other_logs() {
+        let mut logs = vec!["application log".to_owned()];
+        for i in 0..(FRAME_TRACE_LIMIT + 3) {
+            push_frame_trace(&mut logs, format!("{FRAME_TRACE_PREFIX}seq={i}"));
+        }
+        assert_eq!(logs.len(), FRAME_TRACE_LIMIT + 1);
+        assert_eq!(logs[0], "application log");
+        assert_eq!(logs[1], "frame_trace seq=3");
+        assert_eq!(logs.last().unwrap(), "frame_trace seq=258");
+        assert_eq!(trace_size(Some((800, 600))), "800x600");
+        assert_eq!(trace_size(None), "-");
+    }
+
+    #[test]
+    fn frame_trace_distinguishes_window_renderer_and_surface_sizes() {
+        let line = format_frame_trace(
+            7,
+            FrameTrace {
+                window_before: (800, 600),
+                window_after: (801, 600),
+                forced: Some((802, 600)),
+                requested: (802, 600),
+                renderer: (802, 600),
+                scale: 1.25,
+                configured: Some((802, 600)),
+                acquired: Some((801, 600)),
+                acquisition: "suboptimal",
+                direct_status: "presented",
+                elapsed_ms: 12.0,
+                layout_ms: 1.0,
+                paint_ms: 2.0,
+                direct_ms: 3.0,
+            },
+        );
+        assert!(line.contains("seq=7 elapsed_ms=12.00 window_before=800x600 window_after=801x600"));
+        assert!(line.contains("forced=802x600 requested=802x600 renderer=802x600"));
+        assert!(line.contains(
+            "configured=802x600 acquired=801x600 acquisition=suboptimal direct=presented"
+        ));
+    }
+
+    #[test]
+    fn frame_trace_reaches_agent_logs() {
+        use tekto_mcp::AppHandle;
+        let mut tree = Tree::new();
+        tree.add(tekto_tree::NodeKind::Window, None).unwrap();
+        let runtime = AppRuntime::new(tree, "test");
+        let (handle, _) = crate::create_handle(&runtime, 100, 80);
+        record_frame_trace(
+            Some(&handle),
+            FrameTrace {
+                window_before: (100, 80),
+                window_after: (100, 80),
+                forced: None,
+                requested: (100, 80),
+                renderer: (100, 80),
+                scale: 1.0,
+                configured: None,
+                acquired: None,
+                acquisition: "not_gpu",
+                direct_status: "cpu",
+                elapsed_ms: 1.0,
+                layout_ms: 0.1,
+                paint_ms: 0.2,
+                direct_ms: 0.0,
+            },
+        );
+        assert!(handle
+            .logs()
+            .iter()
+            .any(|line| line.starts_with(FRAME_TRACE_PREFIX)
+                && line.contains("requested=100x80 renderer=100x80")
+                && line.contains("acquisition=not_gpu direct=cpu")));
+    }
 
     #[test]
     fn edges_and_corners_map_to_resize_directions() {

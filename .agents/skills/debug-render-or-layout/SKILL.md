@@ -35,6 +35,7 @@ TEKTO_SHOT_DIR=/tmp/tekto-shots cargo test -p tekto --test headless_snapshot -- 
    - Browser WASM TSX has no JavaScript entry point to supply font bytes yet, so it cannot opt in and keeps Roboto only. That host wiring is still missing.
    - Do not commit or copy a font into the repo. To test locally, run `TEKTO_TEST_CJK_FONT=/path/to/font cargo test -p tekto --test fallback_font` (skips when unset); see `docs/architecture.md`.
 4. If only the live window is blank but the PNG is fine, look at resize/scale-factor and the softbuffer present path in `desktop.rs`. On this box, use `DISPLAY=:99` (Xvfb), never `:1` or `:2`. A grab of the Xvfb *root* may be black if no window manager is running; trust the headless PNG or `GET /screenshot`.
+   - Set `TEKTO_FRAME_TRACE=1` before starting the window and inspect `app.logs` through MCP for the most recent 256 frames. Without a dev-server handle, the first 256 go to stderr. Compare `window_before`, `window_after`, `forced`, `requested`, `renderer`, `configured`, `acquired`, `acquisition`, and `direct` around the affected frame. Durations are CPU-side; `direct_ms` does not measure GPU completion. See `docs/agent-guide.md` for field meanings and limits.
 5. Compile errors in font/glyph code: keep `skrifa = "0.44"` (not a newer workspace pin).
 
 ## Verify
