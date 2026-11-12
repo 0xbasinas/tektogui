@@ -600,6 +600,7 @@ pub fn render_tree_png(
 /// Like [`render_tree_png`], but the pixmap is `width * scale` by
 /// `height * scale` physical pixels. Glyphs are rasterized at the
 /// physical size so HiDPI text stays sharp.
+#[cfg(feature = "cpu")]
 pub fn render_tree_png_scaled(
     tree: &Tree,
     width: u32,
