@@ -20,6 +20,12 @@ function jsonValue(value) {
     if (!Array.isArray(item) && Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null)
       throw new TypeError("keyed signal value must use plain objects");
     seen.add(item);
+    if (Array.isArray(item)) {
+      for (let i = 0; i < item.length; i++) {
+        if (!Object.prototype.hasOwnProperty.call(item, i))
+          throw new TypeError("keyed signal value must not contain sparse arrays");
+      }
+    }
     for (const child of Object.values(item)) validate(child);
     seen.delete(item);
   }
