@@ -2,6 +2,8 @@
 
 Status: 2026-11-11. `nightly` is at `a263750` with all five CI jobs green. This file tracks what shipped in round 3, what is still open, and what was rejected. It is not a release promise or a list of issues. Sizes are rough: **S** a few days, **M** one to two weeks, **L** larger or cross-platform.
 
+For follow-up ideas and source links, see [framework research](framework-research.md), [runtime and rendering research](runtime-research.md), and [feature opportunities](feature-research.md). These are proposals, not changes to this status report.
+
 Tekto keeps its own scene tree and stable ids, first-class Rust and TSX APIs, agent-first tools, lean default builds, and a plain default look.
 
 ## Shipped
